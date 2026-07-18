@@ -7,7 +7,7 @@ import LoomCore
 /// binding + probing on focus change, dot-body bookkeeping, and the
 /// insert-payload commits.
 @MainActor
-public final class VimController {
+public final class Controller {
     public var enabled = true
 
     private var monitor = RawMonitor()

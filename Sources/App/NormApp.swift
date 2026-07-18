@@ -4,7 +4,7 @@ import LoomVim
 import SwiftUI
 
 /// Norm's composition root: a menu-bar agent (LSUIElement) whose only UI is
-/// the status menu. The tap feeds the `VimController`; everything else is
+/// the status menu. The tap feeds the `Controller`; everything else is
 /// permission plumbing.
 @main
 struct NormApp: App {
@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
         didSet { controller.enabled = vimEnabled }
     }
 
-    private let controller = VimController()
+    private let controller = Controller()
     private var token: InputHub.Token?
 
     init() {

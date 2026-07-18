@@ -67,7 +67,7 @@ norm/
 │   │   ├── Model,Raw,Logical,  #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Physical,State,     #   vocabulary, parsing + key assembly, planners,
 │   │   │   Text,Sim            #   state + reducer, text math, simulated host
-│   │   └── Runtime/            #   tap routing, AX execution, VimController
+│   │   └── Runtime/            #   tap routing, AX execution, Controller
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)
 └── Resources/
