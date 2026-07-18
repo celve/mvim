@@ -1,0 +1,27 @@
+# XcodeGen generates the project; regenerate with `xcodegen generate`.
+*.xcodeproj/
+
+# Build output
+build/
+DerivedData/
+.build/
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Swift Package Manager
+.swiftpm/
+Packages/
+Package.resolved
+
+# Artifacts
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.moved-aside
+*.hmap
+
+# macOS
+.DS_Store

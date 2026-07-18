@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Intentionally empty: Norm runs NON-sandboxed. A sandboxed app cannot
+	  drive other apps via the Accessibility API or post CGEvents, which the
+	  vim execution path requires. Accessibility and Input Monitoring are
+	  runtime trust grants, not entitlements.
+	-->
+</dict>
+</plist>

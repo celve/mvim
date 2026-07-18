@@ -1,0 +1,87 @@
+name: Norm
+
+options:
+  bundleIdPrefix: com.loom
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # Stable Apple Development signature so Accessibility / Input Monitoring
+    # grants persist across rebuilds. Ad-hoc ("-") changes the signature every
+    # build, which makes macOS revoke the grants each time.
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: "8TDYAWS6VC"
+
+targets:
+  # Shared foundation (Norm's copy, split from loom): the input tap + key model,
+  # text I/O (AX/Clipboard/Synth), support utilities, and the neutral Prefs store.
+  # Deliberately carries NO Keychain — this app keeps no secrets.
+  LoomCore:
+    type: framework
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomCore
+        GENERATE_INFOPLIST_FILE: YES
+
+  # Modal editing engine + runtime. Depends on LoomCore for the key model + text I/O.
+  LoomVim:
+    type: framework
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/Vim
+    dependencies:
+      - target: LoomCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomVim
+        GENERATE_INFOPLIST_FILE: YES
+
+  # The menu-bar app: composition root + settings UI. Embeds the two frameworks.
+  Norm:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/App
+      - path: Resources
+    dependencies:
+      - target: LoomCore
+      - target: LoomVim
+    settings:
+      base:
+        PRODUCT_NAME: Norm
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.Norm
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: Norm.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # Run as a menu bar agent: no Dock icon, no main window.
+        INFOPLIST_KEY_LSUIElement: YES
+        # No NSMicrophoneUsageDescription — deliberate. Norm contains no
+        # microphone, network, or keychain code; keep the Info.plist honest.
+        INFOPLIST_KEY_CFBundleDisplayName: Norm
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Loom. All rights reserved."
+
+schemes:
+  Norm:
+    build:
+      targets:
+        Norm: all
+    run:
+      config: Debug
+    archive:
+      config: Release
