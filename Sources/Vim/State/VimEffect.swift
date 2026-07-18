@@ -16,6 +16,17 @@ public enum VimEffect: Equatable, Sendable {
     case searched(VimState.SearchMemory)
     case found(VimState.FindMemory)
 
+    /// Text typed during the Insert session that just ended — the monitor's
+    /// payload, committed by the runtime at Esc.
+    case setLastInsert(String)
+
+    /// The dot body. Authored by the runtime (keys are its currency), never
+    /// by a planner.
+    case setLastChange(VimState.ChangeMemory)
+
+    /// The `gv` memory, recorded when Visual mode is left.
+    case setLastVisual(VisualMemory)
+
     /// Register routing (unnamed mirror, delete ring, uppercase append) is
     /// the reducer's; the effect carries only what the user named.
     case deleted(into: Register?, content: TextPayload, wise: Wise)

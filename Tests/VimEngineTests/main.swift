@@ -378,4 +378,98 @@ precondition(monitor.feed("<Esc>", mode: .insert) ==
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"))))
 
+// MARK: - VimReducer
+
+var reduced = VimState.initial
+reduced = VimReducer.reduce(reduced, .yanked(into: nil, content: .literal("one\n"), wise: .line))
+precondition(reduced.session.register("\"") == RegisterContent(text: "one\n", wise: .line))
+precondition(reduced.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+
+// Linewise deletes shift the ring; the yank slot is untouched.
+reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("a\n"), wise: .line))
+reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("b\n"), wise: .line))
+precondition(reduced.session.register("1") == RegisterContent(text: "b\n", wise: .line))
+precondition(reduced.session.register("2") == RegisterContent(text: "a\n", wise: .line))
+precondition(reduced.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+
+// Sub-line deletes go to the small-delete register, not the ring.
+reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("ch"), wise: .character))
+precondition(reduced.session.register("-") == RegisterContent(text: "ch", wise: .character))
+precondition(reduced.session.register("1") == RegisterContent(text: "b\n", wise: .line))
+
+// Named writes mirror to unnamed; uppercase appends; the black hole swallows.
+reduced = VimReducer.reduce(reduced, .yanked(into: Register("a"), content: .literal("hi"), wise: .character))
+reduced = VimReducer.reduce(reduced, .yanked(into: Register("A"), content: .literal("!"), wise: .character))
+precondition(reduced.session.register("a") == RegisterContent(text: "hi!", wise: .character))
+precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+reduced = VimReducer.reduce(reduced, .deleted(into: Register("_"), content: .literal("gone"), wise: .character))
+precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+
+// An unfilled capture skips the write rather than inventing content.
+reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .captured(CaptureSlot(id: 9)), wise: .character))
+precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+
+// MARK: - Sim goldens: (text, caret, keys) → (text′, caret′, state′)
+
+var sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.type("x")
+precondition(sim.text == "say helo world")
+precondition(sim.caret == 6)
+precondition(sim.state.session.register("-") == RegisterContent(text: "l", wise: .character))
+
+sim = Sim(text: "abcdef", caret: 0, profile: axProfile)
+sim.type("3x")
+precondition(sim.text == "def")
+precondition(sim.state.session.register("\"") == RegisterContent(text: "abc", wise: .character))
+
+sim = Sim(text: "say hello", caret: 0, profile: axProfile)
+sim.type("dw")
+precondition(sim.text == "hello")
+precondition(sim.state.session.register("-") == RegisterContent(text: "say ", wise: .character))
+
+sim = Sim(text: "a\nb\nc", caret: 0, profile: axProfile)
+sim.type("dddd")
+precondition(sim.text == "c")
+precondition(sim.state.session.register("1") == RegisterContent(text: "b\n", wise: .line))
+precondition(sim.state.session.register("2") == RegisterContent(text: "a\n", wise: .line))
+
+sim = Sim(text: "one\ntwo", caret: 0, profile: axProfile)
+sim.type("yyp")
+precondition(sim.text == "one\none\ntwo")
+precondition(sim.state.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+
+// The flagship: change-inner-word, type, escape — full loop.
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.type("ciwbye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")
+precondition(sim.caret == 6)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastInsert == "bye")
+precondition(sim.state.session.register(".") == RegisterContent(text: "bye", wise: .character))
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
+precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
+
+// Insert entry via A opens a dot body even though entry itself mutated nothing.
+sim = Sim(text: "hi", caret: 0, profile: axProfile)
+sim.type("A!")
+sim.feed("<Esc>")
+precondition(sim.text == "hi!")
+precondition(sim.caret == 2)
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "A!<Esc>"))
+
+// Dot replays the last change and must not overwrite it.
+sim = Sim(text: "aabb", caret: 0, profile: axProfile)
+sim.type("x.")
+precondition(sim.text == "bb")
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "x"))
+
+// Find commits its memory; `;` repeats from it.
+sim = Sim(text: "abcabc", caret: 0, profile: axProfile)
+sim.type("fc;")
+precondition(sim.caret == 5)
+precondition(sim.state.session.lastFind ==
+    VimState.FindMemory(character: "c", direction: .forward, beforeCharacter: false))
+precondition(sim.settleFailures == 0 && sim.bells == 0)
+
 print("Vim engine tests passed")
