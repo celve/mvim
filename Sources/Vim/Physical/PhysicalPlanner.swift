@@ -19,11 +19,8 @@
 /// it never talks to AX, and it writes no state (it only *authors* commit
 /// steps for the reducer).
 public enum PhysicalPlanner {
-    public static func plan(
-        _ logical: LogicalPlan,
-        snapshot: FieldSnapshot,
-        profile: CapabilityProfile
-    ) -> PhysicalPlan {
+    public static func plan(_ logical: LogicalPlan, snapshot: FieldSnapshot) -> PhysicalPlan {
+        let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
         for step in logical.steps {

@@ -1,17 +1,20 @@
 import AppKit
 import LoomCore
+import LoomVim
 import SwiftUI
 
 /// Norm's composition root: a menu-bar agent (LSUIElement) whose only UI is
-/// the status menu. Runtime bring-up step 1: the tap is installed and
-/// observes-and-passes-through — no key is consumed yet.
+/// the status menu. The tap feeds the `VimController`; everything else is
+/// permission plumbing.
 @main
 struct NormApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
         MenuBarExtra {
-            Text(model.tapInstalled ? "Input tap: running (passthrough)" : "Input tap: not installed")
+            Toggle("Vim Mode", isOn: $model.vimEnabled)
+            Divider()
+            Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
                 .onAppear { model.refresh() }
             Text(model.accessibilityTrusted ? "Accessibility: granted" : "Accessibility: not granted")
             Text(model.inputMonitoringGranted
@@ -33,18 +36,23 @@ final class AppModel: ObservableObject {
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
+    @Published var vimEnabled = true {
+        didSet { controller.enabled = vimEnabled }
+    }
 
+    private let controller = VimController()
     private var token: InputHub.Token?
 
     init() {
-        // Step 1 handler: observe everything, consume nothing. Registering
-        // installs the tap (and prompts for Input Monitoring on first run).
-        token = InputHub.shared.register(.editor) { _ in false }
+        let controller = self.controller
+        token = InputHub.shared.register(.editor) { event in
+            MainActor.assumeIsolated { controller.handle(event) }
+        }
         refresh()
     }
 
     func refresh() {
-        accessibilityTrusted = AXIsProcessTrusted()
+        accessibilityTrusted = AX.ensureTrusted(prompt: false)
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
     }

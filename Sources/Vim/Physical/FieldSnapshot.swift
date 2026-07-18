@@ -1,9 +1,18 @@
-/// What the runtime could read from the focused field at command time. The
-/// optionals mirror the capability profile: absent reads are simply nil,
-/// and the planner's lane choice follows from what is present.
+/// Everything known about the focused field, in one value: the durable half
+/// (`capabilities` — what it *can* do, probed on focus or served from the
+/// per-app cache) and the volatile half (what it *holds right now*, read
+/// fresh per command). Two refresh rates, one consumer — the physical
+/// planner takes this and nothing else about the field.
+///
+/// The optionals mirror the capabilities by construction, but the planner
+/// deliberately trusts *presence* for read-gating (evidence: what we
+/// actually got) and `capabilities` for write- and settle-gating (promises
+/// about actions not yet taken).
 ///
 /// Offsets are UTF-16 code units, AX's currency.
 public struct FieldSnapshot: Equatable, Sendable {
+    public let capabilities: CapabilityProfile
+
     public let text: String?
 
     /// The selected range; an empty range is the caret.
@@ -16,11 +25,13 @@ public struct FieldSnapshot: Equatable, Sendable {
     public let anchor: Int?
 
     public init(
+        capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
         selection: Range<Int>? = nil,
         length: Int? = nil,
         anchor: Int? = nil
     ) {
+        self.capabilities = capabilities
         self.text = text
         self.selection = selection
         self.length = length ?? text.map { $0.utf16.count }

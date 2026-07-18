@@ -81,8 +81,8 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        let snapshot = FieldSnapshot(text: text, selection: selection, anchor: anchor)
-        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot, profile: profile)
+        let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: selection, anchor: anchor)
+        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
 
         captures = [:]
         execute(physical)

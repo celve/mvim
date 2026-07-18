@@ -231,8 +231,8 @@ func physical(
     state: VimState = .initial
 ) -> PhysicalPlan {
     let logical = LogicalPlanner.plan(RawCommand(keys), state: state)
-    let snapshot = FieldSnapshot(text: text, selection: caret.map { $0..<$0 })
-    return PhysicalPlanner.plan(logical, snapshot: snapshot, profile: profile)
+    let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: caret.map { $0..<$0 })
+    return PhysicalPlanner.plan(logical, snapshot: snapshot)
 }
 
 // ciw in "say hello world" (caret inside "hello") under three profiles.
