@@ -9,7 +9,7 @@ APP     := $(DERIVED)/Build/Products/$(CONFIG)/$(PROJECT).app
 all: build
 
 # The pure Vim engine: every .swift under Sources/Vim EXCEPT Runtime/ (which has AppKit/AX
-# deps). Recursive so the engine can live in layer subfolders (Model/Text/Plan/Resolve).
+# deps). Recursive so the engine can live in layer subfolders (Model/Raw/Logical/Physical/State/Text).
 # Invariant: impure code lives ONLY under Sources/Vim/Runtime/.
 VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 

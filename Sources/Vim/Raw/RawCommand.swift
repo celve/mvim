@@ -43,14 +43,6 @@ public struct RawCommand: Equatable, Hashable, Sendable {
 // MARK: - Public command model
 
 public extension RawCommand {
-    struct Register: Equatable, Hashable, Sendable {
-        public let name: Character
-
-        public init(_ name: Character) {
-            self.name = name
-        }
-    }
-
     enum Intent: Equatable, Hashable, Sendable {
         case modeChange(ModeChange)
         case motion(Motion)
@@ -99,54 +91,6 @@ public extension RawCommand {
         case previous
     }
 
-    enum Direction: String, Equatable, Hashable, Sendable {
-        case left
-        case right
-        case up
-        case down
-        case forward
-        case backward
-    }
-
-    enum Motion: Equatable, Hashable, Sendable {
-        case character(Direction)
-        case displayLine(Direction)
-        case line(Direction, firstNonBlank: Bool)
-        case word(Direction, end: Bool, bigWord: Bool)
-        case lineStart(firstNonBlank: Bool)
-        case lineEnd
-        case lastNonBlank
-        case column
-        case fileStart
-        case fileEnd
-        case screenLine(ScreenLine)
-        case sentence(Direction)
-        case paragraph(Direction)
-        case section(Direction, SectionBoundary)
-        case matchingItem
-        case find(character: Character, direction: Direction, beforeCharacter: Bool)
-        case repeatFind(oppositeDirection: Bool)
-        case mark(name: Character, lineWise: Bool)
-        case search(Search)
-        case page(Direction, halfPage: Bool)
-        case scrollLine(Direction)
-        case custom(keys: String)
-    }
-
-    enum ScreenLine: String, Equatable, Hashable, Sendable {
-        case top
-        case middle
-        case bottom
-    }
-
-    enum SectionBoundary: String, Equatable, Hashable, Sendable {
-        case section
-        case openBrace
-        case closeBrace
-        case methodStart
-        case methodEnd
-    }
-
     struct OperatorCommand: Equatable, Hashable, Sendable {
         public let kind: OperatorKind
         public let targetCount: Int?
@@ -183,31 +127,6 @@ public extension RawCommand {
         case custom(keys: String)
     }
 
-    struct TextObject: Equatable, Hashable, Sendable {
-        public let scope: TextObjectScope
-        public let kind: TextObjectKind
-
-        public init(scope: TextObjectScope, kind: TextObjectKind) {
-            self.scope = scope
-            self.kind = kind
-        }
-    }
-
-    enum TextObjectScope: String, Equatable, Hashable, Sendable {
-        case inner
-        case around
-    }
-
-    enum TextObjectKind: Equatable, Hashable, Sendable {
-        case word(bigWord: Bool)
-        case sentence
-        case paragraph
-        case block(delimiter: Character)
-        case quote(Character)
-        case tag
-        case custom(Character)
-    }
-
     enum Edit: Equatable, Hashable, Sendable {
         case deleteCharacter(Direction)
         case substituteCharacter
@@ -223,51 +142,6 @@ public extension RawCommand {
         case decrement
     }
 
-    struct PutAction: Equatable, Hashable, Sendable {
-        public let position: PutPosition
-        public let moveCursorAfterText: Bool
-        public let adjustIndent: Bool
-
-        public init(
-            position: PutPosition,
-            moveCursorAfterText: Bool = false,
-            adjustIndent: Bool = false
-        ) {
-            self.position = position
-            self.moveCursorAfterText = moveCursorAfterText
-            self.adjustIndent = adjustIndent
-        }
-    }
-
-    enum PutPosition: String, Equatable, Hashable, Sendable {
-        case before
-        case after
-    }
-
-    struct Search: Equatable, Hashable, Sendable {
-        public let direction: Direction
-        public let pattern: String?
-        public let isSubmitted: Bool
-        public let wordUnderCursor: WordMatch?
-
-        public init(
-            direction: Direction,
-            pattern: String? = nil,
-            isSubmitted: Bool = false,
-            wordUnderCursor: WordMatch? = nil
-        ) {
-            self.direction = direction
-            self.pattern = pattern
-            self.isSubmitted = isSubmitted
-            self.wordUnderCursor = wordUnderCursor
-        }
-    }
-
-    enum WordMatch: String, Equatable, Hashable, Sendable {
-        case wholeWord
-        case partialWord
-    }
-
     struct CommandLine: Equatable, Hashable, Sendable {
         public let command: String
         public let isSubmitted: Bool
@@ -276,13 +150,6 @@ public extension RawCommand {
             self.command = command
             self.isSubmitted = isSubmitted
         }
-    }
-
-    enum HistoryAction: String, Equatable, Hashable, Sendable {
-        case undo
-        case redo
-        case olderTextState
-        case newerTextState
     }
 
     enum RepeatAction: Equatable, Hashable, Sendable {
@@ -345,6 +212,42 @@ public extension RawCommand {
         case search(direction: Direction, pattern: String)
         case commandLine(String)
         case namespace(String)
+    }
+}
+
+// MARK: - Key spellings
+
+public extension TextObject {
+    /// The two-key text-object spelling (`iw`, `ap`, `i(`, …). Lives in the
+    /// Raw layer because Model stays key-blind; public because Visual mode
+    /// uses the same spelling outside operator position, where the
+    /// Normal-mode parser can only classify the keys as `.custom`.
+    init?(keys: String) {
+        guard keys.count == 2, let scopeKey = keys.first, let objectKey = keys.last else {
+            return nil
+        }
+        let scope: TextObjectScope
+        switch scopeKey {
+        case "i": scope = .inner
+        case "a": scope = .around
+        default: return nil
+        }
+
+        let kind: TextObjectKind
+        switch objectKey {
+        case "w": kind = .word(bigWord: false)
+        case "W": kind = .word(bigWord: true)
+        case "s": kind = .sentence
+        case "p": kind = .paragraph
+        case "b", "(", ")": kind = .block(delimiter: "(")
+        case "B", "{", "}": kind = .block(delimiter: "{")
+        case "[", "]": kind = .block(delimiter: "[")
+        case "<", ">": kind = .block(delimiter: "<")
+        case "\"", "'", "`": kind = .quote(objectKey)
+        case "t": kind = .tag
+        default: kind = .custom(objectKey)
+        }
+        self.init(scope: scope, kind: kind)
     }
 }
 
@@ -696,7 +599,7 @@ private extension RawCommand {
             let target: OperatorTarget
             if targetKeys == operation.lineRepeat || targetKeys == operation.prefix {
                 target = .line
-            } else if let textObject = parseTextObject(targetKeys) {
+            } else if let textObject = TextObject(keys: targetKeys) {
                 target = .textObject(textObject)
             } else if let motion = parseMotion(targetKeys) {
                 target = .motion(motion)
@@ -709,34 +612,6 @@ private extension RawCommand {
                 targetCount: targetCount,
                 target: target
             ))
-        }
-
-        static func parseTextObject(_ keys: String) -> TextObject? {
-            guard keys.count == 2, let scopeKey = keys.first, let objectKey = keys.last else {
-                return nil
-            }
-            let scope: TextObjectScope
-            switch scopeKey {
-            case "i": scope = .inner
-            case "a": scope = .around
-            default: return nil
-            }
-
-            let kind: TextObjectKind
-            switch objectKey {
-            case "w": kind = .word(bigWord: false)
-            case "W": kind = .word(bigWord: true)
-            case "s": kind = .sentence
-            case "p": kind = .paragraph
-            case "b", "(", ")": kind = .block(delimiter: "(")
-            case "B", "{", "}": kind = .block(delimiter: "{")
-            case "[", "]": kind = .block(delimiter: "[")
-            case "<", ">": kind = .block(delimiter: "<")
-            case "\"", "'", "`": kind = .quote(objectKey)
-            case "t": kind = .tag
-            default: kind = .custom(objectKey)
-            }
-            return TextObject(scope: scope, kind: kind)
         }
 
         static func parseMotion(_ keys: String) -> Motion? {

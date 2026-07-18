@@ -64,7 +64,9 @@ norm/
 │   │                           #   InputHub (one shared CGEventTap), KeyEvent/Mods/Trigger,
 │   │                           #   AX/Clipboard/Synth, Prefs store. NO Keychain in Norm's copy.
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
-│   │   ├── Model,Plan,Resolve,Text  #   pure engine (no AppKit/AX; `make test` compiles this)
+│   │   ├── Model,Raw,Logical,  #   pure engine (no AppKit/AX; `make test` compiles this):
+│   │   │   Physical,State,     #   vocabulary, parsing + key assembly, planners,
+│   │   │   Text,Sim            #   state + reducer, text math, simulated host
 │   │   └── Runtime/            #   tap routing, AX execution, VimController
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)
@@ -76,8 +78,8 @@ norm/
 
 `Norm (app) → LoomVim → LoomCore`, one-way and compiler-enforced. The framework names keep
 their Loom heritage — they are internal targets, invisible at runtime. Vim's pure engine
-(`Sources/Vim/{Model,Plan,Resolve,Text}`) has no AppKit/AX dependency and is unit-tested
-standalone via `make test`.
+(everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX dependency and is
+unit-tested standalone via `make test`.
 
 The generated `Norm.xcodeproj` is intentionally git-ignored — it is a build artifact. Edit
 `project.yml` to change build settings, then regenerate.
