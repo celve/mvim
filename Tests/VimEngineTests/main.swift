@@ -285,12 +285,42 @@ let ciwC = physical("ciw", profile: blindProfile)
 precondition(ciwC.steps == [
     .press(.wordLeft, count: 1),
     .press(.selectWordRight, count: 1),
-    .clipboardCapture(into: CaptureSlot(id: 0), cutting: true),
-    .commit(.deleted(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .character)),
+    .clipboardCut,
+    .commit(.deleted(into: nil, content: .pasteboard, wise: .character)),
     .commit(.setMode(.insert)),
     .commit(.setInsertStart(nil)),
 ])
 precondition(ciwC.mutatesText)
+
+// Blind delete IS the cut: fire-and-forget, the register holds a marker.
+precondition(physical("dd", profile: blindProfile).steps == [
+    .press(.lineStart, count: 1),
+    .press(.selectDown, count: 1),
+    .clipboardCut,
+    .commit(.deleted(into: nil, content: .pasteboard, wise: .line)),
+    .commit(.setCursor(nil)),
+])
+
+// Blind yank copies without mutating; an AX selected-text read is
+// preferred when available (real text beats a marker).
+let yyBlind = physical("yy", profile: blindProfile)
+precondition(yyBlind.steps == [
+    .press(.lineStart, count: 1),
+    .press(.selectDown, count: 1),
+    .clipboardCopy,
+    .commit(.yanked(into: nil, content: .pasteboard, wise: .line)),
+    .press(.left, count: 1),
+    .commit(.setCursor(nil)),
+])
+precondition(!yyBlind.mutatesText)
+precondition(physical("yy", profile: CapabilityProfile(available: [.readSelectedText])).steps == [
+    .press(.lineStart, count: 1),
+    .press(.selectDown, count: 1),
+    .captureSelectedText(into: CaptureSlot(id: 0)),
+    .commit(.yanked(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .line)),
+    .press(.left, count: 1),
+    .commit(.setCursor(nil)),
+])
 
 // fx moves and commits the find memory; `;` repeats without re-committing.
 precondition(physical("fl", text: "say hello", caret: 0, profile: axProfile).steps == [
@@ -597,5 +627,25 @@ sim = Sim(text: "hi", caret: 0, profile: axProfile)
 sim.type("$")
 precondition(sim.selection == 2..<2)
 precondition(sim.state.field.cursor == nil)
+
+// The pasteboard IS the register (clipboard=unnamed): cut writes it, a
+// marker commit remembers only the wise, and a nil insert pastes it back.
+// Step-level: blind plans carry .press moves the Sim can't emulate.
+sim = Sim(text: "one two", caret: 0, profile: blindProfile)
+precondition(sim.perform([
+    .setSelection(0..<3),
+    .clipboardCut,
+    .commit(.deleted(into: nil, content: .pasteboard, wise: .character)),
+    .clipboardInsert(nil),
+]))
+precondition(sim.pasteboard == "one")
+precondition(sim.text == "one two")                        // cut, then pasted back
+precondition(sim.caret == 3)
+precondition(sim.state.session.register("\"") == .pasteboard(wise: .character))
+
+// A copy overwrites the modeled pasteboard without mutating the field.
+precondition(sim.perform([.setSelection(4..<7), .clipboardCopy]))
+precondition(sim.pasteboard == "two")
+precondition(sim.text == "one two")
 
 print("Vim engine tests passed")

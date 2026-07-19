@@ -15,12 +15,17 @@ public enum PhysicalStep: Equatable, Sendable {
     /// Type text as synthesized keystrokes (replaces any selection).
     case typeText(String)
 
-    /// Clipboard transaction: save pasteboard → ⌘C/⌘X → read into the slot
-    /// → restore pasteboard. `cutting` mutates the field.
-    case clipboardCapture(into: CaptureSlot, cutting: Bool)
+    /// Post ⌘X — the field cuts its selection to the pasteboard, which IS
+    /// the register (see `TextPayload.pasteboard`). Fire-and-forget:
+    /// nothing read back, nothing waited on, silence on failure.
+    case clipboardCut
 
-    /// Clipboard transaction: set pasteboard → ⌘V → restore. `nil` pastes
-    /// whatever is on the pasteboard (register `+`/`*`), with no set/restore.
+    /// Post ⌘C — copy without mutating. Fire-and-forget, as above.
+    case clipboardCopy
+
+    /// Set pasteboard → ⌘V → return (restore is deferred executor hygiene).
+    /// `nil` pastes whatever is on the pasteboard as-is (registers `+`/`*`
+    /// and pasteboard markers), with no set and no restore.
     case clipboardInsert(String?)
 
     /// AX: read the selected text into the slot without touching anything.
@@ -44,13 +49,11 @@ public extension PhysicalStep {
     /// for plans that mutate.
     var mutatesText: Bool {
         switch self {
-        case .replaceSelection, .typeText, .clipboardInsert:
+        case .replaceSelection, .typeText, .clipboardInsert, .clipboardCut:
             return true
-        case .clipboardCapture(_, let cutting):
-            return cutting
         case .press(let chord, _):
             return chord.mutatesText
-        case .setSelection, .captureSelectedText, .settle, .commit, .bell:
+        case .setSelection, .clipboardCopy, .captureSelectedText, .settle, .commit, .bell:
             return false
         }
     }

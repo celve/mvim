@@ -9,14 +9,18 @@
 /// `make test`, and later the flight recorder can replay through the same
 /// machine.
 ///
-/// It executes lane-A/B AX and clipboard steps exactly. It does **not**
-/// emulate Cocoa key semantics: `press` steps (blind lanes, undo) count as
-/// `unsupportedSteps`, because the Sim can only prove we emit the plans we
-/// designed, never that a blind plan works in a real app.
+/// It executes lane-A/B AX and clipboard steps exactly — including the
+/// modeled pasteboard, written by `clipboardCut`/`clipboardCopy` and read
+/// by `clipboardInsert(nil)`, which makes the clipboard=unnamed contract
+/// pure-testable. It does **not** emulate Cocoa key semantics: `press`
+/// steps (blind lanes, undo) count as `unsupportedSteps`, because the Sim
+/// can only prove we emit the plans we designed, never that a blind plan
+/// works in a real app.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
     public private(set) var state: VimState
+    /// The modeled system pasteboard — the blind lanes' register.
     public private(set) var pasteboard: String?
     public var profile: CapabilityProfile
 
@@ -68,6 +72,15 @@ public struct Sim {
         case .command(let completed):
             run(completed)
         }
+    }
+
+    /// Step-level entry for goldens that exercise the interpreter directly —
+    /// blind-lane plans never survive the keystroke loop (`.press` counts as
+    /// unsupported), but their clipboard steps still deserve pure coverage.
+    @discardableResult
+    public mutating func perform(_ steps: [PhysicalStep]) -> Bool {
+        captures = [:]
+        return execute(PhysicalPlan(steps: steps))
     }
 }
 
@@ -174,9 +187,12 @@ private extension Sim {
             case .press:
                 unsupportedSteps += 1
 
-            case .clipboardCapture(let slot, let cutting):
-                captures[slot] = TextModel(text).substring(selection)
-                if cutting { applyReplace("") }
+            case .clipboardCut:
+                pasteboard = TextModel(text).substring(selection)
+                applyReplace("")
+
+            case .clipboardCopy:
+                pasteboard = TextModel(text).substring(selection)
 
             case .clipboardInsert(let content):
                 applyReplace(content ?? pasteboard ?? "")

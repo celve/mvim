@@ -448,10 +448,11 @@ private extension PhysicalPlanner {
         if blackhole {
             return [.press(.deleteBack, count: 1)]
         }
-        let slot = context.takeSlot()
+        // Blind delete IS the cut: the pasteboard becomes the register
+        // (clipboard=unnamed), nothing is read back, silence on failure.
         return [
-            .clipboardCapture(into: slot, cutting: true),
-            .commit(.deleted(into: register, content: .captured(slot), wise: wise)),
+            .clipboardCut,
+            .commit(.deleted(into: register, content: .pasteboard, wise: wise)),
         ]
     }
 
@@ -467,11 +468,16 @@ private extension PhysicalPlanner {
             return [.commit(.yanked(into: register, content: .literal(model.substring(selection)), wise: wise))]
         }
         guard context.selectionOpaque else { return nil }
-        let slot = context.takeSlot()
-        let capture: PhysicalStep = profile.has(.readSelectedText)
-            ? .captureSelectedText(into: slot)
-            : .clipboardCapture(into: slot, cutting: false)
-        return [capture, .commit(.yanked(into: register, content: .captured(slot), wise: wise))]
+        if profile.has(.readSelectedText) {
+            // An AX read is instant and keeps real text in the register —
+            // strictly better fidelity than a pasteboard marker.
+            let slot = context.takeSlot()
+            return [
+                .captureSelectedText(into: slot),
+                .commit(.yanked(into: register, content: .captured(slot), wise: wise)),
+            ]
+        }
+        return [.clipboardCopy, .commit(.yanked(into: register, content: .pasteboard, wise: wise))]
     }
 
     /// `insertText` and `replaceSelection` are the same lowering: AX

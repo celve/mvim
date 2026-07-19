@@ -61,12 +61,14 @@ public final class Executor {
             Synth.type(text)
             return true
 
-        case .clipboardCapture(let slot, let cutting):
-            guard let captured = capture(cutting: cutting) else {
-                NSSound.beep()
-                return false
-            }
-            captures[slot] = captured
+        case .clipboardCut:
+            // The pasteboard IS the register (clipboard=unnamed): post the
+            // cut and move on — nothing read back, silence on failure.
+            Synth.key(7, .maskCommand)   // kVK_ANSI_X
+            return true
+
+        case .clipboardCopy:
+            Synth.key(8, .maskCommand)   // kVK_ANSI_C
             return true
 
         case .clipboardInsert(let content):
@@ -137,23 +139,6 @@ public final class Executor {
             guard Date() < deadline else { return false }
             Thread.sleep(forTimeInterval: 0.01)
         }
-    }
-
-    /// Clipboard transaction: save → ⌘C/⌘X → wait for the pasteboard to
-    /// change → read → restore.
-    private func capture(cutting: Bool) -> String? {
-        let pasteboard = NSPasteboard.general
-        let saved = pasteboard.string(forType: .string)
-        let before = pasteboard.changeCount
-        Synth.key(cutting ? 7 : 8, .maskCommand)   // kVK_ANSI_X / kVK_ANSI_C
-        let deadline = Date().addingTimeInterval(0.3)
-        while pasteboard.changeCount == before, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-        let captured = pasteboard.changeCount != before ? pasteboard.string(forType: .string) : nil
-        pasteboard.clearContents()
-        if let saved { pasteboard.setString(saved, forType: .string) }
-        return captured
     }
 
     // MARK: - Chord lowering (symbolic → hardware)
