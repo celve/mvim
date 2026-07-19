@@ -13,6 +13,12 @@ struct NormApp: App {
     var body: some Scene {
         MenuBarExtra {
             Toggle("Vim Mode", isOn: $model.vimEnabled)
+            if let front = model.frontApp {
+                Toggle("Disable for \(front.name)", isOn: Binding(
+                    get: { model.frontAppDisabled },
+                    set: { model.setFrontAppDisabled($0) }
+                ))
+            }
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
                 .onAppear { model.refresh() }
@@ -33,18 +39,32 @@ struct NormApp: App {
 
 @MainActor
 final class AppModel: ObservableObject {
+    struct FrontApp: Equatable {
+        let name: String
+        let bundleID: String
+    }
+
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
+    @Published private(set) var frontApp: FrontApp?
+    @Published private(set) var frontAppDisabled = false
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
 
-    private let controller = Controller()
+    private let controller: Controller
     private var token: InputHub.Token?
 
     init() {
-        let controller = self.controller
+        // Before any AX or binding work: seed the disable list, and bound
+        // every AX call this process makes (the system default is ~6s —
+        // long enough for one busy app to freeze the tap).
+        Prefs.registerDefaults()
+        AX.setGlobalMessagingTimeout(0.15)
+
+        let controller = Controller()
+        self.controller = controller
         token = InputHub.shared.register(.editor) { event in
             MainActor.assumeIsolated { controller.handle(event) }
         }
@@ -55,6 +75,21 @@ final class AppModel: ObservableObject {
         accessibilityTrusted = AX.ensureTrusted(prompt: false)
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
+        // Norm is LSUIElement, so opening the menu keeps the target app
+        // frontmost; if frontmost somehow IS Norm, keep the last snapshot.
+        if let app = NSWorkspace.shared.frontmostApplication,
+           app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           let bundleID = app.bundleIdentifier {
+            frontApp = FrontApp(name: app.localizedName ?? bundleID, bundleID: bundleID)
+        }
+        frontAppDisabled = frontApp.map { Prefs.isDisabled(bundleID: $0.bundleID) } ?? false
+    }
+
+    func setFrontAppDisabled(_ disabled: Bool) {
+        guard let frontApp else { return }
+        Prefs.setDisabled(disabled, for: frontApp.bundleID)
+        frontAppDisabled = disabled
+        controller.refreshPolicy()
     }
 
     func openPrivacyPane(_ anchor: String) {
