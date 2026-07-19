@@ -24,10 +24,18 @@ public final class FocusTracker {
         /// Accessory-app focus (Raycast/Spotlight): frontmost stays the
         /// regular app, so the per-key pid staleness guard must not apply.
         public let isOverlay: Bool
+        /// App-level binding for an AX-silent app (policy `.forced`): the
+        /// element is a stand-in app element, capabilities are empty (lane C
+        /// only), and identity is `(pid, windowID)` — never the element.
+        public let isForced: Bool
+        public let windowID: CGWindowID
     }
 
     /// Fired on every change, including transitions to nil.
     public var onRebind: ((Binding?) -> Void)?
+    /// Fired on every global mouse-up — forced bindings reset to Insert on
+    /// clicks (the caret moved invisibly).
+    public var onPointerAction: (() -> Void)?
     public private(set) var binding: Binding?
 
     private var appObserver: AXObserver?
@@ -57,7 +65,10 @@ public final class FocusTracker {
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseUp, .rightMouseUp, .otherMouseUp]
         ) { _ in
-            MainActor.assumeIsolated { [weak self] in self?.scheduleReverify() }
+            MainActor.assumeIsolated { [weak self] in
+                self?.onPointerAction?()
+                self?.scheduleReverify()
+            }
         }
         resolveAndPublish(revalidateGate: false)
     }
@@ -121,28 +132,37 @@ public final class FocusTracker {
             return
         }
         lastResolveAt = CFAbsoluteTimeGetCurrent()
-        guard let element = AX.focusedElement(), let pid = AX.ownerPID(of: element) else {
+        // Secure input suspends both paths: defense-in-depth for AX fields,
+        // THE password guard for forced bindings (the flag is system-wide,
+        // covering fields AX cannot see). ⌃[ reverifies through here, so
+        // engage-time coverage is free.
+        guard !SecureInput.isActive else {
             publish(nil)
             return
         }
-        // Policy first, before any further AX: a disabled app gets no
-        // binding and no observer.
-        guard !isDisabledApp(pid) else {
+        guard let element = AX.focusedElement(), let pid = AX.ownerPID(of: element) else {
+            publishForcedOrNil()   // nothing resolves — the forced fallback's home turf
+            return
+        }
+        // Policy first, before any further AX: an off app gets no binding
+        // and no observer. Forced never overrides a real element below —
+        // it is a fallback.
+        if policy(for: pid) == .off {
             publish(nil)
             teardownObserver()
             return
         }
-        if let bound = binding, CFEqual(bound.element, element) {
+        if let bound = binding, !bound.isForced, CFEqual(bound.element, element) {
             guard revalidateGate else { return }
             if FieldProber.gate(element).engageable { return }
-            publish(nil)
+            publishForcedOrNil()   // the bound element lost the gate
             return
         }
         // Watch this app either way: an unbound-but-enabled app must still
         // report when focus reaches a textual field.
         retargetObserver(to: pid)
         guard FieldProber.gate(element).engageable else {
-            publish(nil)
+            publishForcedOrNil()   // the fresh element fails the gate
             return
         }
         let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -152,24 +172,74 @@ public final class FocusTracker {
             element: element,
             pid: pid,
             capabilities: FieldProber.probe(element),
-            isOverlay: isOverlay
+            isOverlay: isOverlay,
+            isForced: false,
+            windowID: 0
+        ))
+    }
+
+    /// The forced fallback: no engageable element anywhere, but the
+    /// frontmost app may be opted into app-level lane-C vim. Gate order is
+    /// cheap→expensive: workspace facts → policy → one CG window read →
+    /// display compare → one bounded AX title read.
+    private func publishForcedOrNil() {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.activationPolicy == .regular,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let bundleID = app.bundleIdentifier,
+              Prefs.policy(for: bundleID) == .forced else {
+            publish(nil)
+            return
+        }
+        let pid = app.processIdentifier
+        guard let window = AX.frontWindow(of: pid) else {
+            publish(nil)   // zero on-screen windows: nothing to bind
+            return
+        }
+        guard !AX.coversFullScreen(window.bounds) else {
+            publish(nil)   // fullscreen is game/video territory
+            return
+        }
+        if let title = AX.focusedWindowTitle(of: pid), title.lowercased().contains("vim") {
+            publish(nil)   // a real vim runs inside — back off
+            return
+        }
+        // Identity is (pid, windowID), NEVER the element: app-element
+        // stand-ins always CFEqual each other, and a republish would reset
+        // the field to Insert on every reverify.
+        if let bound = binding, bound.isForced, bound.pid == pid, bound.windowID == window.id {
+            return
+        }
+        retargetObserver(to: pid)   // harmless if AX-silent; catches events if any
+        publish(Binding(
+            element: AXUIElementCreateApplication(pid),
+            pid: pid,
+            capabilities: CapabilityProfile(),   // empty: the engine plans lane C only
+            isOverlay: false,
+            isForced: true,
+            windowID: window.id
         ))
     }
 
     private func publish(_ new: Binding?) {
         if binding == nil, new == nil { return }
-        // The element-destroyed registration moves with the binding.
-        if let old = binding { unobserve(kAXUIElementDestroyedNotification, on: old.element) }
+        // The element-destroyed registration moves with the binding; forced
+        // stand-ins register nothing.
+        if let old = binding, !old.isForced {
+            unobserve(kAXUIElementDestroyedNotification, on: old.element)
+        }
         binding = new
-        if let new { observe(kAXUIElementDestroyedNotification, on: new.element) }
+        if let new, !new.isForced {
+            observe(kAXUIElementDestroyedNotification, on: new.element)
+        }
         onRebind?(new)
     }
 
-    private func isDisabledApp(_ pid: pid_t) -> Bool {
+    private func policy(for pid: pid_t) -> VimPolicy {
         guard let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else {
-            return false
+            return .auto
         }
-        return Prefs.isDisabled(bundleID: bundleID)
+        return Prefs.policy(for: bundleID)
     }
 
     // MARK: - Event sources
@@ -178,7 +248,9 @@ public final class FocusTracker {
         guard enabled else { return }
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-        if let bundleID = app.bundleIdentifier, Prefs.isDisabled(bundleID: bundleID) {
+        // Only `.off` stops here — `.forced` must retarget and resolve so
+        // forced apps bind at activation, before their first keydown.
+        if let bundleID = app.bundleIdentifier, Prefs.policy(for: bundleID) == .off {
             publish(nil)
             teardownObserver()
             return

@@ -46,7 +46,18 @@ public final class Controller {
 
     public init() {
         tracker.onRebind = { [weak self] binding in self?.rebind(to: binding) }
+        tracker.onPointerAction = { [weak self] in self?.pointerActed() }
         tracker.start()
+    }
+
+    /// A click in a forced app moved the caret invisibly — Normal-mode
+    /// offsets are fiction now. Back to the entry policy.
+    private func pointerActed() {
+        guard let binding, binding.isForced, state.field.mode != .insert else { return }
+        monitor.reset()
+        state.field = VimState.Field(mode: .insert)
+        openChange = nil
+        publishMode()
     }
 
     /// The disable list changed (menu toggle): re-evaluate the binding now.
@@ -97,9 +108,20 @@ public final class Controller {
             // the tracker can see, so a completed command buys one bounded
             // resolve. ⌃[ already reverified this very event.
             if token != "<C-[>" {
-                guard let focused = AX.focusedElement(), CFEqual(focused, binding.element) else {
-                    tracker.reverify(force: true)
-                    return false
+                if binding.isForced {
+                    // AX-silent apps resolve no focused element — the
+                    // element check would swallow every command. Verify at
+                    // the granularity forced bindings have: (pid, window).
+                    guard binding.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                          AX.frontWindow(of: binding.pid)?.id == binding.windowID else {
+                        tracker.reverify(force: true)
+                        return false
+                    }
+                } else {
+                    guard let focused = AX.focusedElement(), CFEqual(focused, binding.element) else {
+                        tracker.reverify(force: true)
+                        return false
+                    }
                 }
             }
             run(completed, on: binding)
