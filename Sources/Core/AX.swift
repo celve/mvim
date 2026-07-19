@@ -13,6 +13,14 @@ public enum AX {
         return AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }
 
+    /// Every AX read is a synchronous Mach call serviced by the target app's
+    /// main thread; the system default lets one busy app hang us ~6s per
+    /// call. Set on the system-wide element this bounds every call the
+    /// process makes. Call once at startup.
+    public static func setGlobalMessagingTimeout(_ seconds: Float) {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), seconds)
+    }
+
     /// The focused UI element, resolved overlay-aware: if a non-activating
     /// accessory panel (Raycast/Spotlight) is frontmost and differs from the
     /// system-wide focus, prefer it. Preserved from the validated Loom
@@ -85,6 +93,31 @@ public enum AX {
         guard AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &ref) == .success,
               let enabled = ref as? Bool else { return true }
         return enabled
+    }
+
+    /// Everything the engage gate needs about an element, in ONE round trip.
+    /// Secure fields hide behind the *subrole* (`NSSecureTextField` keeps
+    /// role `AXTextField`), so both are fetched.
+    public struct GateAttributes {
+        public let role: String?
+        public let subrole: String?
+        public let enabled: Bool
+    }
+
+    public static func gateAttributes(of element: AXUIElement) -> GateAttributes {
+        let attributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXEnabledAttribute] as CFArray
+        var values: CFArray?
+        // Without .stopOnError, failed slots come back as AXValue error
+        // markers; the casts turn them into nil → the per-attribute defaults.
+        guard AXUIElementCopyMultipleAttributeValues(element, attributes, AXCopyMultipleAttributeOptions(), &values) == .success,
+              let list = values as? [AnyObject], list.count == 3 else {
+            return GateAttributes(role: nil, subrole: nil, enabled: true)
+        }
+        return GateAttributes(
+            role: list[0] as? String,
+            subrole: list[1] as? String,
+            enabled: list[2] as? Bool ?? true
+        )
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)
