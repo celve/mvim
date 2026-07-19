@@ -14,10 +14,14 @@ struct NormApp: App {
         MenuBarExtra {
             Toggle("Vim Mode", isOn: $model.vimEnabled)
             if let front = model.frontApp {
-                Toggle("Disable for \(front.name)", isOn: Binding(
-                    get: { model.frontAppDisabled },
-                    set: { model.setFrontAppDisabled($0) }
-                ))
+                Picker("Vim in \(front.name)", selection: Binding(
+                    get: { model.frontAppPolicy },
+                    set: { model.setFrontAppPolicy($0) }
+                )) {
+                    Text("Auto").tag(VimPolicy.auto)
+                    Text("Off").tag(VimPolicy.off)
+                    Text("Force").tag(VimPolicy.forced)
+                }
             }
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
@@ -65,7 +69,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
     @Published private(set) var frontApp: FrontApp?
-    @Published private(set) var frontAppDisabled = false
+    @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
@@ -109,13 +113,13 @@ final class AppModel: ObservableObject {
            let bundleID = app.bundleIdentifier {
             frontApp = FrontApp(name: app.localizedName ?? bundleID, bundleID: bundleID)
         }
-        frontAppDisabled = frontApp.map { Prefs.isDisabled(bundleID: $0.bundleID) } ?? false
+        frontAppPolicy = frontApp.map { Prefs.policy(for: $0.bundleID) } ?? .auto
     }
 
-    func setFrontAppDisabled(_ disabled: Bool) {
+    func setFrontAppPolicy(_ policy: VimPolicy) {
         guard let frontApp else { return }
-        Prefs.setDisabled(disabled, for: frontApp.bundleID)
-        frontAppDisabled = disabled
+        Prefs.setPolicy(policy, for: frontApp.bundleID)
+        frontAppPolicy = policy
         controller.refreshPolicy()
     }
 
