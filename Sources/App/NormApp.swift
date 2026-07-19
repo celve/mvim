@@ -235,6 +235,10 @@ final class AppModel: ObservableObject {
         case .writeSelection: return "Set selection (AX)"
         case .insertText: return "Replace text (AX)"
         case .drawCursor: return "Draw block cursor"
+        // Phrased so the row's *denial* is the legible half: "✗ seeded" then
+        // reads as the block-editor fact.
+        case .wholeDocument: return "Text covers whole document"
+        case .fieldIsSession: return "New field starts a session"
         }
     }
 

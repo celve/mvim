@@ -216,6 +216,20 @@ public enum AX {
         }
     }
 
+    /// The window containing `element` — one AX round trip, compared with
+    /// `CFEqual`.
+    ///
+    /// Deliberately not `frontWindow(of:)`: that answers "the frontmost
+    /// window of this pid", which is a different question and lies whenever
+    /// focus sits in a window that is not front (a peek modal, a second
+    /// document). `kAXTopLevelUIElement` is the fallback — Electron hosts
+    /// answer one attribute or the other inconsistently. Callers treat nil
+    /// as "cannot tell" and fail closed.
+    public static func window(of element: AXUIElement) -> AXUIElement? {
+        copyElement(element, kAXWindowAttribute)
+            ?? copyElement(element, kAXTopLevelUIElementAttribute)
+    }
+
     /// Title of `pid`'s AX-focused window; nil for AX-silent or untitled
     /// apps (callers tolerate).
     public static func focusedWindowTitle(of pid: pid_t) -> String? {

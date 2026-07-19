@@ -30,6 +30,14 @@ public final class FocusTracker {
         public let isForced: Bool
         public let windowID: CGWindowID
 
+        /// The window containing `element`, resolved once at publish time.
+        /// Distinct from `windowID`, which carries *forced* identity: this
+        /// answers "same document?" for real bindings, where a block editor
+        /// hands out one element per block but one window per page. nil when
+        /// AX would not say — the transition then fails closed to a new
+        /// session.
+        public let window: AXUIElement?
+
         /// The learner's binding identity, resolved once at publish time.
         public let bundleID: String?
         public let appVersion: String?
@@ -40,8 +48,10 @@ public final class FocusTracker {
         public let capabilityReport: CapabilityReport?
     }
 
-    /// Fired on every change, including transitions to nil.
-    public var onRebind: ((Binding?) -> Void)?
+    /// Fired on every change, including transitions to nil. The transition
+    /// is a property of the *edge*, not of either binding — it tells the
+    /// controller how much of the session survives.
+    public var onRebind: ((Binding?, FocusTransition) -> Void)?
     /// Fired on every global mouse-up — forced bindings reset to Insert on
     /// clicks (the caret moved invisibly).
     public var onPointerAction: (() -> Void)?
@@ -156,11 +166,47 @@ public final class FocusTracker {
             isOverlay: bound.isOverlay,
             isForced: false,
             windowID: bound.windowID,
+            window: bound.window,
             bundleID: identity.bundleID,
             appVersion: identity.version,
             role: gate.role,
             capabilityReport: resolved.report
         ))
+    }
+
+    /// Adopt a freshly-focused element **only** if it is the same document
+    /// as `current` — the block-crossing case, where our own motion moved
+    /// focus and the AX notification has not landed yet.
+    ///
+    /// Returns the new binding on success, nil when this is a genuine focus
+    /// change the caller must handle as such. Costs one gate plus one
+    /// resolve, and only on the rare keystroke that finds the element moved.
+    public func retarget(to element: AXUIElement, from current: Binding) -> Binding? {
+        // The pid must be proven, not assumed: `candidate` is stamped with
+        // `current.pid`, so an element from another app would compare equal
+        // to itself and could masquerade as the same document.
+        guard enabled, !current.isForced,
+              AX.ownerPID(of: element) == current.pid else { return nil }
+        let gate = FieldProber.gate(element)
+        guard gate.engageable else { return nil }
+        let identity = Self.appIdentity(for: current.pid)
+        let resolved = FieldProber.resolve(element, bundleID: identity.bundleID)
+        let candidate = Binding(
+            element: element,
+            pid: current.pid,
+            capabilities: resolved.profile,
+            isOverlay: current.isOverlay,
+            isForced: false,
+            windowID: current.windowID,
+            window: AX.window(of: element),
+            bundleID: identity.bundleID,
+            appVersion: identity.version,
+            role: gate.role,
+            capabilityReport: resolved.report
+        )
+        guard transition(from: current, to: candidate) == .sameDocument else { return nil }
+        publish(candidate)
+        return candidate
     }
 
     // MARK: - The resolve (the moved rebind body)
@@ -217,6 +263,7 @@ public final class FocusTracker {
             isOverlay: isOverlay,
             isForced: false,
             windowID: 0,
+            window: AX.window(of: element),
             bundleID: identity.bundleID,
             appVersion: identity.version,
             role: gate.role,
@@ -273,6 +320,8 @@ public final class FocusTracker {
             isOverlay: false,
             isForced: true,
             windowID: window.id,
+            window: nil,   // forced identity is (pid, windowID); there is no real element
+
             bundleID: bundleID,
             appVersion: nil,   // the learner ignores forced bindings
             role: nil,
@@ -282,6 +331,7 @@ public final class FocusTracker {
 
     private func publish(_ new: Binding?) {
         if binding == nil, new == nil { return }
+        let edge = transition(from: binding, to: new)
         // The element-destroyed registration moves with the binding; forced
         // stand-ins register nothing.
         if let old = binding, !old.isForced {
@@ -291,7 +341,37 @@ public final class FocusTracker {
         if let new, !new.isForced {
             observe(kAXUIElementDestroyedNotification, on: new.element)
         }
-        onRebind?(new)
+        onRebind?(new, edge)
+    }
+
+    /// Which edge focus just traversed. Fails closed to `.newSession` — the
+    /// long-standing behavior — whenever anything is unknown.
+    ///
+    /// The `sameDocument` case generalizes what forced bindings already do
+    /// below: identity is the *document*, never the element. A block editor
+    /// hands out one element per block, so element identity would call every
+    /// line move a new editing session.
+    private func transition(from old: Binding?, to new: Binding?) -> FocusTransition {
+        guard let old, let new else { return .newSession }
+        if old.isForced || new.isForced {
+            return old.isForced && new.isForced && old.pid == new.pid && old.windowID == new.windowID
+                ? .sameElement
+                : .newSession
+        }
+        if CFEqual(old.element, new.element) { return .sameElement }
+        // `has()` cannot distinguish "resolved and denied" from "never
+        // resolved" (an empty profile answers false to everything), and only
+        // an explicit denial means the app told us its elements are not
+        // documents. Both sides must say so.
+        let scoped = { (binding: Binding) in
+            binding.capabilities.statuses[.fieldIsSession] == .unavailable
+        }
+        guard scoped(old), scoped(new),
+              old.pid == new.pid,
+              old.role == new.role,
+              let oldWindow = old.window, let newWindow = new.window,
+              CFEqual(oldWindow, newWindow) else { return .newSession }
+        return .sameDocument
     }
 
     private func policy(for pid: pid_t) -> VimPolicy {
@@ -321,11 +401,19 @@ public final class FocusTracker {
     }
 
     fileprivate func handleAXNotification(_ notification: String, element: AXUIElement) {
-        if notification == kAXUIElementDestroyedNotification,
-           let bound = binding, CFEqual(bound.element, element) {
-            publish(nil)
-        }
+        // A destroyed bound element does NOT unbind on its own: in a block
+        // editor, deleting a block (`3dd`, `dj`) destroys the very element
+        // vim is driving, and an eager `publish(nil)` would end the session
+        // — dropping the user to Insert for doing exactly what vim is for.
+        // Let the resolve below decide; it can still reach `sameDocument`
+        // against the surviving window. Only if nothing binds does the
+        // destruction actually unbind us.
+        let destroyedBound = notification == kAXUIElementDestroyedNotification
+            && binding.map { CFEqual($0.element, element) } == true
         resolveAndPublish(revalidateGate: false)
+        if destroyedBound, let bound = binding, CFEqual(bound.element, element) {
+            publish(nil)   // the resolve found nothing better; the element really is gone
+        }
     }
 
     // MARK: - AXObserver lifecycle

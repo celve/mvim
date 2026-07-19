@@ -1,7 +1,14 @@
-/// The atoms of what a focused field can do — all but one probeable, each
-/// mapping to one concrete AX mechanism. Ambient powers (key synthesis,
-/// clipboard transactions, ⌘Z) are permission-level constants, not
-/// capabilities.
+/// The atoms the physical planner consults about a focused field.
+///
+/// Two species live here. **Mechanism** atoms are proven by the AX probe and
+/// each maps to one concrete AX call. **Policy** atoms are never probed —
+/// they are *decided*, subtractively, by shipped seeds and the user, against
+/// a parent mechanism whose absence moots the question. The unifying
+/// invariant is not "an AX mechanism" but "a per-field boolean the planner
+/// consults that a user can see and demote in one menu".
+///
+/// Ambient powers (key synthesis, clipboard transactions, ⌘Z) are
+/// permission-level constants, not capabilities.
 public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// `AXValue` / `AXStringForRange`: the field's text can be read.
     case readText
@@ -23,13 +30,90 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
 
     /// The standing-cursor *role* of `writeSelection`'s mechanism: may the
     /// Normal-mode block cursor be left drawn as a persistent selection?
-    /// The one policy-valued atom — never probed; "available" means
-    /// *permitted*, resolved by the runtime (writeSelection minus seeds and
-    /// user config). Selection-reactive apps (Notion's floating toolbar)
-    /// attach UI to any standing selection, so presentation must be
-    /// deniable separately from actuation, which transient command
-    /// selections keep using regardless. Subtractive only.
+    /// Never probed; "available" means *permitted*, resolved by the runtime
+    /// (writeSelection minus seeds and user config). Selection-reactive apps
+    /// (Notion's floating toolbar) attach UI to any standing selection, so
+    /// presentation must be deniable separately from actuation, which
+    /// transient command selections keep using regardless. Subtractive only.
     case drawCursor
+
+    /// Does the readable text span the whole navigable document?
+    ///
+    /// The policy atom that answers a question about *truth* rather than
+    /// permission. In a block editor (Notion) each block is its own
+    /// contenteditable, so `AXValue` is one block, not the page: the model
+    /// is exact within the block — `w`, `f`, `ciw`, `x` are all correct —
+    /// and a lie about everything past it. `j` then resolves to the offset
+    /// it started at and executes a flawless no-op.
+    ///
+    /// Denied, the planner stops trusting the model for geography beyond
+    /// the caret's line and routes those steps to the blind lane, whose
+    /// Cocoa chords cross blocks natively. Local exactness is untouched.
+    ///
+    /// Never probed — no AX attribute answers it — and **never learned**:
+    /// `LearnedPriors` demotes from failed settles, and a block-scoped
+    /// field's settles *pass*. That is the bug; there is no signal. Seeds
+    /// and the user's override are the only sources. Subtractive only.
+    case wholeDocument
+
+    /// Is each focused field its own vim session?
+    ///
+    /// The entry policy opens every newly-bound field in Insert, on the
+    /// assumption that a new element means the user moved somewhere new. In
+    /// a block editor that assumption breaks: `j` crosses into the next
+    /// block, which is a different element, and the session would end
+    /// mid-motion — Normal mode would drop to Insert on every line move.
+    ///
+    /// Denied, an element change *inside the same document* continues the
+    /// session instead of starting one (see `FocusTransition`). Available —
+    /// the default everywhere — is the long-standing behavior: every focus
+    /// change is a session boundary.
+    ///
+    /// Distinct from `wholeDocument`, deliberately: that atom is about the
+    /// *text*'s scope and is read by the planner, this one is about
+    /// *session* identity and is read by the runtime's focus logic. An app
+    /// can want one without the other, and each is togglable per app.
+    ///
+    /// The one atom with no parent mechanism — no AX call gates whether a
+    /// focus change ends a session. Never probed, never learned.
+    case fieldIsSession
+}
+
+public extension Capability {
+    /// How this atom is resolved. See the type's doc comment.
+    enum Species: Equatable, Sendable {
+        case mechanism
+        case policy
+    }
+
+    var species: Species {
+        switch self {
+        case .drawCursor, .wholeDocument, .fieldIsSession:
+            return .policy
+        case .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText:
+            return .mechanism
+        }
+    }
+
+    /// The mechanism a policy atom rides on: no mechanism, no question. Its
+    /// absence makes the policy unavailable regardless of seeds or the user
+    /// — `.on` un-seeds curation, it never conjures a missing mechanism.
+    ///
+    /// `nil` means the policy is ungated: nothing about the field can moot
+    /// it, so it answers to seeds and the user alone (`fieldIsSession`).
+    ///
+    /// The policies deny different things: `drawCursor` off means "you may
+    /// not", `wholeDocument` and `fieldIsSession` off mean "it is not true".
+    /// The subtractive law is kept verbatim for all three so the semantics
+    /// do not fork — and since none is probed, `.on` and auto coincide
+    /// except against a seed.
+    var parent: Capability? {
+        switch self {
+        case .drawCursor: return .writeSelection
+        case .wholeDocument: return .readText
+        default: return nil
+        }
+    }
 }
 
 public enum CapabilityStatus: String, Equatable, Sendable {

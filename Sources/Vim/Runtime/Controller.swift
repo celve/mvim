@@ -45,7 +45,9 @@ public final class Controller {
     private var openChange: (source: String, count: Int?, register: Register?)?
 
     public init() {
-        tracker.onRebind = { [weak self] binding in self?.rebind(to: binding) }
+        tracker.onRebind = { [weak self] binding, transition in
+            self?.rebind(to: binding, transition: transition)
+        }
         tracker.onPointerAction = { [weak self] in self?.pointerActed() }
         tracker.start()
     }
@@ -92,7 +94,7 @@ public final class Controller {
         // Physical Esc never gets here: KeyNotation returns nil for it.
         if token == "<C-[>" { tracker.reverify() }
 
-        guard let binding = tracker.bindingForKeydown() else { return false }
+        guard var binding = tracker.bindingForKeydown() else { return false }
 
         // Free staleness guard: catches app switches even from apps that
         // never emit AX notifications. Overlay bindings are exempt — their
@@ -133,9 +135,22 @@ public final class Controller {
                         return false
                     }
                 } else {
-                    guard let focused = AX.focusedElement(), CFEqual(focused, binding.element) else {
+                    guard let focused = AX.focusedElement() else {
                         tracker.reverify(force: true)
                         return false
+                    }
+                    if !CFEqual(focused, binding.element) {
+                        // The field moved under us. In a block editor that is
+                        // routinely OUR doing — the previous command's blind
+                        // chord crossed into the next block — and the AX
+                        // notification may not have landed yet. Same document
+                        // ⇒ retarget and run; bailing here would both destroy
+                        // the command and type its final key into the text.
+                        guard let moved = tracker.retarget(to: focused, from: binding) else {
+                            tracker.reverify(force: true)
+                            return false
+                        }
+                        binding = moved
                     }
                 }
             }
@@ -147,11 +162,13 @@ public final class Controller {
         }
     }
 
-    /// Focus moved (tracker event): drop keys-in-flight, reset field state,
-    /// keep the session — and un-draw the block cursor the departing field
-    /// may still be showing.
-    private func rebind(to new: FocusTracker.Binding?) {
-        if let old = binding, let cursor = state.field.cursor,
+    /// Focus moved (tracker event). The element plumbing is unconditional;
+    /// how much of the *session* survives is the transition's call — see
+    /// `FocusTransition`. A block crossing keeps the mode it was in, because
+    /// a vim motion causing it is not the user going somewhere new.
+    private func rebind(to new: FocusTracker.Binding?, transition: FocusTransition) {
+        if !transition.preservesDrawnCursor,
+           let old = binding, let cursor = state.field.cursor,
            old.capabilities.has(.writeSelection) {
             // Unbind hygiene, through the executor, which owns all field
             // writes. A dead element rejects harmlessly (and bounded).
@@ -162,11 +179,13 @@ public final class Controller {
             )
         }
         binding = new
-        monitor.reset()
-        // Entry policy: fields open in Insert — typing just works, ⌃[
-        // engages Normal.
-        state.field = VimState.Field(mode: .insert)
-        openChange = nil
+        // Keys-in-flight and the open dot body are one unit, and neither
+        // holds an offset — a block crossing does not stale them.
+        if transition.clearsChangeInFlight {
+            monitor.reset()
+            openChange = nil
+        }
+        state.field = state.field.carried(across: transition)
         publishMode()
     }
 

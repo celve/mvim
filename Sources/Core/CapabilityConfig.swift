@@ -21,11 +21,18 @@ public enum CapabilityConfig {
         case on, off
     }
 
-    /// Curated apps where a capability defaults off. Notion reacts to any
-    /// standing selection (floating toolbar, collaborator highlights), so
-    /// the block cursor may not be left drawn there.
+    /// Curated apps where a capability defaults off.
+    ///
+    /// Notion earns three denials — presentational, epistemic, sessional —
+    /// all downstream of one fact: each block is its own contenteditable.
+    /// It reacts to any standing selection (floating toolbar, collaborator
+    /// highlights), so the block cursor may not be left drawn there; the
+    /// focused element's text is one block rather than the page, so vertical
+    /// motions would resolve inside a document they cannot see; and crossing
+    /// into the next block changes the focused element, which must not end
+    /// the vim session the way moving to a genuinely new field does.
     static let seeds: [String: Set<String>] = [
-        "notion.id": ["drawCursor"],
+        "notion.id": ["drawCursor", "wholeDocument", "fieldIsSession"],
     ]
 
     public static func seededOff(bundleID: String, capability: String) -> Bool {

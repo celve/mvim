@@ -48,11 +48,11 @@ public enum FieldProber {
     }
 
     /// The full resolution for one binding: probed truth minus the user's
-    /// demotions, plus the policy-valued `drawCursor` derived from
-    /// `writeSelection` under `CapabilityConfig` seeds and overrides. (The
-    /// learner's committed demotions subtract in the mechanism loop when
-    /// that wiring lands.) The profile is what the planner consumes; the
-    /// report is the menu's why.
+    /// demotions, then the policy atoms derived from their parent mechanisms
+    /// under `CapabilityConfig` seeds and overrides. (The learner's
+    /// committed demotions subtract in the mechanism loop when that wiring
+    /// lands.) The profile is what the planner consumes; the report is the
+    /// menu's why.
     public static func resolve(
         _ element: AXUIElement, bundleID: String?
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
@@ -67,7 +67,7 @@ public enum FieldProber {
 
         // Mechanism atoms: an override may only demote — probe truth wins
         // upward, the user's off wins downward.
-        for capability in Capability.allCases where capability != .drawCursor {
+        for capability in Capability.allCases where capability.species == .mechanism {
             let entry: CapabilityReport.Entry
             if probed.has(capability), choice(capability) == .off {
                 entry = CapabilityReport.Entry(status: .unavailable, source: .user)
@@ -81,25 +81,34 @@ public enum FieldProber {
             entries[capability] = entry
         }
 
-        // drawCursor: writeSelection's mechanism, policy-gated. `.on`
-        // un-seeds curation only — a missing mechanism stays missing.
-        let mechanism = entries[.writeSelection]
-        let userChoice = choice(.drawCursor)
-        let seeded = bundleID.map {
-            CapabilityConfig.seededOff(bundleID: $0, capability: Capability.drawCursor.rawValue)
-        } ?? false
-        let entry: CapabilityReport.Entry
-        if mechanism?.status != .available {
-            entry = CapabilityReport.Entry(status: .unavailable, source: mechanism?.source ?? .probed)
-        } else if userChoice == .off {
-            entry = CapabilityReport.Entry(status: .unavailable, source: .user)
-        } else if seeded, userChoice != .on {
-            entry = CapabilityReport.Entry(status: .unavailable, source: .seeded)
-        } else {
-            entry = CapabilityReport.Entry(status: .available, source: userChoice == .on ? .user : .probed)
+        // Policy atoms: their parent mechanism, seed- and user-gated. `.on`
+        // un-seeds curation only — a missing mechanism stays missing. The
+        // mechanism loop above has already run, so every parent is resolved;
+        // this stands in only if that ever stops being true.
+        let unavailableEntry = CapabilityReport.Entry(status: .unavailable, source: .probed)
+        for capability in Capability.allCases where capability.species == .policy {
+            // A parentless policy is ungated — nothing about the field can
+            // moot it, so it answers to seeds and the user alone. Absent
+            // this, `mechanism` is nil and the check below would deny it
+            // permanently.
+            let mechanism = capability.parent.map { entries[$0] ?? unavailableEntry }
+            let userChoice = choice(capability)
+            let seeded = bundleID.map {
+                CapabilityConfig.seededOff(bundleID: $0, capability: capability.rawValue)
+            } ?? false
+            let entry: CapabilityReport.Entry
+            if let mechanism, mechanism.status != .available {
+                entry = CapabilityReport.Entry(status: .unavailable, source: mechanism.source)
+            } else if userChoice == .off {
+                entry = CapabilityReport.Entry(status: .unavailable, source: .user)
+            } else if seeded, userChoice != .on {
+                entry = CapabilityReport.Entry(status: .unavailable, source: .seeded)
+            } else {
+                entry = CapabilityReport.Entry(status: .available, source: userChoice == .on ? .user : .probed)
+            }
+            statuses[capability] = entry.status
+            entries[capability] = entry
         }
-        statuses[.drawCursor] = entry.status
-        entries[.drawCursor] = entry
 
         return (CapabilityProfile(statuses: statuses), CapabilityReport(entries: entries))
     }

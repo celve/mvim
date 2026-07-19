@@ -82,6 +82,27 @@ public struct Sim {
         captures = [:]
         return execute(PhysicalPlan(steps: steps))
     }
+
+    /// `Controller.rebind`'s pure twin: focus moved, and the transition says
+    /// how much of the session survives. Lives here rather than in an
+    /// extension because `monitor` and `openChange` are private — and they
+    /// are exactly what the paired-halves invariant is about.
+    ///
+    /// Pass `text` to model a `sameDocument` swap literally: the next block
+    /// is different text whose offsets restart at zero, which is precisely
+    /// what makes the departing field's offsets fiction.
+    public mutating func refocus(_ transition: FocusTransition, text: String? = nil, caret: Int = 0) {
+        if let text {
+            self.text = text
+            let clamped = TextModel(text).clamp(caret)
+            selection = clamped..<clamped
+        }
+        state.field = state.field.carried(across: transition)
+        if transition.clearsChangeInFlight {
+            monitor.reset()
+            openChange = nil
+        }
+    }
 }
 
 // MARK: - The runtime loop

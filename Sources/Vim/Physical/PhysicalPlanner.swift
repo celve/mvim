@@ -78,6 +78,36 @@ private extension PhysicalPlanner {
         }
 
         var model: TextModel? { text.map(TextModel.init) }
+
+        /// The model, but only where its geography is trustworthy.
+        ///
+        /// A block-scoped field's text is locally true and globally false:
+        /// exact within the caret's block, a lie about everything past it.
+        /// This cannot be folded into `model` — its consumers span three
+        /// trust classes (geography, local content, staleness witnesses),
+        /// and blanket-nilling would demote the field to lane C, killing
+        /// `ciw`, `x`, `dw`, `f` and all register fidelity to fix a `j` bug.
+        /// The trust decision is inherently per-destination.
+        func model(for destination: LogicalStep.Destination, _ profile: CapabilityProfile) -> TextModel? {
+            guard profile.has(.wholeDocument) || !PhysicalPlanner.isDocumentScoped(destination) else {
+                return nil
+            }
+            return model
+        }
+
+        func model(for target: LogicalStep.SelectionTarget, _ profile: CapabilityProfile) -> TextModel? {
+            guard profile.has(.wholeDocument) || !PhysicalPlanner.isDocumentScoped(target) else {
+                return nil
+            }
+            return model
+        }
+
+        /// Line-counting work (`J`, linewise put) needs geography
+        /// unconditionally — there is no line-local version of it.
+        func linewiseModel(_ profile: CapabilityProfile) -> TextModel? {
+            profile.has(.wholeDocument) ? model : nil
+        }
+
         var position: Int? { selection?.lowerBound }
         var caret: Int? { selection.flatMap { $0.isEmpty ? $0.lowerBound : nil } }
 
@@ -200,6 +230,11 @@ private extension PhysicalPlanner {
 
     /// Lane B's actuator: exact target, dumb keys. Deterministic regardless
     /// of the app's column memory — vertical first, then home, then right.
+    ///
+    /// Its cross-line branch stays correct under a block-scoped field: this
+    /// is only ever reached through a model that already passed the
+    /// `wholeDocument` gate, so either the span is same-line or the block
+    /// has real internal geography (a Notion code block).
     static func keyPath(from: Int, to: Int, model: TextModel) -> [PhysicalStep] {
         guard from != to else { return [] }
         let fromLine = model.lineStart(of: from)
@@ -217,6 +252,63 @@ private extension PhysicalPlanner {
             presses.append(.press(.right, count: column))
         }
         return presses
+    }
+
+    /// Does resolving this need the model to describe geography beyond the
+    /// caret's line?
+    ///
+    /// Classified by **intent**, not by whether a given resolution happens
+    /// to cross a line. `TextModel` classes `\n` as whitespace, so `w`/`b`/
+    /// `e` walk across lines — but only incidentally, and inside a block
+    /// they are exact, so they stay on the model. `j` is *defined* by the
+    /// crossing, so it cannot. At a block boundary `w` merely stalls: a
+    /// degradation, not a wrong action.
+    static func isDocumentScoped(_ motion: Motion) -> Bool {
+        switch motion {
+        case .line(.up, _), .line(.down, _), .displayLine:
+            return true
+        case .fileStart, .fileEnd, .search:
+            return true
+        case .paragraph, .sentence, .section, .page, .scrollLine, .screenLine:
+            return true
+        default:
+            // character, word, find, lineStart, lastNonBlank, column,
+            // matchingItem, repeatFind, mark, custom — line-local, or
+            // resolved away before they reach here.
+            return false
+        }
+    }
+
+    static func isDocumentScoped(_ destination: LogicalStep.Destination) -> Bool {
+        switch destination {
+        case .motion(.lineEnd, let count):
+            return count > 1   // `2$` walks a line down first
+        case .motion(let motion, _):
+            return isDocumentScoped(motion)
+        case .offset, .mark:
+            // Absolute offsets against a block-relative model are a category
+            // error: `gi` has no staleness witness at all, and a wrong-block
+            // jump followed by Insert is the worst failure available.
+            return true
+        }
+    }
+
+    static func isDocumentScoped(_ target: LogicalStep.SelectionTarget) -> Bool {
+        switch target {
+        case .span(let destination, _):
+            return isDocumentScoped(destination)
+        case .lineSpan:
+            return true
+        case .lines(let count, _):
+            // `dd` stays exact: blind would select across a block boundary
+            // unpredictably AND lose register fidelity. Emptying the block
+            // is the lesser, predictable wrong.
+            return count > 1
+        case .remembered:
+            return true   // absolute offsets
+        case .textObject, .toLineEnd, .current:
+            return false
+        }
     }
 
     /// Lane C's chord table. `counted` is false where repetition is
@@ -242,7 +334,7 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let model = context.model, let position = context.position {
+        if let model = context.model(for: destination, profile), let position = context.position {
             guard let target = resolve(destination, model: model, from: position) else { return nil }
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
@@ -318,9 +410,28 @@ private extension PhysicalPlanner {
         case .textObject(let object, _):
             guard case .word = object.kind else { return nil }
             return [.press(.wordLeft, count: 1), .press(.selectWordRight, count: 1)]
+        case .lineSpan(let destination, let interior):
+            // `dj`, `dG`: whole lines from here through the destination's
+            // line. Only vertical destinations have a blind spelling — a
+            // lineSpan to a mark has none and rings.
+            guard case .motion(let motion, let count) = destination else { return nil }
+            var steps: [PhysicalStep] = [.press(.lineStart, count: 1)]
+            switch motion {
+            case .line(.down, _):
+                // count lines below, plus the caret's own.
+                steps.append(.press(.selectDown, count: interior ? count : count + 1))
+            case .fileEnd:
+                steps.append(.press(Chord.documentEnd.shifted, count: 1))
+            default:
+                return nil
+            }
+            if interior, case .line = motion {
+                steps.append(.press(.selectLineEnd, count: 1))
+            }
+            return steps
         case .current:
             return []   // whatever is on screen is the operand
-        case .lineSpan, .remembered:
+        case .remembered:
             return nil
         }
     }
@@ -330,7 +441,7 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let model = context.model, let position = context.position {
+        if let model = context.model(for: target, profile), let position = context.position {
             guard let range = selectionRange(for: target, model: model, at: position, context: context) else {
                 return nil
             }
@@ -363,15 +474,26 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        guard profile.has(.writeSelection),
-              let model = context.model,
-              let selection = context.selection,
-              let anchor = context.anchor else { return nil }
-        let head = selection.lowerBound == anchor ? selection.upperBound : selection.lowerBound
-        guard let target = resolve(destination, model: model, from: head) else { return nil }
-        let range = min(anchor, target)..<max(anchor, target)
-        context.selection = range
-        return [.setSelection(range)] + settle(context, profile: profile)
+        if profile.has(.writeSelection),
+           let model = context.model(for: destination, profile),
+           let selection = context.selection,
+           let anchor = context.anchor {
+            let head = selection.lowerBound == anchor ? selection.upperBound : selection.lowerBound
+            guard let target = resolve(destination, model: model, from: head) else { return nil }
+            let range = min(anchor, target)..<max(anchor, target)
+            context.selection = range
+            return [.setSelection(range)] + settle(context, profile: profile)
+        }
+        // Blind: the app owns the anchor. This deliberately ignores
+        // `context.anchor` — mixing a stored engine offset with a live app
+        // selection is exactly where this would go silently wrong. The
+        // selection becomes opaque, so a following operator takes the
+        // clipboard path (`lowerDelete`/`lowerYank` already branch on it).
+        guard case .motion(let motion, let count) = destination,
+              let blind = blindMoveChord(motion) else { return nil }
+        context.selection = nil
+        context.selectionOpaque = true
+        return [.press(blind.chord.shifted, count: blind.counted ? count : 1)]
     }
 
     static func lowerCollapse(
@@ -470,15 +592,12 @@ private extension PhysicalPlanner {
             return [.commit(.yanked(into: register, content: .literal(model.substring(selection)), wise: wise))]
         }
         guard context.selectionOpaque else { return nil }
-        if profile.has(.readSelectedText) {
-            // An AX read is instant and keeps real text in the register —
-            // strictly better fidelity than a pasteboard marker.
-            let slot = context.takeSlot()
-            return [
-                .captureSelectedText(into: slot),
-                .commit(.yanked(into: register, content: .captured(slot), wise: wise)),
-            ]
-        }
+        // An opaque selection was built by presses, which are QUEUED at the
+        // window server; an AX read is synchronous and would beat them,
+        // capturing the selection as it was before. Channels must not cross:
+        // ⌘C rides the same queue as the presses and therefore sees them.
+        // (This is why the tempting `readSelectedText` fast path — instant,
+        // and literal text instead of a pasteboard marker — is wrong here.)
         return [.clipboardCopy, .commit(.yanked(into: register, content: .pasteboard, wise: wise))]
     }
 
@@ -559,7 +678,10 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        guard let model = context.model, let position = context.position else { return nil }
+        // Definitionally cross-line, and there is no blind spelling: the
+        // whitespace rules below are the whole point of the function, and a
+        // chord approximation cannot compute them. Scoped fields ring.
+        guard let model = context.linewiseModel(profile), let position = context.position else { return nil }
         let range = model.lines(from: position, count: count, includingTerminator: false)
         let lines = model.substring(range)
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -617,8 +739,10 @@ private extension PhysicalPlanner {
                 }
             case .line:
                 // Linewise cuts carry their own trailing newline and ⌘V is
-                // verbatim, so the target must be a line START.
-                if let model = context.model, let position = context.position {
+                // verbatim, so the target must be a line START. Finding the
+                // next line's start is document geography — a scoped field
+                // drops to the blind branch below.
+                if let model = context.linewiseModel(profile), let position = context.position {
                     let end = model.lineEnd(of: position)
                     let target = action.position == .after
                         ? (end >= model.length ? model.length : end + 1)
@@ -680,7 +804,9 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let model = context.model, let position = context.position {
+        // "Is this the last line?" is document geography: in a scoped field
+        // `model.length` is the block's end, not the page's.
+        if let model = context.linewiseModel(profile), let position = context.position {
             var insertion = text
             let target: Int
             if action.position == .after {

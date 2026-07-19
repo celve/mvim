@@ -239,13 +239,22 @@ precondition(TextModel("one\ntwo").lines(from: 1, count: 1, includingTerminator:
 // MARK: - PhysicalPlanner
 
 let axProfile = CapabilityProfile(available: [
-    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText, .drawCursor,
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
+    .drawCursor, .wholeDocument,
 ])
-let readProfile = CapabilityProfile(available: [.readText, .readLength, .readCaret, .readSelectedText])
+let readProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .wholeDocument,
+])
 let blindProfile = CapabilityProfile(available: [])
-/// axProfile minus the standing cursor's permission — the Notion shape:
-/// writes stay exact, presentation is suppressed.
+/// axProfile minus the standing cursor's permission: writes stay exact,
+/// presentation is suppressed.
 let noCursorProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText, .wholeDocument,
+])
+/// The block-editor shape (Notion): the readable text is one block — exact
+/// locally, a lie about the page. Also without drawCursor, mirroring how the
+/// two are seeded together.
+let blockProfile = CapabilityProfile(available: [
     .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
 ])
 
@@ -318,11 +327,15 @@ precondition(yyBlind.steps == [
     .commit(.setCursor(nil)),
 ])
 precondition(!yyBlind.mutatesText)
+// `readSelectedText` must NOT change this lowering. An AX read here is
+// synchronous and would beat the still-queued presses that built the
+// selection, capturing it as it was before them — the register would come
+// back empty or stale. ⌘C rides the same queue as the presses and sees them.
 precondition(physical("yy", profile: CapabilityProfile(available: [.readSelectedText])).steps == [
     .press(.lineStart, count: 1),
     .press(.selectDown, count: 1),
-    .captureSelectedText(into: CaptureSlot(id: 0)),
-    .commit(.yanked(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .line)),
+    .clipboardCopy,
+    .commit(.yanked(into: nil, content: .pasteboard, wise: .line)),
     .press(.left, count: 1),
     .commit(.setCursor(nil)),
 ])
@@ -430,6 +443,138 @@ precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: axProfile
     .setSelection(7..<8),
     .commit(.setCursor(7..<8)),
 ])
+
+// MARK: - Block-scoped fields (wholeDocument denied)
+
+// The atom's raw value is a cross-module string contract: `CapabilityConfig`
+// seeds and `LearnedPriors` key on it by literal, because LoomCore cannot see
+// this type. Renaming the case silently orphans the Notion seed, so pin it.
+precondition(Capability.wholeDocument.rawValue == "wholeDocument")
+precondition(Capability.drawCursor.rawValue == "drawCursor")
+// Policy atoms are resolved from a parent mechanism, never probed.
+precondition(Capability.wholeDocument.species == .policy)
+precondition(Capability.wholeDocument.parent == .readText)
+precondition(Capability.drawCursor.species == .policy)
+precondition(Capability.drawCursor.parent == .writeSelection)
+precondition(Capability.allCases.filter { $0.species == .mechanism }.allSatisfy { $0.parent == nil })
+// The ungated policy: nothing about a field can moot whether a focus change
+// ends a session, so it answers to seeds and the user alone.
+precondition(Capability.fieldIsSession.rawValue == "fieldIsSession")
+precondition(Capability.fieldIsSession.species == .policy)
+precondition(Capability.fieldIsSession.parent == nil)
+
+// The bug this atom exists for: the model says there is no line below, so
+// the exact lane resolves `j` to the offset it started at and executes a
+// flawless no-op. Denied document scope, `j` reaches the blind chord that
+// crosses blocks natively.
+precondition(physical("j", text: "one", caret: 0, profile: blockProfile).steps == [
+    .press(.down, count: 1),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("3j", text: "one", caret: 0, profile: blockProfile).steps == [
+    .press(.down, count: 3),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("gg", text: "one", caret: 0, profile: blockProfile).steps == [
+    .press(.documentStart, count: 1),
+    .commit(.setCursor(nil)),
+])
+
+// A blind vertical move must never write a selection. The app's own column
+// memory is the ONLY thing keeping `j` in the same column across blocks, and
+// any AX write between presses would reset it. This has to hold even where
+// the block cursor is permitted: after a blind press the predicted caret is
+// unknown, so `renderCursor` must decline to draw rather than guess.
+let blockDrawProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText, .drawCursor,
+])
+for keys in ["j", "k", "3j", "gg", "G"] {
+    precondition(!physical(keys, text: "one", caret: 0, profile: blockDrawProfile).steps.contains {
+        if case .setSelection = $0 { return true }
+        return false
+    }, "blind vertical move \(keys) must not write a selection — it would clobber the app's column")
+}
+// …but ONLY while no cursor is drawn. A drawn cursor must still be collapsed
+// before the press — it is a real one-character selection, and ↓ with a
+// selection active moves from its far end, one column off from where the user
+// sees the caret. So correctness wins and the write goes in.
+//
+// That makes `drawCursor` and column stability mutually exclusive in a block
+// editor: permit the cursor and every `j` re-seeds the app's sticky column
+// from the current caret, losing it across a short block. Notion is seeded
+// with `drawCursor` off, which resolves the tension in favor of the column —
+// by luck rather than design, so this pins the coupling before someone
+// "fixes" the seed.
+let drawnCursorSnapshot = FieldSnapshot(
+    capabilities: blockDrawProfile, text: "one", selection: 1..<2, cursor: 1..<2
+)
+precondition(PhysicalPlanner.plan(
+    LogicalPlanner.plan(RawCommand("j"), state: .initial),
+    snapshot: drawnCursorSnapshot
+).steps == [
+    .setSelection(1..<1),   // the collapse — and the column cost of drawing a cursor
+    .press(.down, count: 1),
+    .commit(.setCursor(nil)),
+])
+
+// The gate is profile-driven, not text-driven: the same single-line text
+// under a whole-document profile keeps the exact lane.
+precondition(physical("j", text: "one\ntwo", caret: 0, profile: axProfile).steps == [
+    .setSelection(4..<4),
+    .settle(Expectation(selection: 4..<4, length: 7)),
+    .setSelection(4..<5),
+    .commit(.setCursor(4..<5)),
+])
+
+// THE regression guard. `TextModel` classes `\n` as whitespace, so `w`/`b`/`e`
+// technically walk lines — but inside a block they are exact and must keep
+// the exact lane. A predicate keyed on "crosses a line" instead of on intent
+// would demote these and destroy the word motions that work today.
+// noCursorProfile is blockProfile + wholeDocument, so this isolates exactly
+// the one variable.
+for keys in ["w", "b", "e", "ciw", "daw", "fl", "x", "$", "dd", "cc"] {
+    precondition(
+        physical(keys, text: "say hello world", caret: 6, profile: blockProfile).steps ==
+        physical(keys, text: "say hello world", caret: 6, profile: noCursorProfile).steps,
+        "block scope must not disturb line-local command \(keys)"
+    )
+}
+
+// No blind spelling ⇒ ring, never a silent wrong jump. `J`'s whitespace rules
+// are the whole point of the function; `/` cannot search a page it cannot
+// read; `gi` carries an absolute offset with no staleness witness, and a
+// wrong-block jump followed by Insert is the worst failure available.
+precondition(physical("J", text: "one", caret: 0, profile: blockProfile).steps == [.bell])
+precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: blockProfile).steps == [.bell])
+var resumed = VimState.initial
+resumed.field.insertStart = 2
+precondition(physical("gi", text: "one", caret: 0, profile: blockProfile, state: resumed).steps == [.bell])
+
+// Cross-block operators blind-lower rather than silently acting on the wrong
+// span. The register degrades to a pasteboard marker — the lane-C bargain.
+precondition(physical("dj", text: "one", caret: 0, profile: blockProfile).steps == [
+    .press(.lineStart, count: 1),
+    .press(.selectDown, count: 2),
+    .clipboardCut,
+    .commit(.deleted(into: nil, content: .pasteboard, wise: .line)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("3dd", text: "one", caret: 0, profile: blockProfile).steps == [
+    .press(.lineStart, count: 1),
+    .press(.selectDown, count: 3),
+    .clipboardCut,
+    .commit(.deleted(into: nil, content: .pasteboard, wise: .line)),
+    .commit(.setCursor(nil)),
+])
+
+// Visual extend goes blind too: the app owns the anchor, so the engine's
+// stored one is deliberately ignored and the selection becomes opaque.
+var blockVisual = VimState.initial
+blockVisual.field.mode = .visual(VimState.VisualContext(kind: .character, anchor: 0))
+precondition(PhysicalPlanner.plan(
+    LogicalPlanner.plan(RawCommand("j"), state: blockVisual),
+    snapshot: FieldSnapshot(capabilities: blockProfile, text: "one", selection: 0..<1, anchor: 0)
+).steps == [.press(.selectDown, count: 1)])
 
 // A drawn cursor is collapsed before the next command acts.
 let cursored = FieldSnapshot(capabilities: axProfile, text: "abc", selection: 0..<1, cursor: 0..<1)
@@ -673,5 +818,80 @@ precondition(sim.state.session.register("\"") == .pasteboard(wise: .character))
 precondition(sim.perform([.setSelection(4..<7), .clipboardCopy]))
 precondition(sim.pasteboard == "two")
 precondition(sim.text == "one two")
+
+// MARK: - Focus transitions
+
+// The entry policy as a value — pinned nowhere until now.
+precondition(VimState.Field.entry.mode == .insert)
+
+// A fully-populated field, to prove exactly what each edge keeps.
+let populated = VimState.Field(
+    mode: .normal,
+    insertStart: 3,
+    marks: ["a": MarkPoint(offset: 2, textLength: 9, context: "he")],
+    lastVisual: VisualMemory(kind: .character, range: 1..<4),
+    cursor: 2..<3
+)
+
+// sameElement: nothing moved, so nothing is stale.
+precondition(populated.carried(across: .sameElement) == populated)
+
+// sameDocument: residency survives; every offset-bearing member does not.
+let crossed = populated.carried(across: .sameDocument)
+precondition(crossed.mode == .normal)
+precondition(crossed.insertStart == nil)
+precondition(crossed.marks.isEmpty)
+precondition(crossed.lastVisual == nil)
+precondition(crossed.cursor == nil)
+
+// Visual carries verbatim — dropping to Normal would break `v j j d`.
+let visualContext = VimState.VisualContext(kind: .character, anchor: 0)
+precondition(
+    VimState.Field(mode: .visual(visualContext)).carried(across: .sameDocument).mode
+        == .visual(visualContext)
+)
+
+// newSession: the entry policy, whatever the old field held.
+precondition(populated.carried(across: .newSession) == VimState.Field.entry)
+
+// Keys-in-flight and the dot body move as one unit, and only a new session
+// drops them.
+precondition(FocusTransition.newSession.clearsChangeInFlight)
+precondition(!FocusTransition.sameDocument.clearsChangeInFlight)
+precondition(!FocusTransition.sameElement.clearsChangeInFlight)
+precondition(FocusTransition.sameElement.preservesDrawnCursor)
+precondition(!FocusTransition.sameDocument.preservesDrawnCursor)
+
+// End-to-end through the Sim: engaging Normal then crossing a block keeps
+// Normal — the bug this exists for — while a genuinely new field opens in
+// Insert.
+var refocused = Sim(text: "one", state: .initial, profile: blockProfile)
+refocused.feed("<C-[>")
+precondition(refocused.state.field.mode == .normal)
+refocused.refocus(.sameDocument, text: "two")
+precondition(refocused.state.field.mode == .normal, "a block crossing must not end the session")
+refocused.refocus(.newSession, text: "three")
+precondition(refocused.state.field.mode == .insert)
+
+// The dot body survives a crossing the user's own ⏎ caused: `ciw` opens the
+// body, the new block arrives mid-Insert, and Esc must still close it.
+var carriedChange = Sim(text: "say hello", caret: 4, profile: axProfile)
+carriedChange.feed("<C-[>")
+carriedChange.type("ciwfoo")
+carriedChange.refocus(.sameDocument, text: "bar")
+carriedChange.feed("<Esc>")
+precondition(carriedChange.state.session.lastChange?.body == "ciwfoo<Esc>",
+             "sameDocument must not half-clear the dot body")
+
+// An opaque selection is press-built and lives in the queued channel, so the
+// yank must ride the same queue (⌘C). `blockProfile` HAS readSelectedText —
+// the tempting synchronous AX read — and must still not use it here: it would
+// beat the queued presses and capture the selection as it was before them.
+let opaqueYank = physical("yj", text: "one", caret: 0, profile: blockProfile).steps
+precondition(opaqueYank.contains(.clipboardCopy), "opaque yank must stay in the queued channel")
+precondition(!opaqueYank.contains(where: {
+    if case .captureSelectedText = $0 { return true }
+    return false
+}), "a synchronous AX read would beat the queued presses")
 
 print("Vim engine tests passed")
