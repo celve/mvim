@@ -64,9 +64,10 @@ norm/
 │   │                           #   InputHub (one shared CGEventTap), KeyEvent/Mods/Trigger,
 │   │                           #   AX/Clipboard/Synth, Prefs store. NO Keychain in Norm's copy.
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
-│   │   ├── Model,Raw,Logical,  #   pure engine (no AppKit/AX; `make test` compiles this):
-│   │   │   Physical,State,     #   vocabulary, parsing + key assembly, planners,
-│   │   │   Text,Sim            #   state + reducer, text math, simulated host
+│   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
+│   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
+│   │   │   State,Text,Sim      #   assembly, planners, state + reducer, text math,
+│   │   │                       #   simulated host
 │   │   └── Runtime/            #   tap routing, AX execution, Controller
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)

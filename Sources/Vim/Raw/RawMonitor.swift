@@ -78,6 +78,14 @@ public struct RawMonitor: Equatable, Sendable {
         pendingKeys = ""
         insertLog = ""
     }
+
+    /// A key went to the app instead of vim: whatever command was half-typed
+    /// is stale, because the app may have moved the caret out from under it.
+    /// Only the command buffer is dropped — the Insert-mode typed log belongs
+    /// to the session, not to any one command, and must survive.
+    public mutating func cancelPending() {
+        pendingKeys = ""
+    }
 }
 
 // MARK: - Insert mode

@@ -87,7 +87,14 @@ public final class Controller {
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
         guard enabled, event.kind == .keyDown else { return false }
-        guard let token = KeyNotation.token(for: event) else { return false }
+        guard let token = KeyNotation.token(for: event) else {
+            // The app gets this key, so a half-typed command must not outlive
+            // it: the app may move the caret, and a later key would complete
+            // the command against a position the user never aimed at (`d`,
+            // ⌥←, `w` would delete a word somewhere else entirely).
+            monitor.cancelPending()
+            return false
+        }
 
         // ⌃[ is the mode-engaging key — the one keystroke where a stale
         // binding has teeth. Rate-limited full re-check (secure/enabled too).
