@@ -20,13 +20,50 @@ public final class Executor {
 
     private var captures: [CaptureSlot: String] = [:]
 
+    /// Capability evidence from the most recent `execute()` — the lazy
+    /// write probe's raw readings. Attribution is positional: the most
+    /// recent attributable step before a settle (`.setSelection` →
+    /// writeSelection, `.replaceSelection` → insertText; anything else
+    /// clears it), and each settle consumes it. A planner shape that ever
+    /// interleaves other steps between write and settle fails toward NO
+    /// evidence — never a false strike. Zero-settle plans say nothing.
+    /// Callers must copy this immediately after their execute: hygiene
+    /// plans (cursor collapse, stranded-selection repair) reuse this
+    /// executor and reset it.
+    public struct RunEvidence: Equatable, Sendable {
+        public internal(set) var failedCapability: Capability?
+        public internal(set) var settledCapabilities: Set<Capability> = []
+
+        public init() {}
+    }
+
+    public private(set) var lastRun = RunEvidence()
+
     /// Runs the plan in order; a failed settle (or unrealizable step) rings
     /// and aborts the remainder. Returns whether every step ran.
     @discardableResult
     public func execute(_ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState) -> Bool {
         captures = [:]
+        lastRun = RunEvidence()
+        var attribution: Capability?
         for step in plan.steps {
-            guard perform(step, on: element, state: &state) else { return false }
+            let passed = perform(step, on: element, state: &state)
+            switch step {
+            case .setSelection:
+                attribution = .writeSelection
+            case .replaceSelection:
+                attribution = .insertText
+            case .settle:
+                if passed, let attributed = attribution {
+                    lastRun.settledCapabilities.insert(attributed)
+                } else if !passed {
+                    lastRun.failedCapability = attribution
+                }
+                attribution = nil
+            default:
+                attribution = nil
+            }
+            guard passed else { return false }
         }
         return true
     }

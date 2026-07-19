@@ -1,9 +1,10 @@
 import ApplicationServices
 import LoomCore
 
-/// Probes what a focused field can do. Static probe only for now: trial
-/// reads *prove* the read capabilities; settable flags *claim* the writes.
-/// The lazy write probe and learned per-app priors arrive with the learner.
+/// Probes what a focused field can do. Trial reads *prove* the read
+/// capabilities; settable flags *claim* the writes — and the claims are
+/// corrected by `LearnedPriors`, the lazy write probe's result cache
+/// (real commands are the probe; settle verdicts are its readings).
 public enum FieldProber {
     public static func probe(_ element: AXUIElement) -> CapabilityProfile {
         var available: Set<Capability> = []
@@ -17,10 +18,12 @@ public enum FieldProber {
     }
 
     /// The engage verdict for one element, from a single AX round trip.
+    /// `role` rides along for the learner's binding identity.
     public struct FieldGate {
         public let isTextual: Bool
         public let isSecure: Bool
         public let isEnabled: Bool
+        public let role: String?
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
 
@@ -38,7 +41,12 @@ public enum FieldProber {
         }
         let secure = attributes.role == "AXSecureTextField"
             || attributes.subrole == "AXSecureTextField"
-        return FieldGate(isTextual: textual, isSecure: secure, isEnabled: attributes.enabled)
+        return FieldGate(
+            isTextual: textual,
+            isSecure: secure,
+            isEnabled: attributes.enabled,
+            role: attributes.role
+        )
     }
 }
 

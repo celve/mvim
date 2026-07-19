@@ -29,6 +29,11 @@ public final class FocusTracker {
         /// only), and identity is `(pid, windowID)` — never the element.
         public let isForced: Bool
         public let windowID: CGWindowID
+
+        /// The learner's binding identity, resolved once at publish time.
+        public let bundleID: String?
+        public let appVersion: String?
+        public let role: String?
     }
 
     /// Fired on every change, including transitions to nil.
@@ -161,21 +166,35 @@ public final class FocusTracker {
         // Watch this app either way: an unbound-but-enabled app must still
         // report when focus reaches a textual field.
         retargetObserver(to: pid)
-        guard FieldProber.gate(element).engageable else {
+        let gate = FieldProber.gate(element)
+        guard gate.engageable else {
             publishForcedOrNil()   // the fresh element fails the gate
             return
         }
         let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let isOverlay = pid != frontPid
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
+        let identity = Self.appIdentity(for: pid)
         publish(Binding(
             element: element,
             pid: pid,
             capabilities: FieldProber.probe(element),
             isOverlay: isOverlay,
             isForced: false,
-            windowID: 0
+            windowID: 0,
+            bundleID: identity.bundleID,
+            appVersion: identity.version,
+            role: gate.role
         ))
+    }
+
+    /// Resolved only at real publish sites — the same-element short-circuit
+    /// returns first, so ⌃[ reverifies never touch the app's Info.plist.
+    private static func appIdentity(for pid: pid_t) -> (bundleID: String?, version: String?) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return (nil, nil) }
+        let version = app.bundleURL.flatMap(Bundle.init(url:))?
+            .infoDictionary?["CFBundleShortVersionString"] as? String
+        return (app.bundleIdentifier, version)
     }
 
     /// The forced fallback: no engageable element anywhere, but the
@@ -217,7 +236,10 @@ public final class FocusTracker {
             capabilities: CapabilityProfile(),   // empty: the engine plans lane C only
             isOverlay: false,
             isForced: true,
-            windowID: window.id
+            windowID: window.id,
+            bundleID: bundleID,
+            appVersion: nil,   // the learner ignores forced bindings
+            role: nil
         ))
     }
 
