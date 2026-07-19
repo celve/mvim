@@ -17,7 +17,14 @@ public enum SynthTag {
 /// paste fallback. Events go to the frontmost app (Norm is an accessory
 /// agent). Requires Accessibility permission. Every event is tagged.
 public enum Synth {
-    private static let tapLocation: CGEventTapLocation = .cgSessionEventTap
+    /// Below every session-level tap — including Norm's own. The executor
+    /// settles *inside* the tap callback (main run loop held), so an event
+    /// posted at `.cgSessionEventTap` parks at the window server awaiting
+    /// Norm's own verdict — which Norm cannot render until the settle that
+    /// is waiting for that very event gives up. Posting at the annotated
+    /// stage delivers while the engine verifies; the tag stays as the
+    /// cross-app ABI and defense-in-depth.
+    private static let tapLocation: CGEventTapLocation = .cgAnnotatedSessionEventTap
     private static func source() -> CGEventSource? { CGEventSource(stateID: .combinedSessionState) }
     /// A hair of air between down and up — some apps mishandle zero-interval
     /// pairs. Nothing is needed *between* presses: the session event queue

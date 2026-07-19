@@ -109,9 +109,11 @@ private func inputHubCallback(proxy: CGEventTapProxy, type: CGEventType,
         }
         return Unmanaged.passUnretained(event)
     }
-    // Bypass synthesized events — our own AND Sotto's (the shared magic is a
-    // cross-app ABI): otherwise Normal mode would consume a dictation
-    // transcript as commands.
+    // Bypass tagged synthesized events. Norm's own no longer traverse this
+    // tap (Synth posts below the session stage — the settle-deadlock
+    // lesson), but Sotto's do, and the shared magic is a cross-app ABI:
+    // otherwise Normal mode would consume a dictation transcript as
+    // commands.
     if SynthTag.isSelf(event) { return Unmanaged.passUnretained(event) }
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let hub = Unmanaged<InputHub>.fromOpaque(userInfo).takeUnretainedValue()
