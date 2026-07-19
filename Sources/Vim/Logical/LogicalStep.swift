@@ -164,7 +164,13 @@ public extension LogicalStep {
 
     enum PutSource: Equatable, Sendable {
         case content(RegisterContent)
-        case pasteboard
+
+        /// Paste the pasteboard as-is (one synthesized ⌘V — never an engine
+        /// read, which would race the app's async processing of the ⌘X that
+        /// filled it). `wise` is the marker's memory of how the blind
+        /// capture was made; `+`/`*` carry `.character` (macOS keeps no
+        /// wise, and the lowering for unknown and characterwise coincide).
+        case pasteboard(wise: Wise)
     }
 
     /// The mode a plan enters. Distinct from `VimState.Mode` because the

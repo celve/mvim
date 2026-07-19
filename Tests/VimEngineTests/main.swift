@@ -63,18 +63,18 @@ precondition(state.session.register("\"") == nil)
 precondition(state.session.register("a") == nil)
 
 state.session.registers.named["a"] = RegisterContent(text: "hello", wise: .character)
-precondition(state.session.register("a") == RegisterContent(text: "hello", wise: .character))
-precondition(state.session.register("A") == RegisterContent(text: "hello", wise: .character))
+precondition(state.session.register("a") == .content(RegisterContent(text: "hello", wise: .character)))
+precondition(state.session.register("A") == .content(RegisterContent(text: "hello", wise: .character)))
 
 state.session.registers.numbered[1] = RegisterContent(text: "line\n", wise: .line)
-precondition(state.session.register("1") == RegisterContent(text: "line\n", wise: .line))
+precondition(state.session.register("1") == .content(RegisterContent(text: "line\n", wise: .line)))
 precondition(state.session.register("2") == nil)
 
 state.session.lastSearch = VimState.SearchMemory(pattern: "needle", direction: .forward)
-precondition(state.session.register("/") == RegisterContent(text: "needle", wise: .character))
+precondition(state.session.register("/") == .content(RegisterContent(text: "needle", wise: .character)))
 
 state.session.lastInsert = "typed"
-precondition(state.session.register(".") == RegisterContent(text: "typed", wise: .character))
+precondition(state.session.register(".") == .content(RegisterContent(text: "typed", wise: .character)))
 precondition(state.session.register("_") == nil)
 precondition(state.session.register("+") == nil)
 
@@ -163,9 +163,21 @@ precondition(plan("'m").steps == [.bell(.unsetMark("m"))])
 
 // Put resolves register content at plan time.
 precondition(plan("p").steps == [.bell(.emptyRegister("\""))])
-planning.session.registers.unnamed = RegisterContent(text: "howdy", wise: .character)
+planning.session.registers.unnamed = .content(RegisterContent(text: "howdy", wise: .character))
 precondition(plan("p", state: planning).steps == [
     .put(.content(RegisterContent(text: "howdy", wise: .character)), PutAction(position: .after), count: 1),
+    .renderCursor
+])
+
+// A pasteboard marker puts via ⌘V; its wise rides the logical step.
+var markedPlanning = VimState.initial
+markedPlanning.session.registers.unnamed = .pasteboard(wise: .line)
+precondition(plan("p", state: markedPlanning).steps == [
+    .put(.pasteboard(wise: .line), PutAction(position: .after), count: 1),
+    .renderCursor
+])
+precondition(plan("\"+p", state: markedPlanning).steps == [
+    .put(.pasteboard(wise: .character), PutAction(position: .after), count: 1),
     .renderCursor
 ])
 
@@ -327,13 +339,41 @@ precondition(physical("dd", text: "one\ntwo", caret: 1, profile: axProfile).step
 
 // p resolves register content at logical time and places it physically.
 var putState = VimState.initial
-putState.session.registers.unnamed = RegisterContent(text: "XY", wise: .character)
+putState.session.registers.unnamed = .content(RegisterContent(text: "XY", wise: .character))
 precondition(physical("p", text: "abc", caret: 1, profile: axProfile, state: putState).steps == [
     .setSelection(2..<2),
     .replaceSelection("XY"),
     .settle(Expectation(selection: 4..<4, length: 5)),
     .setSelection(4..<5),
     .commit(.setCursor(4..<5)),
+])
+
+// Pasteboard-marker puts: ⌘V in every lane; the wise picks the chords.
+var markedPut = VimState.initial
+markedPut.session.registers.unnamed = .pasteboard(wise: .line)
+precondition(physical("p", profile: blindProfile, state: markedPut).steps == [
+    .press(.down, count: 1),
+    .press(.lineStart, count: 1),
+    .clipboardInsert(nil),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("P", profile: blindProfile, state: markedPut).steps == [
+    .press(.lineStart, count: 1),
+    .clipboardInsert(nil),
+    .commit(.setCursor(nil)),
+])
+var markedChar = VimState.initial
+markedChar.session.registers.unnamed = .pasteboard(wise: .character)
+precondition(physical("2p", profile: blindProfile, state: markedChar).steps == [
+    .press(.right, count: 1),
+    .clipboardInsert(nil),
+    .clipboardInsert(nil),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("p", text: "abc", caret: 1, profile: axProfile, state: markedChar).steps == [
+    .setSelection(2..<2),
+    .clipboardInsert(nil),
+    .commit(.setCursor(nil)),
 ])
 
 // Capability changes feasibility: search and marks reject blind.
@@ -423,32 +463,50 @@ precondition(monitor.feed("<C-[>", mode: .normal) ==
 
 var reduced = VimState.initial
 reduced = VimReducer.reduce(reduced, .yanked(into: nil, content: .literal("one\n"), wise: .line))
-precondition(reduced.session.register("\"") == RegisterContent(text: "one\n", wise: .line))
-precondition(reduced.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+precondition(reduced.session.register("\"") == .content(RegisterContent(text: "one\n", wise: .line)))
+precondition(reduced.session.register("0") == .content(RegisterContent(text: "one\n", wise: .line)))
 
 // Linewise deletes shift the ring; the yank slot is untouched.
 reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("a\n"), wise: .line))
 reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("b\n"), wise: .line))
-precondition(reduced.session.register("1") == RegisterContent(text: "b\n", wise: .line))
-precondition(reduced.session.register("2") == RegisterContent(text: "a\n", wise: .line))
-precondition(reduced.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+precondition(reduced.session.register("1") == .content(RegisterContent(text: "b\n", wise: .line)))
+precondition(reduced.session.register("2") == .content(RegisterContent(text: "a\n", wise: .line)))
+precondition(reduced.session.register("0") == .content(RegisterContent(text: "one\n", wise: .line)))
 
 // Sub-line deletes go to the small-delete register, not the ring.
 reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .literal("ch"), wise: .character))
-precondition(reduced.session.register("-") == RegisterContent(text: "ch", wise: .character))
-precondition(reduced.session.register("1") == RegisterContent(text: "b\n", wise: .line))
+precondition(reduced.session.register("-") == .content(RegisterContent(text: "ch", wise: .character)))
+precondition(reduced.session.register("1") == .content(RegisterContent(text: "b\n", wise: .line)))
 
 // Named writes mirror to unnamed; uppercase appends; the black hole swallows.
 reduced = VimReducer.reduce(reduced, .yanked(into: Register("a"), content: .literal("hi"), wise: .character))
 reduced = VimReducer.reduce(reduced, .yanked(into: Register("A"), content: .literal("!"), wise: .character))
-precondition(reduced.session.register("a") == RegisterContent(text: "hi!", wise: .character))
-precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+precondition(reduced.session.register("a") == .content(RegisterContent(text: "hi!", wise: .character)))
+precondition(reduced.session.register("\"") == .content(RegisterContent(text: "hi!", wise: .character)))
 reduced = VimReducer.reduce(reduced, .deleted(into: Register("_"), content: .literal("gone"), wise: .character))
-precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+precondition(reduced.session.register("\"") == .content(RegisterContent(text: "hi!", wise: .character)))
 
 // An unfilled capture skips the write rather than inventing content.
 reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .captured(CaptureSlot(id: 9)), wise: .character))
-precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
+precondition(reduced.session.register("\"") == .content(RegisterContent(text: "hi!", wise: .character)))
+
+// Pasteboard markers route to unnamed ONLY — ring, 0, -, named untouched;
+// the register name is ignored; uppercase append skips; real content
+// overwrites a marker (fresher).
+reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .pasteboard, wise: .line))
+precondition(reduced.session.register("\"") == .pasteboard(wise: .line))
+precondition(reduced.session.register("1") == .content(RegisterContent(text: "b\n", wise: .line)))
+precondition(reduced.session.register("0") == .content(RegisterContent(text: "one\n", wise: .line)))
+precondition(reduced.session.register("-") == .content(RegisterContent(text: "ch", wise: .character)))
+reduced = VimReducer.reduce(reduced, .deleted(into: Register("a"), content: .pasteboard, wise: .character))
+precondition(reduced.session.register("a") == .content(RegisterContent(text: "hi!", wise: .character)))
+precondition(reduced.session.register("\"") == .pasteboard(wise: .character))
+reduced = VimReducer.reduce(reduced, .yanked(into: Register("A"), content: .pasteboard, wise: .line))
+precondition(reduced.session.register("a") == .content(RegisterContent(text: "hi!", wise: .character)))
+reduced = VimReducer.reduce(reduced, .deleted(into: Register("_"), content: .pasteboard, wise: .character))
+precondition(reduced.session.register("\"") == .pasteboard(wise: .line))   // blackhole swallowed the marker too
+reduced = VimReducer.reduce(reduced, .yanked(into: nil, content: .literal("fresh"), wise: .character))
+precondition(reduced.session.register("\"") == .content(RegisterContent(text: "fresh", wise: .character)))
 
 // Cursor state: set by renderCursor's commit, cleared on leaving Normal.
 reduced = VimReducer.reduce(reduced, .setCursor(3..<4))
@@ -464,28 +522,28 @@ precondition(sim.text == "say helo world")
 precondition(sim.caret == 6)
 precondition(sim.selection == 6..<7)                       // the block cursor, on 'o'
 precondition(sim.state.field.cursor == 6..<7)
-precondition(sim.state.session.register("-") == RegisterContent(text: "l", wise: .character))
+precondition(sim.state.session.register("-") == .content(RegisterContent(text: "l", wise: .character)))
 
 sim = Sim(text: "abcdef", caret: 0, profile: axProfile)
 sim.type("3x")
 precondition(sim.text == "def")
-precondition(sim.state.session.register("\"") == RegisterContent(text: "abc", wise: .character))
+precondition(sim.state.session.register("\"") == .content(RegisterContent(text: "abc", wise: .character)))
 
 sim = Sim(text: "say hello", caret: 0, profile: axProfile)
 sim.type("dw")
 precondition(sim.text == "hello")
-precondition(sim.state.session.register("-") == RegisterContent(text: "say ", wise: .character))
+precondition(sim.state.session.register("-") == .content(RegisterContent(text: "say ", wise: .character)))
 
 sim = Sim(text: "a\nb\nc", caret: 0, profile: axProfile)
 sim.type("dddd")
 precondition(sim.text == "c")
-precondition(sim.state.session.register("1") == RegisterContent(text: "b\n", wise: .line))
-precondition(sim.state.session.register("2") == RegisterContent(text: "a\n", wise: .line))
+precondition(sim.state.session.register("1") == .content(RegisterContent(text: "b\n", wise: .line)))
+precondition(sim.state.session.register("2") == .content(RegisterContent(text: "a\n", wise: .line)))
 
 sim = Sim(text: "one\ntwo", caret: 0, profile: axProfile)
 sim.type("yyp")
 precondition(sim.text == "one\none\ntwo")
-precondition(sim.state.session.register("0") == RegisterContent(text: "one\n", wise: .line))
+precondition(sim.state.session.register("0") == .content(RegisterContent(text: "one\n", wise: .line)))
 
 // The flagship: change-inner-word, type, escape — full loop.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
@@ -496,7 +554,7 @@ precondition(sim.caret == 6)
 precondition(sim.state.field.cursor == 6..<7)              // redrawn on insert exit
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "bye")
-precondition(sim.state.session.register(".") == RegisterContent(text: "bye", wise: .character))
+precondition(sim.state.session.register(".") == .content(RegisterContent(text: "bye", wise: .character)))
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 

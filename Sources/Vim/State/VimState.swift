@@ -210,8 +210,12 @@ public extension VimState {
     /// mirroring, the 1–9 delete ring, `0` staying yank-only, uppercase
     /// append) belongs to the reducer, so it exists in exactly one place.
     struct Registers: Equatable, Sendable {
-        /// The unnamed register `"`, written by every yank and delete.
-        public var unnamed: RegisterContent?
+        /// The unnamed register `"`, written by every yank and delete. The
+        /// ONLY slot that can hold a pasteboard marker: a marker is truthful
+        /// only while it denotes the *most recent* blind capture — which is
+        /// exactly what the pasteboard holds. A second marker anywhere else
+        /// would denote an older capture the pasteboard no longer has.
+        public var unnamed: RegisterSlot?
 
         /// a–z. Uppercase names are the append spelling of the same slots.
         public var named: [Character: RegisterContent]
@@ -224,7 +228,7 @@ public extension VimState {
         public var smallDelete: RegisterContent?
 
         public init(
-            unnamed: RegisterContent? = nil,
+            unnamed: RegisterSlot? = nil,
             named: [Character: RegisterContent] = [:],
             numbered: [RegisterContent?] = Array(repeating: nil, count: 10),
             smallDelete: RegisterContent? = nil
@@ -242,29 +246,31 @@ public extension VimState.Session {
     /// reducer.
     ///
     /// `+` and `*` return `nil` here deliberately: the pasteboard is state
-    /// macOS *does* have, so the physical layer reads it directly and must
-    /// route those names before consulting `VimState`. The black hole `_`
-    /// reads empty; `%`, `:`, and `=` are unsupported.
-    func register(_ name: Character) -> RegisterContent? {
+    /// macOS *does* have, so the physical layer must route those names
+    /// before consulting `VimState` (and only ever *consumes* the pasteboard
+    /// via a synthesized ⌘V — never a direct read, which would race the
+    /// app's asynchronous processing of the ⌘X that filled it). The black
+    /// hole `_` reads empty; `%`, `:`, and `=` are unsupported.
+    func register(_ name: Character) -> RegisterSlot? {
         switch name {
         case "\"":
             return registers.unnamed
         case "a"..."z":
-            return registers.named[name]
+            return registers.named[name].map { .content($0) }
         case "A"..."Z":
             guard let lowered = name.lowercased().first else { return nil }
-            return registers.named[lowered]
+            return registers.named[lowered].map { .content($0) }
         case "0"..."9":
             guard let digit = name.wholeNumberValue, registers.numbered.indices.contains(digit) else {
                 return nil
             }
-            return registers.numbered[digit]
+            return registers.numbered[digit].map { .content($0) }
         case "-":
-            return registers.smallDelete
+            return registers.smallDelete.map { .content($0) }
         case "/":
-            return lastSearch.map { RegisterContent(text: $0.pattern, wise: .character) }
+            return lastSearch.map { .content(RegisterContent(text: $0.pattern, wise: .character)) }
         case ".":
-            return lastInsert.map { RegisterContent(text: $0, wise: .character) }
+            return lastInsert.map { .content(RegisterContent(text: $0, wise: .character)) }
         default:
             return nil
         }

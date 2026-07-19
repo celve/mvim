@@ -372,14 +372,19 @@ private extension LogicalPlanner {
         let name = register?.name ?? "\""
         switch name {
         case "+", "*":
-            return LogicalPlan(.put(.pasteboard, action, count: count))
+            return LogicalPlan(.put(.pasteboard(wise: .character), action, count: count))
         case "_":
             return .empty   // the black hole puts nothing
         default:
-            guard let content = state.session.register(name) else {
+            guard let slot = state.session.register(name) else {
                 return .bell(.emptyRegister(name))
             }
-            return LogicalPlan(.put(.content(content), action, count: count))
+            switch slot {
+            case .content(let content):
+                return LogicalPlan(.put(.content(content), action, count: count))
+            case .pasteboard(let wise):
+                return LogicalPlan(.put(.pasteboard(wise: wise), action, count: count))
+            }
         }
     }
 

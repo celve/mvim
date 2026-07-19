@@ -591,12 +591,42 @@ private extension PhysicalPlanner {
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
         switch source {
-        case .pasteboard:
+        case .pasteboard(let wise):
+            // Content lives in macOS and is consumed ONLY via a synthesized
+            // ⌘V — the event queue orders it behind the ⌘X that filled the
+            // pasteboard; a direct engine read would race it. All lanes
+            // paste this way; a readable field still positions exactly.
             var steps: [PhysicalStep] = []
-            if action.position == .after {
-                steps.append(.press(.right, count: 1))
+            switch wise {
+            case .character, .block:   // block degrades to characterwise
+                if let model = context.model, let position = context.position {
+                    let target = action.position == .after
+                        ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
+                        : position
+                    steps += moveSteps(to: target, from: position, context: &context, profile: profile)
+                } else if action.position == .after {
+                    steps.append(.press(.right, count: 1))
+                }
+            case .line:
+                // Linewise cuts carry their own trailing newline and ⌘V is
+                // verbatim, so the target must be a line START.
+                if let model = context.model, let position = context.position {
+                    let end = model.lineEnd(of: position)
+                    let target = action.position == .after
+                        ? (end >= model.length ? model.length : end + 1)
+                        : model.lineStart(of: position)
+                    steps += moveSteps(to: target, from: position, context: &context, profile: profile)
+                } else if action.position == .after {
+                    // Next line start. On the last line .down no-ops and the
+                    // paste lands above — a well-formed line misplaced beats
+                    // a malformed merge.
+                    steps.append(.press(.down, count: 1))
+                    steps.append(.press(.lineStart, count: 1))
+                } else {
+                    steps.append(.press(.lineStart, count: 1))
+                }
             }
-            steps.append(.clipboardInsert(nil))
+            steps += Array(repeating: PhysicalStep.clipboardInsert(nil), count: max(1, count))
             context.invalidate()
             return steps
 

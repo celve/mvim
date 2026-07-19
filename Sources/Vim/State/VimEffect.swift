@@ -45,6 +45,10 @@ public enum VimEffect: Equatable, Sendable {
 public enum TextPayload: Equatable, Sendable {
     case literal(String)
     case captured(CaptureSlot)
+
+    /// The text lives on the macOS pasteboard (a blind ⌘X/⌘C put it there);
+    /// the register stores a marker, never the text.
+    case pasteboard
 }
 
 /// A runtime-filled value reference: capture steps write it, commit steps

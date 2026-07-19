@@ -35,11 +35,21 @@ public enum VimReducer {
         case .setCursor(let range):
             next.field.cursor = range
         case .deleted(let register, let payload, let wise):
-            guard let content = resolve(payload, wise: wise, captures: captures) else { break }
-            write(content, to: register, yank: false, in: &next.session.registers)
+            guard let slot = resolve(payload, wise: wise, captures: captures) else { break }
+            switch slot {
+            case .content(let content):
+                write(content, to: register, yank: false, in: &next.session.registers)
+            case .pasteboard(let wise):
+                writeMarker(wise: wise, to: register, in: &next.session.registers)
+            }
         case .yanked(let register, let payload, let wise):
-            guard let content = resolve(payload, wise: wise, captures: captures) else { break }
-            write(content, to: register, yank: true, in: &next.session.registers)
+            guard let slot = resolve(payload, wise: wise, captures: captures) else { break }
+            switch slot {
+            case .content(let content):
+                write(content, to: register, yank: true, in: &next.session.registers)
+            case .pasteboard(let wise):
+                writeMarker(wise: wise, to: register, in: &next.session.registers)
+            }
         }
         return next
     }
@@ -48,13 +58,15 @@ public enum VimReducer {
         _ payload: TextPayload,
         wise: Wise,
         captures: [CaptureSlot: String]
-    ) -> RegisterContent? {
+    ) -> RegisterSlot? {
         switch payload {
         case .literal(let text):
-            return RegisterContent(text: text, wise: wise)
+            return .content(RegisterContent(text: text, wise: wise))
         case .captured(let slot):
             guard let text = captures[slot] else { return nil }
-            return RegisterContent(text: text, wise: wise)
+            return .content(RegisterContent(text: text, wise: wise))
+        case .pasteboard:
+            return .pasteboard(wise: wise)
         }
     }
 
@@ -66,6 +78,23 @@ public enum VimReducer {
     /// - Uppercase names append to their lowercase slot (keeping its wise).
     /// - `_` swallows everything; `+`/`*` mirror to unnamed only — the
     ///   pasteboard itself is the runtime's to write.
+    /// A pasteboard marker ignores its register name entirely: the marker
+    /// goes to unnamed and NOWHERE else. Ring/`0`/`-`/named routing is
+    /// skipped — every marker aliases the one pasteboard, and a ring of
+    /// aliases would silently rewrite the meaning of nine slots on every
+    /// cut. Uppercase append is skipped too: appending needs text a marker
+    /// doesn't have without an impure read, which is exactly the wait this
+    /// design deletes. Slots keep their last real content — stale but
+    /// honest.
+    private static func writeMarker(
+        wise: Wise,
+        to register: Register?,
+        in registers: inout VimState.Registers
+    ) {
+        guard register?.name != "_" else { return }
+        registers.unnamed = .pasteboard(wise: wise)
+    }
+
     private static func write(
         _ content: RegisterContent,
         to register: Register?,
@@ -73,7 +102,7 @@ public enum VimReducer {
         in registers: inout VimState.Registers
     ) {
         guard register?.name != "_" else { return }
-        registers.unnamed = content
+        registers.unnamed = .content(content)
 
         guard let name = register?.name else {
             if yank {
@@ -97,7 +126,7 @@ public enum VimReducer {
                 wise: existing?.wise ?? content.wise
             )
             registers.named[lowered] = combined
-            registers.unnamed = combined
+            registers.unnamed = .content(combined)
         case "0"..."9":
             guard let digit = name.wholeNumberValue, registers.numbered.indices.contains(digit) else {
                 return
