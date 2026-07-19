@@ -409,6 +409,16 @@ precondition(monitor.feed("<Esc>", mode: .insert) ==
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"))))
 
+// <C-[> is the runtime's engage key (physical Esc never reaches the
+// monitor): it must complete insert, cancel pending, and dispatch alone.
+precondition(monitor.feed("h", mode: .insert) == .passthrough)
+precondition(monitor.feed("<C-[>", mode: .insert) ==
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
+precondition(monitor.feed("d", mode: .normal) == .pending)
+precondition(monitor.feed("<C-[>", mode: .normal) == .cancelled)
+precondition(monitor.feed("<C-[>", mode: .normal) ==
+    .command(RawMonitor.Completed(command: RawCommand("<C-[>"))))
+
 // MARK: - VimReducer
 
 var reduced = VimState.initial

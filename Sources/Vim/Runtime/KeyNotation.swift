@@ -2,7 +2,7 @@ import CoreGraphics
 import LoomCore
 
 /// Translates a tapped `KeyEvent` into the token notation the engine speaks
-/// (`"a"`, `"<C-r>"`, `"<Esc>"`). One notation, two layers: Core produces
+/// (`"a"`, `"<C-r>"`, `"<C-[>"`). One notation, two layers: Core produces
 /// events, this produces engine tokens; keycodes never cross the boundary.
 public enum KeyNotation {
     /// nil means "not vim's key" — the controller passes it through
@@ -12,7 +12,9 @@ public enum KeyNotation {
         if event.mods.contains(.command) { return nil }
 
         switch event.keyCode {
-        case 53: return "<Esc>"
+        // Physical Esc is NEVER vim's key: the app keeps its cancels,
+        // dialogs, and TUI escapes. ⌃[ (below) is the engage/cancel key.
+        case 53: return nil
         case 36, 76: return "<CR>"
         case 51: return "<BS>"
         case 117: return "<Del>"
@@ -28,7 +30,7 @@ public enum KeyNotation {
 
         if event.mods.contains(.control) {
             // Control chords arrive as control characters: ⌃r is U+0012.
-            if scalar.value == 0x1B { return "<Esc>" }   // ⌃[
+            if scalar.value == 0x1B { return "<C-[>" }   // the engage key
             if (1...26).contains(scalar.value), let letter = UnicodeScalar(scalar.value + 96) {
                 return "<C-\(Character(letter))>"
             }

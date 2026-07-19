@@ -50,9 +50,10 @@ public final class Controller {
         guard enabled, event.kind == .keyDown else { return false }
         guard let token = KeyNotation.token(for: event) else { return false }
 
-        // Esc is the mode-engaging key — the one keystroke where a stale
+        // ⌃[ is the mode-engaging key — the one keystroke where a stale
         // binding has teeth. Rate-limited full re-check (secure/enabled too).
-        if token == "<Esc>" { tracker.reverify() }
+        // Physical Esc never gets here: KeyNotation returns nil for it.
+        if token == "<C-[>" { tracker.reverify() }
 
         guard let binding = tracker.bindingForKeydown() else { return false }
 
@@ -83,8 +84,8 @@ public final class Controller {
             // Verify-before-run: never mutate a field focus has left. An
             // overlay summoned over a bound Normal-mode field emits no event
             // the tracker can see, so a completed command buys one bounded
-            // resolve. Esc already reverified this very event.
-            if token != "<Esc>" {
+            // resolve. ⌃[ already reverified this very event.
+            if token != "<C-[>" {
                 guard let focused = AX.focusedElement(), CFEqual(focused, binding.element) else {
                     tracker.reverify(force: true)
                     return false
