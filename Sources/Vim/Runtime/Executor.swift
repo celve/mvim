@@ -14,6 +14,10 @@ import LoomCore
 public final class Executor {
     public init() {}
 
+    /// How long a literal clipboard insert keeps its transient content
+    /// before the saved string is restored (guarded by changeCount).
+    private static let restoreDelay: TimeInterval = 0.2
+
     private var captures: [CaptureSlot: String] = [:]
 
     /// Runs the plan in order; a failed settle (or unrealizable step) rings
@@ -67,9 +71,26 @@ public final class Executor {
 
         case .clipboardInsert(let content):
             if let content {
-                Synth.paste(content)
+                // Set → ⌘V → return. No pre-⌘V sleep: setString is
+                // synchronous, and the app reads the pasteboard only when IT
+                // processes the ⌘V, which the event queue orders after the
+                // write. The restore is deferred hygiene, not a wait.
+                let pasteboard = NSPasteboard.general
+                let saved = pasteboard.string(forType: .string)
+                pasteboard.clearContents()
+                pasteboard.setString(content, forType: .string)
+                let stamp = pasteboard.changeCount
+                Synth.commandV()
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay) {
+                    let pasteboard = NSPasteboard.general
+                    // Newer owner (a blind cut, a user ⌘C) wins: only ever
+                    // decline to write, never clobber.
+                    guard pasteboard.changeCount == stamp else { return }
+                    pasteboard.clearContents()
+                    if let saved { pasteboard.setString(saved, forType: .string) }
+                }
             } else {
-                Synth.commandV()   // register +/*: paste the pasteboard as-is
+                Synth.commandV()   // registers +/* and pasteboard markers: paste as-is
             }
             return true
 

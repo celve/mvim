@@ -19,7 +19,11 @@ public enum SynthTag {
 public enum Synth {
     private static let tapLocation: CGEventTapLocation = .cgSessionEventTap
     private static func source() -> CGEventSource? { CGEventSource(stateID: .combinedSessionState) }
-    private static func nudge(_ seconds: Double = 0.012) { Thread.sleep(forTimeInterval: seconds) }
+    /// A hair of air between down and up — some apps mishandle zero-interval
+    /// pairs. Nothing is needed *between* presses: the session event queue
+    /// already serializes delivery to the app. Best-effort law: pacing is a
+    /// tiny constant, never an observed wait.
+    private static func nudge(_ seconds: Double = 0.002) { Thread.sleep(forTimeInterval: seconds) }
 
     /// Synthesize ⌘V (clipboard paste). Used by clipboard-insert steps.
     public static func commandV() { key(0x09, .maskCommand) }   // 0x09 = kVK_ANSI_V
@@ -34,7 +38,6 @@ public enum Synth {
         if let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) {
             up.flags = flags; SynthTag.tag(up); up.post(tap: tapLocation)
         }
-        nudge()
     }
 
     public static func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], times count: Int) {
@@ -54,15 +57,5 @@ public enum Synth {
             up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
             SynthTag.tag(up); up.post(tap: tapLocation)
         }
-        nudge()
-    }
-
-    /// Clipboard + ⌘V; saves/restores the prior clipboard string (best-effort).
-    public static func paste(_ text: String) {
-        let pasteboard = NSPasteboard.general
-        let saved = pasteboard.string(forType: .string)
-        pasteboard.clearContents(); pasteboard.setString(text, forType: .string)
-        nudge(0.03); commandV(); nudge(0.08)
-        pasteboard.clearContents(); if let saved { pasteboard.setString(saved, forType: .string) }
     }
 }
