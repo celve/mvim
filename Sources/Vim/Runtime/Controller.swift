@@ -21,6 +21,17 @@ public final class Controller {
         }
     }
 
+    /// Mode channel for the menu-bar indicator; nil = unbound. Setting the
+    /// callback publishes immediately — the tracker may have bound during
+    /// init, before the app model could wire in.
+    public var onModeChange: ((VimState.Mode?) -> Void)? {
+        didSet {
+            publishedMode = currentIndicatorMode
+            onModeChange?(publishedMode)
+        }
+    }
+    private var publishedMode: VimState.Mode?
+
     private let tracker = FocusTracker()
     private var monitor = RawMonitor()
     private var state = VimState.initial
@@ -92,6 +103,9 @@ public final class Controller {
                 }
             }
             run(completed, on: binding)
+            // Publish even on mid-plan aborts: a .setMode commit may have
+            // landed before a later step failed.
+            publishMode()
             return true
         }
     }
@@ -112,10 +126,33 @@ public final class Controller {
         }
         binding = new
         monitor.reset()
-        // Entry policy: fields open in Insert — typing just works, Esc
-        // engages Normal. (Per-app entry policy comes later.)
+        // Entry policy: fields open in Insert — typing just works, ⌃[
+        // engages Normal.
         state.field = VimState.Field(mode: .insert)
         openChange = nil
+        publishMode()
+    }
+
+    private var currentIndicatorMode: VimState.Mode? {
+        binding == nil ? nil : state.field.mode
+    }
+
+    private func publishMode() {
+        let mode = currentIndicatorMode
+        guard !Self.sameIndicator(mode, publishedMode) else { return }
+        publishedMode = mode
+        onModeChange?(mode)
+    }
+
+    /// Case identity only — visual anchor churn must not re-render the icon.
+    private static func sameIndicator(_ a: VimState.Mode?, _ b: VimState.Mode?) -> Bool {
+        switch (a, b) {
+        case (nil, nil), (.normal?, .normal?), (.insert?, .insert?),
+             (.replace?, .replace?), (.visual?, .visual?):
+            return true
+        default:
+            return false
+        }
     }
 
     private func run(_ completed: RawMonitor.Completed, on binding: FocusTracker.Binding) {

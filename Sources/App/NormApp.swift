@@ -32,7 +32,7 @@ struct NormApp: App {
             Divider()
             Button("Quit Norm") { NSApplication.shared.terminate(nil) }
         } label: {
-            Image(systemName: model.tapInstalled ? "keyboard.fill" : "keyboard")
+            Image(systemName: model.mode.symbolName)
         }
     }
 }
@@ -44,6 +44,23 @@ final class AppModel: ObservableObject {
         let bundleID: String
     }
 
+    /// The menu-bar icon IS the mode display — forced fields have no block
+    /// cursor, so this is the only telltale.
+    enum ModeIndicator {
+        case off, insert, normal, visual, replace
+
+        var symbolName: String {
+            switch self {
+            case .off: return "keyboard"
+            case .insert: return "i.square.fill"
+            case .normal: return "n.square.fill"
+            case .visual: return "v.square.fill"
+            case .replace: return "r.square.fill"
+            }
+        }
+    }
+
+    @Published private(set) var mode: ModeIndicator = .off
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
@@ -65,6 +82,16 @@ final class AppModel: ObservableObject {
 
         let controller = Controller()
         self.controller = controller
+        controller.onModeChange = { [weak self] mode in
+            guard let self else { return }
+            switch mode {
+            case nil: self.mode = .off
+            case .insert?: self.mode = .insert
+            case .normal?: self.mode = .normal
+            case .visual?: self.mode = .visual
+            case .replace?: self.mode = .replace
+            }
+        }
         token = InputHub.shared.register(.editor) { event in
             MainActor.assumeIsolated { controller.handle(event) }
         }
