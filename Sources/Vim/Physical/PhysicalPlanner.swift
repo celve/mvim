@@ -163,11 +163,13 @@ private extension PhysicalPlanner {
         }
     }
 
-    /// Best-effort by design: a cursor that cannot be drawn is a bare
-    /// caret, never a bell. No settle — cosmetic divergence must not abort
-    /// the plan.
+    /// Best-effort by design: a cursor that cannot be drawn — or may not be
+    /// (`drawCursor` is the standing selection's permission, distinct from
+    /// the actuation writes) — is a bare caret, never a bell. No settle —
+    /// cosmetic divergence must not abort the plan.
     static func lowerRenderCursor(context: inout Context, profile: CapabilityProfile) -> [PhysicalStep]? {
         guard profile.has(.writeSelection),
+              profile.has(.drawCursor),
               let model = context.model,
               let gap = context.caret else {
             return [.commit(.setCursor(nil))]

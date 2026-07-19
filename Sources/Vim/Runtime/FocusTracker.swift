@@ -34,6 +34,10 @@ public final class FocusTracker {
         public let bundleID: String?
         public let appVersion: String?
         public let role: String?
+
+        /// Provenance behind `capabilities`, for the menu's badge rows.
+        /// nil for forced bindings — empty profile, nothing resolved.
+        public let capabilityReport: CapabilityReport?
     }
 
     /// Fired on every change, including transitions to nil.
@@ -129,6 +133,36 @@ public final class FocusTracker {
         resolveAndPublish(revalidateGate: true)
     }
 
+    /// A capability override changed (menu): rebuild the bound element's
+    /// profile and republish — `resolveAndPublish`'s same-element
+    /// short-circuit deliberately never re-probes, so this is its own
+    /// entry. The republish rebinds, resetting the field to the Insert
+    /// entry policy — acceptable for a menu-driven change. Forced bindings
+    /// carry no profile; a dead or de-gated element falls back to the full
+    /// resolve.
+    public func reresolveCapabilities() {
+        guard enabled, let bound = binding, !bound.isForced else { return }
+        let gate = FieldProber.gate(bound.element)
+        guard gate.engageable else {
+            resolveAndPublish(revalidateGate: true)
+            return
+        }
+        let identity = Self.appIdentity(for: bound.pid)
+        let resolved = FieldProber.resolve(bound.element, bundleID: identity.bundleID)
+        publish(Binding(
+            element: bound.element,
+            pid: bound.pid,
+            capabilities: resolved.profile,
+            isOverlay: bound.isOverlay,
+            isForced: false,
+            windowID: bound.windowID,
+            bundleID: identity.bundleID,
+            appVersion: identity.version,
+            role: gate.role,
+            capabilityReport: resolved.report
+        ))
+    }
+
     // MARK: - The resolve (the moved rebind body)
 
     private func resolveAndPublish(revalidateGate: Bool) {
@@ -175,16 +209,18 @@ public final class FocusTracker {
         let isOverlay = pid != frontPid
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
+        let resolved = FieldProber.resolve(element, bundleID: identity.bundleID)
         publish(Binding(
             element: element,
             pid: pid,
-            capabilities: FieldProber.probe(element),
+            capabilities: resolved.profile,
             isOverlay: isOverlay,
             isForced: false,
             windowID: 0,
             bundleID: identity.bundleID,
             appVersion: identity.version,
-            role: gate.role
+            role: gate.role,
+            capabilityReport: resolved.report
         ))
     }
 
@@ -239,7 +275,8 @@ public final class FocusTracker {
             windowID: window.id,
             bundleID: bundleID,
             appVersion: nil,   // the learner ignores forced bindings
-            role: nil
+            role: nil,
+            capabilityReport: nil
         ))
     }
 

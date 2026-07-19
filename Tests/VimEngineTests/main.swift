@@ -239,10 +239,15 @@ precondition(TextModel("one\ntwo").lines(from: 1, count: 1, includingTerminator:
 // MARK: - PhysicalPlanner
 
 let axProfile = CapabilityProfile(available: [
-    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText, .drawCursor,
 ])
 let readProfile = CapabilityProfile(available: [.readText, .readLength, .readCaret, .readSelectedText])
 let blindProfile = CapabilityProfile(available: [])
+/// axProfile minus the standing cursor's permission — the Notion shape:
+/// writes stay exact, presentation is suppressed.
+let noCursorProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
+])
 
 func physical(
     _ keys: String,
@@ -329,6 +334,15 @@ precondition(physical("fl", text: "say hello", caret: 0, profile: axProfile).ste
     .commit(.found(VimState.FindMemory(character: "l", direction: .forward, beforeCharacter: false))),
     .setSelection(6..<7),
     .commit(.setCursor(6..<7)),
+])
+
+// drawCursor off (the Notion quirk): actuation identical, presentation
+// suppressed — the plan ends by clearing the cursor, never drawing it.
+precondition(physical("fl", text: "say hello", caret: 0, profile: noCursorProfile).steps == [
+    .setSelection(6..<6),
+    .settle(Expectation(selection: 6..<6, length: 9)),
+    .commit(.found(VimState.FindMemory(character: "l", direction: .forward, beforeCharacter: false))),
+    .commit(.setCursor(nil)),
 ])
 var found = VimState.initial
 found.session.lastFind = VimState.FindMemory(character: "l", direction: .forward, beforeCharacter: false)
@@ -627,6 +641,18 @@ sim = Sim(text: "hi", caret: 0, profile: axProfile)
 sim.type("$")
 precondition(sim.selection == 2..<2)
 precondition(sim.state.field.cursor == nil)
+
+// drawCursor suppressed (the Notion shape): identical edits and exact
+// offsets, but no standing selection — the caret stays bare after every
+// command.
+sim = Sim(text: "say hello world", caret: 6, profile: noCursorProfile)
+sim.type("ciwbye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")
+precondition(sim.caret == 6)
+precondition(sim.selection == 6..<6)                       // bare caret, no block
+precondition(sim.state.field.cursor == nil)
+precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.

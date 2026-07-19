@@ -22,6 +22,18 @@ struct NormApp: App {
                     Text("Off").tag(VimPolicy.off)
                     Text("Force").tag(VimPolicy.forced)
                 }
+                Menu("Capabilities in \(front.name)") {
+                    ForEach(model.capabilityRows) { row in
+                        Picker("\(row.title) — \(row.badge)", selection: Binding(
+                            get: { row.choice },
+                            set: { model.setCapabilityOverride($0, for: row.capability) }
+                        )) {
+                            Text("Auto").tag(AppModel.OverrideChoice.auto)
+                            Text("On").tag(AppModel.OverrideChoice.on)
+                            Text("Off").tag(AppModel.OverrideChoice.off)
+                        }
+                    }
+                }
             }
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
@@ -64,12 +76,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// One capabilities-menu row: the atom, its resolved verdict for the
+    /// bound field (badge), and the user's stored choice for the front app.
+    struct CapabilityRow: Identifiable, Equatable {
+        let capability: Capability
+        let title: String
+        let badge: String
+        let choice: OverrideChoice
+        var id: String { capability.rawValue }
+    }
+
+    /// The picker's projection of `CapabilityConfig.Override?`.
+    enum OverrideChoice: String, CaseIterable {
+        case auto, on, off
+    }
+
     @Published private(set) var mode: ModeIndicator = .off
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
     @Published private(set) var frontApp: FrontApp?
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
+    @Published private(set) var capabilityRows: [CapabilityRow] = []
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
@@ -96,6 +124,9 @@ final class AppModel: ObservableObject {
             case .visual?: self.mode = .visual
             case .replace?: self.mode = .replace
             }
+            // Mode changes ride every rebind, so the badge rows track the
+            // binding without their own channel.
+            self.refreshCapabilityRows()
         }
         token = InputHub.shared.register(.editor) { event in
             MainActor.assumeIsolated { controller.handle(event) }
@@ -118,6 +149,7 @@ final class AppModel: ObservableObject {
               let bundleID = app.bundleIdentifier else { return }
         frontApp = FrontApp(name: app.localizedName ?? bundleID, bundleID: bundleID)
         frontAppPolicy = Prefs.policy(for: bundleID)
+        refreshCapabilityRows()
     }
 
     func refresh() {
@@ -132,6 +164,7 @@ final class AppModel: ObservableObject {
             frontApp = FrontApp(name: app.localizedName ?? bundleID, bundleID: bundleID)
         }
         frontAppPolicy = frontApp.map { Prefs.policy(for: $0.bundleID) } ?? .auto
+        refreshCapabilityRows()
     }
 
     func setFrontAppPolicy(_ policy: VimPolicy) {
@@ -139,6 +172,70 @@ final class AppModel: ObservableObject {
         Prefs.setPolicy(policy, for: frontApp.bundleID)
         frontAppPolicy = policy
         controller.refreshPolicy()
+    }
+
+    func setCapabilityOverride(_ choice: OverrideChoice, for capability: Capability) {
+        guard let frontApp else { return }
+        let stored: CapabilityConfig.Override?
+        switch choice {
+        case .auto: stored = nil
+        case .on: stored = .on
+        case .off: stored = .off
+        }
+        CapabilityConfig.setUserOverride(stored, for: frontApp.bundleID, capability: capability.rawValue)
+        controller.refreshCapabilities()
+        refreshCapabilityRows()
+    }
+
+    /// Rebuilt on menu open, app activation, and every rebind — cheap, and
+    /// the badges must describe the field vim is actually driving. Rows
+    /// exist without a binding too (overrides are per-app config); the
+    /// badge is "—" until a field of the front app binds. An overlay's
+    /// binding (other pid) must not label the front app's rows.
+    private func refreshCapabilityRows() {
+        guard let frontApp else {
+            capabilityRows = []
+            return
+        }
+        let report = controller.boundBundleID == frontApp.bundleID ? controller.capabilityReport : nil
+        capabilityRows = Capability.allCases.map { capability in
+            let choice: OverrideChoice
+            switch CapabilityConfig.userOverride(for: frontApp.bundleID, capability: capability.rawValue) {
+            case .on: choice = .on
+            case .off: choice = .off
+            case nil: choice = .auto
+            }
+            let badge: String
+            if let entry = report?.entries[capability] {
+                let mark = entry.status == .available ? "✓" : "✗"
+                switch entry.source {
+                case .probed: badge = "\(mark) probed"
+                case .seeded: badge = "\(mark) seeded"
+                case .user: badge = "\(mark) user"
+                }
+            } else {
+                badge = "—"
+            }
+            return CapabilityRow(
+                capability: capability,
+                title: Self.displayName(capability),
+                badge: badge,
+                choice: choice
+            )
+        }
+    }
+
+    /// UI strings stay in the app layer — the engine names atoms, not rows.
+    private static func displayName(_ capability: Capability) -> String {
+        switch capability {
+        case .readText: return "Read text"
+        case .readLength: return "Read length"
+        case .readCaret: return "Read caret"
+        case .readSelectedText: return "Read selected text"
+        case .writeSelection: return "Set selection (AX)"
+        case .insertText: return "Replace text (AX)"
+        case .drawCursor: return "Draw block cursor"
+        }
     }
 
     func openPrivacyPane(_ anchor: String) {

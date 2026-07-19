@@ -1,6 +1,7 @@
-/// The probeable atoms of what a focused field can do, each mapping to one
-/// concrete AX mechanism. Ambient powers (key synthesis, clipboard
-/// transactions, ⌘Z) are permission-level constants, not capabilities.
+/// The atoms of what a focused field can do — all but one probeable, each
+/// mapping to one concrete AX mechanism. Ambient powers (key synthesis,
+/// clipboard transactions, ⌘Z) are permission-level constants, not
+/// capabilities.
 public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// `AXValue` / `AXStringForRange`: the field's text can be read.
     case readText
@@ -19,6 +20,16 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
 
     /// `AXSelectedText` (set): exact insertion/replacement.
     case insertText
+
+    /// The standing-cursor *role* of `writeSelection`'s mechanism: may the
+    /// Normal-mode block cursor be left drawn as a persistent selection?
+    /// The one policy-valued atom — never probed; "available" means
+    /// *permitted*, resolved by the runtime (writeSelection minus seeds and
+    /// user config). Selection-reactive apps (Notion's floating toolbar)
+    /// attach UI to any standing selection, so presentation must be
+    /// deniable separately from actuation, which transient command
+    /// selections keep using regardless. Subtractive only.
+    case drawCursor
 }
 
 public enum CapabilityStatus: String, Equatable, Sendable {

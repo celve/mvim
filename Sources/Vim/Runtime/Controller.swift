@@ -65,6 +65,21 @@ public final class Controller {
         tracker.refreshPolicy()
     }
 
+    /// The bound field's capability resolution, for the menu's badge rows;
+    /// nil when unbound or forced (nothing configurable resolves there).
+    public var capabilityReport: CapabilityReport? { binding?.capabilityReport }
+
+    /// Bundle ID of the bound app, so the menu badges only rows for the
+    /// app they actually describe (overlays bind across apps).
+    public var boundBundleID: String? { binding?.bundleID }
+
+    /// A capability override changed (menu): rebuild the binding's profile
+    /// now. Deliberately not `refreshPolicy` — its same-element
+    /// short-circuit never re-probes.
+    public func refreshCapabilities() {
+        tracker.reresolveCapabilities()
+    }
+
     /// The `InputHub` handler: returns the consume verdict. Zero AX on the
     /// steady paths (insert typing, unbound apps, ⌘-chords); one bounded
     /// resolve on Esc and one verify before running a completed command.

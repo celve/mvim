@@ -1,6 +1,36 @@
 import ApplicationServices
 import LoomCore
 
+/// Why each atom of one binding resolved the way it did — the menu's badge
+/// vocabulary. Runtime-only: provenance never enters the snapshot or the
+/// planner, which consume the bare `CapabilityProfile`.
+public struct CapabilityReport: Equatable, Sendable {
+    public enum Source: Equatable, Sendable {
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism.
+        case probed
+        /// A shipped `CapabilityConfig` seed.
+        case seeded
+        /// The user's menu override.
+        case user
+    }
+
+    public struct Entry: Equatable, Sendable {
+        public let status: CapabilityStatus
+        public let source: Source
+
+        public init(status: CapabilityStatus, source: Source) {
+            self.status = status
+            self.source = source
+        }
+    }
+
+    public var entries: [Capability: Entry]
+
+    public init(entries: [Capability: Entry] = [:]) {
+        self.entries = entries
+    }
+}
+
 /// Probes what a focused field can do. Trial reads *prove* the read
 /// capabilities; settable flags *claim* the writes — and the claims are
 /// corrected by `LearnedPriors`, the lazy write probe's result cache
@@ -15,6 +45,63 @@ public enum FieldProber {
         if AX.rangeSettable(element) { available.insert(.writeSelection) }
         if AX.isInsertable(element) { available.insert(.insertText) }
         return CapabilityProfile(available: available)
+    }
+
+    /// The full resolution for one binding: probed truth minus the user's
+    /// demotions, plus the policy-valued `drawCursor` derived from
+    /// `writeSelection` under `CapabilityConfig` seeds and overrides. (The
+    /// learner's committed demotions subtract in the mechanism loop when
+    /// that wiring lands.) The profile is what the planner consumes; the
+    /// report is the menu's why.
+    public static func resolve(
+        _ element: AXUIElement, bundleID: String?
+    ) -> (profile: CapabilityProfile, report: CapabilityReport) {
+        let probed = probe(element)
+        var statuses: [Capability: CapabilityStatus] = [:]
+        var entries: [Capability: CapabilityReport.Entry] = [:]
+
+        func choice(_ capability: Capability) -> CapabilityConfig.Override? {
+            guard let bundleID else { return nil }
+            return CapabilityConfig.userOverride(for: bundleID, capability: capability.rawValue)
+        }
+
+        // Mechanism atoms: an override may only demote — probe truth wins
+        // upward, the user's off wins downward.
+        for capability in Capability.allCases where capability != .drawCursor {
+            let entry: CapabilityReport.Entry
+            if probed.has(capability), choice(capability) == .off {
+                entry = CapabilityReport.Entry(status: .unavailable, source: .user)
+            } else {
+                entry = CapabilityReport.Entry(
+                    status: probed.has(capability) ? .available : .unavailable,
+                    source: .probed
+                )
+            }
+            statuses[capability] = entry.status
+            entries[capability] = entry
+        }
+
+        // drawCursor: writeSelection's mechanism, policy-gated. `.on`
+        // un-seeds curation only — a missing mechanism stays missing.
+        let mechanism = entries[.writeSelection]
+        let userChoice = choice(.drawCursor)
+        let seeded = bundleID.map {
+            CapabilityConfig.seededOff(bundleID: $0, capability: Capability.drawCursor.rawValue)
+        } ?? false
+        let entry: CapabilityReport.Entry
+        if mechanism?.status != .available {
+            entry = CapabilityReport.Entry(status: .unavailable, source: mechanism?.source ?? .probed)
+        } else if userChoice == .off {
+            entry = CapabilityReport.Entry(status: .unavailable, source: .user)
+        } else if seeded, userChoice != .on {
+            entry = CapabilityReport.Entry(status: .unavailable, source: .seeded)
+        } else {
+            entry = CapabilityReport.Entry(status: .available, source: userChoice == .on ? .user : .probed)
+        }
+        statuses[.drawCursor] = entry.status
+        entries[.drawCursor] = entry
+
+        return (CapabilityProfile(statuses: statuses), CapabilityReport(entries: entries))
     }
 
     /// The engage verdict for one element, from a single AX round trip.
