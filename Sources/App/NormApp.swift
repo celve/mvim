@@ -76,6 +76,7 @@ final class AppModel: ObservableObject {
 
     private let controller: Controller
     private var token: InputHub.Token?
+    private var workspaceToken: NSObjectProtocol?
 
     init() {
         // Before any AX or binding work: seed the disable list, and bound
@@ -99,7 +100,24 @@ final class AppModel: ObservableObject {
         token = InputHub.shared.register(.editor) { event in
             MainActor.assumeIsolated { controller.handle(event) }
         }
+        // The menu's "Vim in <app>" row must be current BEFORE the menu is
+        // built — MenuBarExtra builds content eagerly, so .onAppear cannot
+        // be trusted to re-fire per open. Track activation continuously.
+        workspaceToken = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { note in
+            MainActor.assumeIsolated { [weak self] in self?.frontAppChanged(note) }
+        }
         refresh()
+    }
+
+    private func frontAppChanged(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let bundleID = app.bundleIdentifier else { return }
+        frontApp = FrontApp(name: app.localizedName ?? bundleID, bundleID: bundleID)
+        frontAppPolicy = Prefs.policy(for: bundleID)
     }
 
     func refresh() {
