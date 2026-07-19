@@ -63,7 +63,9 @@ public final class Controller {
         boundElement = element
         capabilities = FieldProber.probe(element)
         monitor.reset()
-        state.field = VimState.Field()
+        // Entry policy: fields open in Insert — typing just works, Esc
+        // engages Normal. (Per-app configuration comes later.)
+        state.field = VimState.Field(mode: .insert)
         openChange = nil
     }
 
