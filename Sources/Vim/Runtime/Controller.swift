@@ -74,9 +74,21 @@ public final class Controller {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        let snapshot = Snapshotter.snapshot(of: element, capabilities: capabilities, anchor: anchor)
+        let snapshot = Snapshotter.snapshot(
+            of: element,
+            capabilities: capabilities,
+            anchor: anchor,
+            cursor: state.field.cursor
+        )
         let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
-        executor.execute(physical, on: element, state: &state)
+        let executed = executor.execute(physical, on: element, state: &state)
+        guard executed else {
+            // Abort hygiene: a plan that died mid-flight may leave its
+            // operator selection painted, and must not record memories for
+            // an edit that never happened.
+            repairStrandedSelection(on: element)
+            return
+        }
 
         if let payload = completed.insertPayload {
             executor.commit(.setLastInsert(payload), state: &state)
@@ -91,6 +103,18 @@ public final class Controller {
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// Collapse whatever selection an aborted plan stranded — through the
+    /// executor, which owns all field writes.
+    private func repairStrandedSelection(on element: AXUIElement) {
+        guard capabilities.has(.writeSelection),
+              let range = AX.selectedRange(of: element), range.length > 0 else { return }
+        executor.execute(
+            PhysicalPlan(.setSelection(range.location..<range.location)),
+            on: element,
+            state: &state
+        )
     }
 
     /// Dot-worthiness — the same lore `Sim.recordChange` encodes: a

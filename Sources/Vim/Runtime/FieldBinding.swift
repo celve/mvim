@@ -34,7 +34,8 @@ public enum Snapshotter {
     public static func snapshot(
         of element: AXUIElement,
         capabilities: CapabilityProfile,
-        anchor: Int?
+        anchor: Int?,
+        cursor: Range<Int>?
     ) -> FieldSnapshot {
         let text = capabilities.has(.readText) ? AX.value(of: element) : nil
         var selection: Range<Int>?
@@ -42,12 +43,16 @@ public enum Snapshotter {
             selection = range.location..<(range.location + range.length)
         }
         let length = capabilities.has(.readLength) ? AX.length(of: element) : nil
+        // The drawn cursor counts only while it still IS the selection;
+        // otherwise the selection is the user's.
+        let stampedCursor = (cursor != nil && !cursor!.isEmpty && cursor == selection) ? cursor : nil
         return FieldSnapshot(
             capabilities: capabilities,
             text: text,
             selection: selection,
             length: length,
-            anchor: anchor
+            anchor: anchor,
+            cursor: stampedCursor
         )
     }
 }

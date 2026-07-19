@@ -73,6 +73,13 @@ public enum LogicalStep: Equatable, Sendable {
     /// offset- and capture-dependent commits.
     case commit(VimEffect)
 
+    /// Render Normal mode's on-character cursor — vim's block cursor as
+    /// mode semantics. The planner appends it to every plan that ends
+    /// resident in Normal; lowering is best-effort (a one-character
+    /// selection where the field allows, a bare caret elsewhere) and never
+    /// rejects the plan.
+    case renderCursor
+
     /// The command is invalid or unsupported here: signal, change nothing.
     case bell(BellReason)
 }

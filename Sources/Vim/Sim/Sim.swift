@@ -81,11 +81,30 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: selection, anchor: anchor)
+        // Same cursor match-stamp as the runtime's Snapshotter.
+        var cursor: Range<Int>?
+        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == selection {
+            cursor = drawn
+        }
+        let snapshot = FieldSnapshot(
+            capabilities: profile,
+            text: text,
+            selection: selection,
+            anchor: anchor,
+            cursor: cursor
+        )
         let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
 
         captures = [:]
-        execute(physical)
+        let executed = execute(physical)
+        guard executed else {
+            // Abort hygiene, mirroring the Controller: collapse the
+            // stranded selection, record no memories.
+            if !selection.isEmpty {
+                selection = selection.lowerBound..<selection.lowerBound
+            }
+            return
+        }
 
         if let payload = completed.insertPayload {
             state = VimReducer.reduce(state, .setLastInsert(payload))
@@ -139,7 +158,7 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    mutating func execute(_ plan: PhysicalPlan) {
+    mutating func execute(_ plan: PhysicalPlan) -> Bool {
         for step in plan.steps {
             switch step {
             case .setSelection(let range):
@@ -175,7 +194,7 @@ private extension Sim {
                 }
                 if !converged {
                     settleFailures += 1
-                    return   // abort the remainder, like the real executor
+                    return false   // abort the remainder, like the real executor
                 }
 
             case .commit(let effect):
@@ -185,6 +204,7 @@ private extension Sim {
                 bells += 1
             }
         }
+        return true
     }
 
     mutating func applyReplace(_ replacement: String) {

@@ -18,9 +18,10 @@
 /// for a harness bug.
 public enum LogicalPlanner {
     public static func plan(_ command: RawCommand, state: VimState) -> LogicalPlan {
+        let planned: LogicalPlan
         switch state.field.mode {
         case .normal:
-            return planNormal(
+            planned = planNormal(
                 intent: command.intent,
                 count: command.count,
                 register: command.register,
@@ -28,10 +29,45 @@ public enum LogicalPlanner {
                 state: state
             )
         case .visual(let context):
-            return planVisual(command, context: context, state: state)
+            planned = planVisual(command, context: context, state: state)
         case .insert, .replace:
-            return planInsertOrReplace(command)
+            planned = planInsertOrReplace(command)
         }
+        return appendingCursorRender(planned, state: state)
+    }
+}
+
+// MARK: - Cursor rendering
+
+private extension LogicalPlanner {
+    /// Normal mode's on-character cursor is part of the mode's semantics:
+    /// every plan that ends resident in Normal re-renders it. Empty and
+    /// bell-only plans touch nothing — the cursor already on screen stays,
+    /// with zero field writes.
+    static func appendingCursorRender(_ plan: LogicalPlan, state: VimState) -> LogicalPlan {
+        guard !plan.isEmpty, !isBellOnly(plan) else { return plan }
+        guard endsInNormalMode(plan, startingFrom: state.field.mode) else { return plan }
+        return LogicalPlan(steps: plan.steps + [.renderCursor])
+    }
+
+    static func isBellOnly(_ plan: LogicalPlan) -> Bool {
+        plan.steps.allSatisfy { step in
+            if case .bell = step { return true }
+            return false
+        }
+    }
+
+    /// The last `setMode` wins; a plan without one stays in its starting
+    /// residency.
+    static func endsInNormalMode(_ plan: LogicalPlan, startingFrom mode: VimState.Mode) -> Bool {
+        for step in plan.steps.reversed() {
+            if case .setMode(let target) = step {
+                if case .normal = target { return true }
+                return false
+            }
+        }
+        if case .normal = mode { return true }
+        return false
     }
 }
 

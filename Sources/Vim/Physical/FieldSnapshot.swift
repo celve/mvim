@@ -24,18 +24,25 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// piece of execution context the field itself cannot answer.
     public let anchor: Int?
 
+    /// The drawn block cursor, stamped by the runtime **only when it still
+    /// equals the live selection** — a mismatch (mouse click, app
+    /// interference) means the selection is the user's, not ours.
+    public let cursor: Range<Int>?
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
         selection: Range<Int>? = nil,
         length: Int? = nil,
-        anchor: Int? = nil
+        anchor: Int? = nil,
+        cursor: Range<Int>? = nil
     ) {
         self.capabilities = capabilities
         self.text = text
         self.selection = selection
         self.length = length ?? text.map { $0.utf16.count }
         self.anchor = anchor
+        self.cursor = cursor
     }
 
     /// The caret, when the selection is collapsed.

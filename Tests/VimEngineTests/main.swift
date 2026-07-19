@@ -107,7 +107,8 @@ precondition(plan("ciw").steps == [
 // dd takes whole lines; cc keeps the line it empties.
 precondition(plan("dd").steps == [
     .select(.lines(count: 1, interior: false)),
-    .deleteSelection(into: nil)
+    .deleteSelection(into: nil),
+    .renderCursor
 ])
 precondition(plan("cc").steps == [
     .select(.lines(count: 1, interior: true)),
@@ -118,7 +119,8 @@ precondition(plan("cc").steps == [
 // Counts multiply across operator and target; registers ride through.
 precondition(plan("\"a2d3w").steps == [
     .select(.span(to: .motion(.word(.forward, end: false, bigWord: false), count: 6), inclusive: false)),
-    .deleteSelection(into: Register("a"))
+    .deleteSelection(into: Register("a")),
+    .renderCursor
 ])
 
 // Motion lore: dw exclusive, de inclusive, dj linewise, cw rewrites to ce.
@@ -132,7 +134,8 @@ precondition(plan("cw").steps.first ==
 // Edits and insert entries decompose into primitives.
 precondition(plan("3x").steps == [
     .select(.span(to: .motion(.character(.right), count: 3), inclusive: false)),
-    .deleteSelection(into: nil)
+    .deleteSelection(into: nil),
+    .renderCursor
 ])
 precondition(plan("A").steps == [.moveCaret(.motion(.lineEnd, count: 1)), .setMode(.insert)])
 precondition(plan("o").steps == [
@@ -147,12 +150,14 @@ precondition(plan("n").steps == [.bell(.noPriorSearch)])
 var planning = VimState.initial
 planning.session.lastSearch = VimState.SearchMemory(pattern: "needle", direction: .backward)
 precondition(plan("n", state: planning).steps == [
-    .moveCaret(.motion(.search(Search(direction: .backward, pattern: "needle", isSubmitted: true)), count: 1))
+    .moveCaret(.motion(.search(Search(direction: .backward, pattern: "needle", isSubmitted: true)), count: 1)),
+    .renderCursor
 ])
 precondition(plan(";").steps == [.bell(.noPriorFind)])
 planning.session.lastFind = VimState.FindMemory(character: "x", direction: .forward, beforeCharacter: false)
 precondition(plan(",", state: planning).steps == [
-    .moveCaret(.motion(.find(character: "x", direction: .backward, beforeCharacter: false), count: 1))
+    .moveCaret(.motion(.find(character: "x", direction: .backward, beforeCharacter: false), count: 1)),
+    .renderCursor
 ])
 precondition(plan("'m").steps == [.bell(.unsetMark("m"))])
 
@@ -160,7 +165,8 @@ precondition(plan("'m").steps == [.bell(.unsetMark("m"))])
 precondition(plan("p").steps == [.bell(.emptyRegister("\""))])
 planning.session.registers.unnamed = RegisterContent(text: "howdy", wise: .character)
 precondition(plan("p", state: planning).steps == [
-    .put(.content(RegisterContent(text: "howdy", wise: .character)), PutAction(position: .after), count: 1)
+    .put(.content(RegisterContent(text: "howdy", wise: .character)), PutAction(position: .after), count: 1),
+    .renderCursor
 ])
 
 // Dot recompiles the stored change; its count overrides wholesale.
@@ -168,7 +174,8 @@ precondition(plan(".").steps == [.bell(.noPriorChange)])
 planning.session.lastChange = VimState.ChangeMemory(body: "x", count: 2)
 precondition(plan(".", state: planning).steps == [
     .select(.span(to: .motion(.character(.right), count: 2), inclusive: false)),
-    .deleteSelection(into: nil)
+    .deleteSelection(into: nil),
+    .renderCursor
 ])
 precondition(plan("3.", state: planning).steps.first ==
     .select(.span(to: .motion(.character(.right), count: 3), inclusive: false)))
@@ -180,18 +187,19 @@ visual.field.mode = .visual(VimState.VisualContext(kind: .character, anchor: 0))
 precondition(plan("w", state: visual).steps == [
     .extendSelection(.motion(.word(.forward, end: false, bigWord: false), count: 1))
 ])
-precondition(plan("d", state: visual).steps == [.deleteSelection(into: nil), .setMode(.normal)])
+precondition(plan("d", state: visual).steps == [.deleteSelection(into: nil), .setMode(.normal), .renderCursor])
 precondition(plan("iw", state: visual).steps == [
     .select(.textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), count: 1))
 ])
-precondition(plan("<Esc>", state: visual).steps == [.collapseSelection(.head), .setMode(.normal)])
+precondition(plan("<Esc>", state: visual).steps == [.collapseSelection(.head), .setMode(.normal), .renderCursor])
 
 // Insert mode: only Esc concerns the engine.
 var inserting = VimState.initial
 inserting.field.mode = .insert
 precondition(plan("<Esc>", state: inserting).steps == [
     .moveCaret(.motion(.character(.left), count: 1)),
-    .setMode(.normal)
+    .setMode(.normal),
+    .renderCursor
 ])
 precondition(plan("w", state: inserting).steps.isEmpty)
 
@@ -201,7 +209,8 @@ precondition(plan("zt").steps == [.bell(.unsupported("zt"))])
 // Typed find commands commit memory; repeats never do.
 precondition(plan("fx").steps == [
     .moveCaret(.motion(.find(character: "x", direction: .forward, beforeCharacter: false), count: 1)),
-    .commit(.found(VimState.FindMemory(character: "x", direction: .forward, beforeCharacter: false)))
+    .commit(.found(VimState.FindMemory(character: "x", direction: .forward, beforeCharacter: false))),
+    .renderCursor
 ])
 
 // MARK: - TextModel
@@ -276,12 +285,16 @@ precondition(physical("fl", text: "say hello", caret: 0, profile: axProfile).ste
     .setSelection(6..<6),
     .settle(Expectation(selection: 6..<6, length: 9)),
     .commit(.found(VimState.FindMemory(character: "l", direction: .forward, beforeCharacter: false))),
+    .setSelection(6..<7),
+    .commit(.setCursor(6..<7)),
 ])
 var found = VimState.initial
 found.session.lastFind = VimState.FindMemory(character: "l", direction: .forward, beforeCharacter: false)
 precondition(physical(";", text: "say hello", caret: 0, profile: axProfile, state: found).steps == [
     .setSelection(6..<6),
     .settle(Expectation(selection: 6..<6, length: 9)),
+    .setSelection(6..<7),
+    .commit(.setCursor(6..<7)),
 ])
 
 // dw mutates; w does not; undo is a shortcut, not a change.
@@ -291,9 +304,14 @@ precondition(physical("dw", text: "say hello", caret: 0, profile: axProfile).ste
     .replaceSelection(""),
     .settle(Expectation(selection: 0..<0, length: 5)),
     .commit(.deleted(into: nil, content: .literal("say "), wise: .character)),
+    .setSelection(0..<1),
+    .commit(.setCursor(0..<1)),
 ])
 precondition(!physical("w", text: "say hello", caret: 0, profile: axProfile).mutatesText)
-precondition(physical("u", text: "say hello", caret: 0, profile: axProfile).steps == [.press(.undo, count: 1)])
+precondition(physical("u", text: "say hello", caret: 0, profile: axProfile).steps == [
+    .press(.undo, count: 1),
+    .commit(.setCursor(nil)),
+])
 precondition(!physical("u", text: "say hello", caret: 0, profile: axProfile).mutatesText)
 
 // dd takes the terminator and commits linewise.
@@ -303,6 +321,8 @@ precondition(physical("dd", text: "one\ntwo", caret: 1, profile: axProfile).step
     .replaceSelection(""),
     .settle(Expectation(selection: 0..<0, length: 3)),
     .commit(.deleted(into: nil, content: .literal("one\n"), wise: .line)),
+    .setSelection(0..<1),
+    .commit(.setCursor(0..<1)),
 ])
 
 // p resolves register content at logical time and places it physically.
@@ -312,6 +332,8 @@ precondition(physical("p", text: "abc", caret: 1, profile: axProfile, state: put
     .setSelection(2..<2),
     .replaceSelection("XY"),
     .settle(Expectation(selection: 4..<4, length: 5)),
+    .setSelection(4..<5),
+    .commit(.setCursor(4..<5)),
 ])
 
 // Capability changes feasibility: search and marks reject blind.
@@ -321,7 +343,16 @@ precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: axProfile
     .setSelection(7..<7),
     .settle(Expectation(selection: 7..<7, length: 9)),
     .commit(.searched(VimState.SearchMemory(pattern: "lo", direction: .forward))),
+    .setSelection(7..<8),
+    .commit(.setCursor(7..<8)),
 ])
+
+// A drawn cursor is collapsed before the next command acts.
+let cursored = FieldSnapshot(capabilities: axProfile, text: "abc", selection: 0..<1, cursor: 0..<1)
+precondition(PhysicalPlanner.plan(
+    LogicalPlanner.plan(RawCommand("x"), state: .initial),
+    snapshot: cursored
+).steps.first == .setSelection(0..<0))
 
 // MARK: - RawMonitor
 
@@ -409,12 +440,20 @@ precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise
 reduced = VimReducer.reduce(reduced, .deleted(into: nil, content: .captured(CaptureSlot(id: 9)), wise: .character))
 precondition(reduced.session.register("\"") == RegisterContent(text: "hi!", wise: .character))
 
+// Cursor state: set by renderCursor's commit, cleared on leaving Normal.
+reduced = VimReducer.reduce(reduced, .setCursor(3..<4))
+precondition(reduced.field.cursor == 3..<4)
+reduced = VimReducer.reduce(reduced, .setMode(.insert))
+precondition(reduced.field.cursor == nil)
+
 // MARK: - Sim goldens: (text, caret, keys) → (text′, caret′, state′)
 
 var sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
 sim.type("x")
 precondition(sim.text == "say helo world")
 precondition(sim.caret == 6)
+precondition(sim.selection == 6..<7)                       // the block cursor, on 'o'
+precondition(sim.state.field.cursor == 6..<7)
 precondition(sim.state.session.register("-") == RegisterContent(text: "l", wise: .character))
 
 sim = Sim(text: "abcdef", caret: 0, profile: axProfile)
@@ -444,6 +483,7 @@ sim.type("ciwbye")
 sim.feed("<Esc>")
 precondition(sim.text == "say bye world")
 precondition(sim.caret == 6)
+precondition(sim.state.field.cursor == 6..<7)              // redrawn on insert exit
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "bye")
 precondition(sim.state.session.register(".") == RegisterContent(text: "bye", wise: .character))
@@ -471,5 +511,23 @@ precondition(sim.caret == 5)
 precondition(sim.state.session.lastFind ==
     VimState.FindMemory(character: "c", direction: .forward, beforeCharacter: false))
 precondition(sim.settleFailures == 0 && sim.bells == 0)
+
+// Block cursor: drawn after commands, walks with the caret, and collapses
+// on insert entry so typing inserts instead of overwriting.
+sim = Sim(text: "abc", caret: 0, profile: axProfile)
+sim.type("l")
+precondition(sim.selection == 1..<2)                       // block on 'b'
+precondition(sim.state.field.cursor == 1..<2)
+sim.type("iZ")
+sim.feed("<Esc>")
+precondition(sim.text == "aZbc")                           // inserted, not overwritten
+precondition(sim.state.field.cursor == 1..<2)              // redrawn after Esc
+precondition(sim.settleFailures == 0 && sim.bells == 0)
+
+// At end of line the cursor has nothing to cover: bare caret.
+sim = Sim(text: "hi", caret: 0, profile: axProfile)
+sim.type("$")
+precondition(sim.selection == 2..<2)
+precondition(sim.state.field.cursor == nil)
 
 print("Vim engine tests passed")

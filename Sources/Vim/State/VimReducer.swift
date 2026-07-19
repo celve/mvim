@@ -15,6 +15,9 @@ public enum VimReducer {
         switch effect {
         case .setMode(let mode):
             next.field.mode = mode
+            if case .normal = mode {} else {
+                next.field.cursor = nil   // the block never survives leaving Normal
+            }
         case .setInsertStart(let offset):
             next.field.insertStart = offset
         case .searched(let memory):
@@ -29,6 +32,8 @@ public enum VimReducer {
             next.field.lastVisual = memory
         case .setMark(let name, let point):
             next.field.marks[name] = point
+        case .setCursor(let range):
+            next.field.cursor = range
         case .deleted(let register, let payload, let wise):
             guard let content = resolve(payload, wise: wise, captures: captures) else { break }
             write(content, to: register, yank: false, in: &next.session.registers)

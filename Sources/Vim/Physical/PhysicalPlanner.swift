@@ -23,6 +23,13 @@ public enum PhysicalPlanner {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
+        // The field shows our block cursor: physically collapse it to its
+        // gap before the plan acts, so no step ever operates on the
+        // presentation selection. Empty and bell-only plans skip this —
+        // they touch nothing and the cursor stays up.
+        if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
+            steps.append(.setSelection(gap..<gap))
+        }
         for step in logical.steps {
             guard let lowered = lower(step, context: &context, profile: profile) else {
                 return .rejected
@@ -30,6 +37,13 @@ public enum PhysicalPlanner {
             steps.append(contentsOf: lowered)
         }
         return PhysicalPlan(steps: steps)
+    }
+
+    private static func isBellOnly(_ logical: LogicalPlan) -> Bool {
+        logical.steps.allSatisfy { step in
+            if case .bell = step { return true }
+            return false
+        }
     }
 }
 
@@ -47,10 +61,20 @@ private extension PhysicalPlanner {
         var anchor: Int?
         var nextSlot = 0
 
+        /// Non-nil when the snapshot's selection is our drawn block cursor:
+        /// the gap to collapse to before the plan acts.
+        var cursorCollapse: Int?
+
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
             anchor = snapshot.anchor
+            if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
+                // The engine plans from the collapsed gap, not the block.
+                let gap = cursor.lowerBound
+                selection = gap..<gap
+                cursorCollapse = gap
+            }
         }
 
         var model: TextModel? { text.map(TextModel.init) }
@@ -132,9 +156,28 @@ private extension PhysicalPlanner {
             }
         case .commit(let effect):
             return [.commit(effect)]
+        case .renderCursor:
+            return lowerRenderCursor(context: &context, profile: profile)
         case .bell:
             return [.bell]
         }
+    }
+
+    /// Best-effort by design: a cursor that cannot be drawn is a bare
+    /// caret, never a bell. No settle — cosmetic divergence must not abort
+    /// the plan.
+    static func lowerRenderCursor(context: inout Context, profile: CapabilityProfile) -> [PhysicalStep]? {
+        guard profile.has(.writeSelection),
+              let model = context.model,
+              let gap = context.caret else {
+            return [.commit(.setCursor(nil))]
+        }
+        let end = model.advance(gap, byGraphemes: 1)
+        guard end > gap, gap < model.lineEnd(of: gap) else {
+            return [.commit(.setCursor(nil))]   // end of line/text: nothing to cover
+        }
+        context.selection = gap..<end
+        return [.setSelection(gap..<end), .commit(.setCursor(gap..<end))]
     }
 }
 

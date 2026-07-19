@@ -27,6 +27,10 @@ public enum VimEffect: Equatable, Sendable {
     /// The `gv` memory, recorded when Visual mode is left.
     case setLastVisual(VisualMemory)
 
+    /// The drawn Normal-mode block cursor (nil = bare caret). Authored by
+    /// the physical planner's `renderCursor` lowering.
+    case setCursor(Range<Int>?)
+
     /// Register routing (unnamed mirror, delete ring, uppercase append) is
     /// the reducer's; the effect carries only what the user named.
     case deleted(into: Register?, content: TextPayload, wise: Wise)

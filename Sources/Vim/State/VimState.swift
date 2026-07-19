@@ -103,16 +103,24 @@ public extension VimState {
         /// The last Visual selection, for `gv`.
         public var lastVisual: VisualMemory?
 
+        /// The drawn Normal-mode block cursor — the fact macOS cannot
+        /// represent: the field's current selection is a *cursor*, not a
+        /// selection. nil when none is drawn (Insert/Visual, blind fields,
+        /// end-of-line).
+        public var cursor: Range<Int>?
+
         public init(
             mode: Mode = .normal,
             insertStart: Int? = nil,
             marks: [Character: MarkPoint] = [:],
-            lastVisual: VisualMemory? = nil
+            lastVisual: VisualMemory? = nil,
+            cursor: Range<Int>? = nil
         ) {
             self.mode = mode
             self.insertStart = insertStart
             self.marks = marks
             self.lastVisual = lastVisual
+            self.cursor = cursor
         }
     }
 }
