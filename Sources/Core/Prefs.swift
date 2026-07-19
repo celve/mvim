@@ -1,12 +1,20 @@
 import Foundation
 
+/// What vim does in one app: engage where a textual field proves itself
+/// (`auto`), never (`off`), or bind the app itself when no accessibility
+/// surface exists (`forced` — lane-C chords, explicit opt-in only).
+public enum VimPolicy: String, CaseIterable, Sendable {
+    case auto, off, forced
+}
+
 /// The neutral Prefs store — LoomCore's UserDefaults-backed configuration
-/// surface. First resident: the per-app vim-mode disable list, consulted by
-/// the runtime at *binding* time (never per keystroke).
+/// surface. First resident: the per-app vim policy, consulted by the
+/// runtime at *binding* time (never per keystroke).
 public enum Prefs {
     static let disabledIDsKey = "disabledBundleIDs"
     static let disabledPrefixesKey = "disabledBundleIDPrefixes"
     static let enabledIDsKey = "enabledBundleIDs"
+    static let forcedIDsKey = "forcedBundleIDs"
 
     /// Apps where engaging vim is destructive by default: terminals (Esc
     /// must reach the shell, or the real vim running inside) and editors
@@ -36,7 +44,31 @@ public enum Prefs {
             disabledIDsKey: seedDisabledIDs,
             disabledPrefixesKey: seedDisabledPrefixes,
             enabledIDsKey: [String](),
+            forcedIDsKey: [String](),   // forced is opt-in: never seeded
         ])
+    }
+
+    public static func policy(for bundleID: String) -> VimPolicy {
+        if stringArray(forcedIDsKey).contains(bundleID) { return .forced }
+        return isDisabled(bundleID: bundleID) ? .off : .auto
+    }
+
+    /// Invariant: `setPolicy(p, for: id)` ⟹ `policy(for: id) == p` — even
+    /// for seeded or prefix-family apps (the picker must never show a lie).
+    public static func setPolicy(_ policy: VimPolicy, for bundleID: String) {
+        var forced = stringArray(forcedIDsKey)
+        switch policy {
+        case .forced:
+            if !forced.contains(bundleID) { forced.append(bundleID) }
+            setDisabled(false, for: bundleID)
+        case .off:
+            forced.removeAll { $0 == bundleID }
+            setDisabled(true, for: bundleID)
+        case .auto:
+            forced.removeAll { $0 == bundleID }
+            setDisabled(false, for: bundleID)
+        }
+        UserDefaults.standard.set(forced, forKey: forcedIDsKey)
     }
 
     public static func isDisabled(bundleID: String) -> Bool {

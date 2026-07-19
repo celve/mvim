@@ -179,6 +179,51 @@ public enum AX {
         return AXUIElementGetPid(element, &processID) == .success ? processID : nil
     }
 
+    /// The frontmost on-screen layer-0 window owned by `pid`
+    /// (`CGWindowListCopyWindowInfo` is z-ordered front→back across all
+    /// displays). Bounds are global CG top-left coordinates. No Screen
+    /// Recording needed: number/bounds/owner are ungated (only names are).
+    public static func frontWindow(of pid: pid_t) -> (id: CGWindowID, bounds: CGRect)? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let infos = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        for info in infos {
+            guard let owner = info[kCGWindowOwnerPID as String] as? pid_t, owner == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let number = info[kCGWindowNumber as String] as? NSNumber else { continue }
+            // NSNumber → UInt32 must go through truncating; `as? CGWindowID`
+            // bridging is unreliable.
+            let bounds = (info[kCGWindowBounds as String] as? NSDictionary)
+                .flatMap { CGRect(dictionaryRepresentation: $0) } ?? .zero
+            return (CGWindowID(truncating: number), bounds)
+        }
+        return nil
+    }
+
+    /// Whether `bounds` covers a whole display. Compared in the global CG
+    /// top-left space (`CGDisplayBounds`) — never `NSScreen.frame`, which is
+    /// flipped.
+    public static func coversFullScreen(_ bounds: CGRect) -> Bool {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return false }
+        var displays = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetActiveDisplayList(count, &displays, &count) == .success else { return false }
+        return displays.contains { display in
+            let frame = CGDisplayBounds(display)
+            return abs(frame.minX - bounds.minX) <= 1 && abs(frame.minY - bounds.minY) <= 1
+                && abs(frame.width - bounds.width) <= 1 && abs(frame.height - bounds.height) <= 1
+        }
+    }
+
+    /// Title of `pid`'s AX-focused window; nil for AX-silent or untitled
+    /// apps (callers tolerate).
+    public static func focusedWindowTitle(of pid: pid_t) -> String? {
+        let app = AXUIElementCreateApplication(pid)
+        guard let window = copyElement(app, kAXFocusedWindowAttribute) else { return nil }
+        return copyString(window, kAXTitleAttribute)
+    }
+
     /// PID of the frontmost real (activatable) on-screen window, skipping
     /// our own process and Window-Server chrome.
     private static func topmostWindowOwnerPID() -> pid_t? {
