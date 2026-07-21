@@ -65,10 +65,14 @@ public enum AX {
 
     /// The current selection range (caret = `location` when `length == 0`).
     /// UTF-16 units.
+    ///
+    /// The type-ID check precedes the cast — the `copyElement` pattern. An
+    /// app answering this attribute with anything that is not an `AXValue`
+    /// would otherwise trap in the AX read path.
     public static func selectedRange(of element: AXUIElement) -> CFRange? {
         var ref: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
-              let value = ref else { return nil }
+              let value = ref, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var range = CFRange()
         return AXValueGetValue((value as! AXValue), .cfRange, &range) ? range : nil
     }
@@ -118,6 +122,63 @@ public enum AX {
             subrole: list[1] as? String,
             enabled: list[2] as? Bool ?? true
         )
+    }
+
+    // MARK: - Batched reads
+
+    /// Several attributes from ONE round trip. Positional: `index` addresses
+    /// `names[index]` as passed to `attributes(_:of:)`.
+    ///
+    /// Failed slots arrive as `AXValue` error markers (no `.stopOnError`) and
+    /// the typed accessors resolve them to nil — the same verdict a failed
+    /// serial read gives, so per-attribute semantics are unchanged and
+    /// `!= nil` stays a valid capability test.
+    public struct AttributeBatch {
+        private let slots: [AnyObject]
+
+        fileprivate init(slots: [AnyObject]) { self.slots = slots }
+
+        public func string(_ index: Int) -> String? { slot(index) as? String }
+
+        public func int(_ index: Int) -> Int? { slot(index) as? Int }
+
+        /// Type-ID checked before the cast — the `copyElement` pattern. Error
+        /// markers *are* `AXValue`s, so the `AXValueGetValue` result is what
+        /// rejects them; the type check guards the case where an app answers
+        /// with something that is not an `AXValue` at all, which would trap.
+        public func range(_ index: Int) -> CFRange? {
+            guard let slot = slot(index), CFGetTypeID(slot) == AXValueGetTypeID() else { return nil }
+            var range = CFRange()
+            return AXValueGetValue((slot as! AXValue), .cfRange, &range) ? range : nil
+        }
+
+        private func slot(_ index: Int) -> AnyObject? {
+            index < slots.count ? slots[index] : nil
+        }
+    }
+
+    /// Read `names` in one IPC, falling back to serial reads when the app
+    /// cannot service a multi-read.
+    ///
+    /// The fallback is load-bearing, not defensive dressing. Electron and
+    /// Java AX hosts implement `CopyMultipleAttributeValues` inconsistently,
+    /// and a whole-call failure resolving to empty slots would tell
+    /// `FieldProber` the field has no capabilities at all — demoting a fully
+    /// drivable field to the blind lane for as long as the binding lives. One
+    /// recovery policy here keeps every call site free of its own.
+    public static func attributes(_ names: [String], of element: AXUIElement) -> AttributeBatch {
+        var values: CFArray?
+        if AXUIElementCopyMultipleAttributeValues(
+            element, names as CFArray, AXCopyMultipleAttributeOptions(), &values
+        ) == .success, let list = values as? [AnyObject], list.count == names.count {
+            return AttributeBatch(slots: list)
+        }
+        return AttributeBatch(slots: names.map { name -> AnyObject in
+            var ref: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &ref) == .success,
+                  let value = ref else { return NSNull() }
+            return value
+        })
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)

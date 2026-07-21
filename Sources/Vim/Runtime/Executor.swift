@@ -157,19 +157,42 @@ public final class Executor {
     }
 
     /// Bounded convergence poll against the planner's prediction.
+    ///
+    /// One IPC per poll: the attribute list is built from what the
+    /// expectation actually asks about, so a selection-only settle never
+    /// reads length. `kAXValue` deliberately stays OUT of the batch — it is
+    /// the rare fallback for an element that claimed `readLength` and then
+    /// answered nil, and fetching it every poll would marshal the entire
+    /// document 25 times per settle.
     private func settle(_ expectation: Expectation, on element: AXUIElement) -> Bool {
+        var names: [String] = []
+        var selectionSlot: Int?
+        var lengthSlot: Int?
+        if expectation.selection != nil {
+            selectionSlot = names.count
+            names.append(kAXSelectedTextRangeAttribute)
+        }
+        if expectation.length != nil {
+            lengthSlot = names.count
+            names.append(kAXNumberOfCharactersAttribute)
+        }
+        // An expectation that predicts nothing is already met — and must not
+        // spend a round trip discovering that.
+        guard !names.isEmpty else { return true }
+
         let deadline = Date().addingTimeInterval(0.25)
         while true {
             var converged = true
-            if let expected = expectation.selection {
-                if let range = AX.selectedRange(of: element) {
+            let reads = AX.attributes(names, of: element)
+            if let expected = expectation.selection, let slot = selectionSlot {
+                if let range = reads.range(slot) {
                     converged = converged && (range.location..<(range.location + range.length)) == expected
                 } else {
                     converged = false
                 }
             }
-            if let expectedLength = expectation.length {
-                let length = AX.length(of: element) ?? AX.value(of: element).map { $0.utf16.count }
+            if let expectedLength = expectation.length, let slot = lengthSlot {
+                let length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
                 converged = converged && length == expectedLength
             }
             if converged { return true }

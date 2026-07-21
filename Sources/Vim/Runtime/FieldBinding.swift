@@ -36,12 +36,21 @@ public struct CapabilityReport: Equatable, Sendable {
 /// corrected by `LearnedPriors`, the lazy write probe's result cache
 /// (real commands are the probe; settle verdicts are its readings).
 public enum FieldProber {
+    /// Three IPCs, not six: the four read trials ride one batch, and the two
+    /// settable flags use a different API (`AXUIElementIsAttributeSettable`)
+    /// that has no multi-attribute form.
     public static func probe(_ element: AXUIElement) -> CapabilityProfile {
         var available: Set<Capability> = []
-        if AX.value(of: element) != nil { available.insert(.readText) }
-        if AX.selectedRange(of: element) != nil { available.insert(.readCaret) }
-        if AX.length(of: element) != nil { available.insert(.readLength) }
-        if AX.selectedText(of: element) != nil { available.insert(.readSelectedText) }
+        let reads = AX.attributes([
+            kAXValueAttribute,               // 0
+            kAXSelectedTextRangeAttribute,   // 1
+            kAXNumberOfCharactersAttribute,  // 2
+            kAXSelectedTextAttribute,        // 3
+        ], of: element)
+        if reads.string(0) != nil { available.insert(.readText) }
+        if reads.range(1) != nil { available.insert(.readCaret) }
+        if reads.int(2) != nil { available.insert(.readLength) }
+        if reads.string(3) != nil { available.insert(.readSelectedText) }
         if AX.rangeSettable(element) { available.insert(.writeSelection) }
         if AX.isInsertable(element) { available.insert(.insertText) }
         return CapabilityProfile(available: available)
@@ -154,12 +163,21 @@ public enum Snapshotter {
         anchor: Int?,
         cursor: Range<Int>?
     ) -> FieldSnapshot {
-        let text = capabilities.has(.readText) ? AX.value(of: element) : nil
+        // One IPC for the whole volatile half. The capabilities gate which
+        // slots are *used*, not which are fetched — a batch costs the same
+        // round trip either way, and branching the attribute list per profile
+        // would buy nothing.
+        let reads = AX.attributes([
+            kAXValueAttribute,               // 0
+            kAXSelectedTextRangeAttribute,   // 1
+            kAXNumberOfCharactersAttribute,  // 2
+        ], of: element)
+        let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
-        if capabilities.has(.readCaret), let range = AX.selectedRange(of: element) {
+        if capabilities.has(.readCaret), let range = reads.range(1) {
             selection = range.location..<(range.location + range.length)
         }
-        let length = capabilities.has(.readLength) ? AX.length(of: element) : nil
+        let length = capabilities.has(.readLength) ? reads.int(2) : nil
         // The drawn cursor counts only while it still IS the selection;
         // otherwise the selection is the user's.
         let stampedCursor = (cursor != nil && !cursor!.isEmpty && cursor == selection) ? cursor : nil

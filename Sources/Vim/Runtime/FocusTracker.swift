@@ -166,7 +166,12 @@ public final class FocusTracker {
             isOverlay: bound.isOverlay,
             isForced: false,
             windowID: bound.windowID,
-            window: bound.window,
+            // Recomputed, never carried: this method exists to apply a menu
+            // override, and toggling `fieldIsSession` off makes the fresh
+            // profile scoped while the held window is still nil — carrying it
+            // would leave `sameDocument` unreachable until the next full
+            // resolve.
+            window: Self.documentWindow(of: bound.element, profile: resolved.profile),
             bundleID: identity.bundleID,
             appVersion: identity.version,
             role: gate.role,
@@ -198,7 +203,7 @@ public final class FocusTracker {
             isOverlay: current.isOverlay,
             isForced: false,
             windowID: current.windowID,
-            window: AX.window(of: element),
+            window: Self.documentWindow(of: element, profile: resolved.profile),
             bundleID: identity.bundleID,
             appVersion: identity.version,
             role: gate.role,
@@ -263,7 +268,7 @@ public final class FocusTracker {
             isOverlay: isOverlay,
             isForced: false,
             windowID: 0,
-            window: AX.window(of: element),
+            window: Self.documentWindow(of: element, profile: resolved.profile),
             bundleID: identity.bundleID,
             appVersion: identity.version,
             role: gate.role,
@@ -278,6 +283,35 @@ public final class FocusTracker {
         let version = app.bundleURL.flatMap(Bundle.init(url:))?
             .infoDictionary?["CFBundleShortVersionString"] as? String
         return (app.bundleIdentifier, version)
+    }
+
+    /// Has the app explicitly denied `fieldIsSession` — i.e. told us its
+    /// elements are not documents?
+    ///
+    /// `has()` cannot distinguish "resolved and denied" from "never
+    /// resolved" (an empty profile answers false to everything), and only an
+    /// explicit denial carries the claim. **The single definition on
+    /// purpose:** `transition` uses it to decide whether to consult `window`
+    /// and `documentWindow` uses it to decide whether to resolve one. Were
+    /// they to drift, the window would be nil in exactly the case that needs
+    /// it, and `sameDocument` would become unreachable.
+    private static func deniesFieldIsSession(_ profile: CapabilityProfile) -> Bool {
+        profile.statuses[.fieldIsSession] == .unavailable
+    }
+
+    /// The `sameDocument` window, resolved only when it can actually be
+    /// consulted — `transition` short-circuits on the denial above before it
+    /// ever dereferences `window`. Everywhere else these one-to-two round
+    /// trips bought a value nothing read.
+    ///
+    /// Resolved eagerly (at publish) rather than lazily (at transition) on
+    /// purpose: by transition time the outgoing element may already be
+    /// destroyed, and a nil there would read as "different document" and end
+    /// the very block-editor session `handleAXNotification` exists to keep.
+    private static func documentWindow(
+        of element: AXUIElement, profile: CapabilityProfile
+    ) -> AXUIElement? {
+        deniesFieldIsSession(profile) ? AX.window(of: element) : nil
     }
 
     /// The forced fallback: no engageable element anywhere, but the
@@ -359,12 +393,11 @@ public final class FocusTracker {
                 : .newSession
         }
         if CFEqual(old.element, new.element) { return .sameElement }
-        // `has()` cannot distinguish "resolved and denied" from "never
-        // resolved" (an empty profile answers false to everything), and only
-        // an explicit denial means the app told us its elements are not
-        // documents. Both sides must say so.
+        // Both sides must have denied `fieldIsSession` — see the predicate
+        // for why an explicit denial, not `has()`, is the test. It leads the
+        // guard because it also gates whether `window` was resolved at all.
         let scoped = { (binding: Binding) in
-            binding.capabilities.statuses[.fieldIsSession] == .unavailable
+            Self.deniesFieldIsSession(binding.capabilities)
         }
         guard scoped(old), scoped(new),
               old.pid == new.pid,
