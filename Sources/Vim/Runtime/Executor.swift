@@ -146,6 +146,12 @@ public final class Executor {
             NSSound.beep()
             return false
 
+        case .softSettle(let expectation):
+            // Same poll — a following AX read still sees the blind action land
+            // — but a timeout is not a failure: proceed, no bell, never abort.
+            _ = settle(expectation, on: element)
+            return true
+
         case .commit(let effect):
             commit(effect, state: &state)
             return true

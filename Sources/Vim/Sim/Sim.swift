@@ -234,6 +234,13 @@ private extension Sim {
                     return false   // abort the remainder, like the real executor
                 }
 
+            case .softSettle:
+                // Best-effort barrier: never aborts. In this synchronous host
+                // there is nothing async to wait for, and the blind step it
+                // follows is an unsupported no-op, so the field won't match the
+                // prediction — which is exactly why a soft settle must proceed.
+                break
+
             case .commit(let effect):
                 state = VimReducer.reduce(state, effect, captures: captures)
 

@@ -32,8 +32,17 @@ public enum PhysicalStep: Equatable, Sendable {
     case captureSelectedText(into: CaptureSlot)
 
     /// Wait for the field to converge on the planner's prediction; on
-    /// timeout, abort the rest of the plan and ring.
+    /// timeout, abort the rest of the plan and ring. Follows an **AX write** —
+    /// non-convergence means the write silently didn't take.
     case settle(Expectation)
+
+    /// The best-effort twin of `settle`, following a **blind** action
+    /// (synthesized keys). It polls the same way — so a later step that reads
+    /// AX state still sees the action land — but on timeout it **proceeds**
+    /// rather than aborting, and never rings. A blind action's exact result
+    /// was never ours to guarantee, so a mismatch is not a failure: it must
+    /// not take down the mode change that follows a blind `ciw`/`o`/`s`.
+    case softSettle(Expectation)
 
     /// Hand an effect to the reducer (capture slots resolved to literals).
     case commit(VimEffect)
@@ -53,7 +62,7 @@ public extension PhysicalStep {
             return true
         case .press(let chord, _):
             return chord.mutatesText
-        case .setSelection, .clipboardCopy, .captureSelectedText, .settle, .commit, .bell:
+        case .setSelection, .clipboardCopy, .captureSelectedText, .settle, .softSettle, .commit, .bell:
             return false
         }
     }

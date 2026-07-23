@@ -133,10 +133,18 @@ private extension PhysicalPlanner {
     }
 
     /// One settle per state-changing logical step, built from the prediction.
-    static func settle(_ context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
+    ///
+    /// `hard` follows an AX write: non-convergence aborts and rings. A blind
+    /// action passes `hard: false` — the poll still runs as a barrier, but a
+    /// mismatch is not a failure (the app, not us, decided what the keystroke
+    /// did), so it proceeds instead of aborting the mode change behind it.
+    static func settle(
+        _ context: Context, profile: CapabilityProfile, hard: Bool = true
+    ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
         let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
-        return [.settle(Expectation(selection: selection, length: length))]
+        let expectation = Expectation(selection: selection, length: length)
+        return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
 }
 
@@ -560,7 +568,9 @@ private extension PhysicalPlanner {
                 ? [.replaceSelection("")]
                 : [.press(.deleteBack, count: 1)]
             context.applyEdit(range: selection, replacement: "")
-            steps += settle(context, profile: profile)
+            // Blind (press) delete: soft — a mismatch must not abort the
+            // `setMode(.insert)` that follows a `ciw`/`s`/`cc`.
+            steps += settle(context, profile: profile, hard: profile.has(.insertText))
             if !blackhole {
                 steps.append(.commit(.deleted(into: register, content: .literal(content), wise: wise)))
             }
@@ -614,7 +624,9 @@ private extension PhysicalPlanner {
             : .typeText(replacement)
         if let selection = context.selection, context.text != nil {
             context.applyEdit(range: selection, replacement: replacement)
-            return [action] + settle(context, profile: profile)
+            // Blind (typeText) over-type: soft, so a mismatch does not abort
+            // the `setMode(.insert)` behind an `o`/`O`/`i`.
+            return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
         }
         context.invalidate()
         return [action]
@@ -661,7 +673,9 @@ private extension PhysicalPlanner {
             ? .replaceSelection(transformed)
             : .typeText(transformed)
         context.applyEdit(range: selection, replacement: transformed)
-        return [action] + settle(context, profile: profile)
+        // Blind (typeText) transform: soft. The poll still lets the following
+        // `collapseSelection` land its caret on a settled field.
+        return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
     }
 
     static let indentUnit = "    "
@@ -706,7 +720,8 @@ private extension PhysicalPlanner {
         context.selection = range
         steps.append(profile.has(.insertText) ? .replaceSelection(joined) : .typeText(joined))
         context.applyEdit(range: range, replacement: joined)
-        return steps + settle(context, profile: profile)
+        // Settle follows the edit; blind (typeText) join is soft.
+        return steps + settle(context, profile: profile, hard: profile.has(.insertText))
     }
 }
 
@@ -862,7 +877,8 @@ private extension PhysicalPlanner {
             : .clipboardInsert(text)
         if let selection = context.selection, context.text != nil {
             context.applyEdit(range: selection, replacement: text)
-            return [action] + settle(context, profile: profile)
+            // Blind (paste) insert is async: soft, so it never aborts what follows.
+            return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
         }
         context.invalidate()
         return [action]

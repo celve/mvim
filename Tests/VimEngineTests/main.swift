@@ -257,6 +257,12 @@ let noCursorProfile = CapabilityProfile(available: [
 let blockProfile = CapabilityProfile(available: [
     .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
 ])
+/// The reported ChatGPT config: the user turned OFF Replace text (insertText)
+/// only. Selection is still exact (writeSelection), so the SELECT is an AX
+/// write (hard settle) and only the DELETE rides the blind lane (soft settle).
+let noInsertProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .wholeDocument,
+])
 
 func physical(
     _ keys: String,
@@ -287,9 +293,13 @@ let ciwB = physical("ciw", text: "say hello world", caret: 6, profile: readProfi
 precondition(ciwB.steps == [
     .press(.left, count: 2),
     .press(.selectRight, count: 5),
+    // Blind SELECT stays a hard settle: if the range mispredicts, aborting is
+    // safer than letting the delete hit the wrong text.
     .settle(Expectation(selection: 4..<9, length: 15)),
     .press(.deleteBack, count: 1),
-    .settle(Expectation(selection: 4..<4, length: 10)),
+    // Blind DELETE is soft: a mismatch here must NOT abort the setMode below —
+    // this is the ChatGPT "ciw won't enter insert" bug.
+    .softSettle(Expectation(selection: 4..<4, length: 10)),
     .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
     .commit(.setMode(.insert)),
     .commit(.setInsertStart(4)),
@@ -305,6 +315,43 @@ precondition(ciwC.steps == [
     .commit(.setInsertStart(nil)),
 ])
 precondition(ciwC.mutatesText)
+
+// The reported bug, pinned. Replace text off but selection still exact: the
+// SELECT is an AX write (hard settle — a wrong range must abort before the
+// delete), the DELETE is blind (soft settle — its mismatch must NOT abort the
+// insert). Before the fix the delete's hard settle failed in ChatGPT and took
+// setMode(.insert) down with it.
+let ciwNoInsert = physical("ciw", text: "say hello world", caret: 6, profile: noInsertProfile)
+precondition(ciwNoInsert.steps == [
+    .setSelection(4..<9),
+    .settle(Expectation(selection: 4..<9, length: 15)),
+    .press(.deleteBack, count: 1),
+    .softSettle(Expectation(selection: 4..<4, length: 10)),
+    .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
+    .commit(.setMode(.insert)),
+    .commit(.setInsertStart(4)),
+])
+// The whole point: the plan still reaches insert mode on the blind lane, and
+// the only settle that can abort (the AX select) is the one that's safe to.
+precondition(ciwNoInsert.steps.last == .commit(.setInsertStart(4)))
+precondition(ciwNoInsert.steps.contains(.commit(.setMode(.insert))))
+precondition(!ciwNoInsert.steps.contains(.settle(Expectation(selection: 4..<4, length: 10))),
+             "the blind delete must be a soft settle, never a hard one")
+
+// `o` opens a line and enters insert on the blind lane too: the typed newline
+// is a soft settle, so a mismatch cannot swallow the mode change.
+let oNoInsert = physical("o", text: "hello", caret: 0, profile: noInsertProfile)
+precondition(oNoInsert.steps.contains(.softSettle(Expectation(selection: 6..<6, length: 6))),
+             "blind open-line must soft-settle the typed newline")
+precondition(oNoInsert.steps.contains(.commit(.setMode(.insert))))
+
+// Contrast: with insertText the delete is an exact AX write, so it stays a HARD
+// settle — the fix touches only the blind lane.
+let ciwAX = physical("ciw", text: "say hello world", caret: 6, profile: noCursorProfile)
+precondition(ciwAX.steps.contains(.replaceSelection("")))
+precondition(ciwAX.steps.contains(.settle(Expectation(selection: 4..<4, length: 10))))
+precondition(!ciwAX.steps.contains(.softSettle(Expectation(selection: 4..<4, length: 10))),
+             "the AX delete path must remain a hard settle")
 
 // Blind delete IS the cut: fire-and-forget, the register holds a marker.
 precondition(physical("dd", profile: blindProfile).steps == [
