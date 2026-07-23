@@ -13,10 +13,16 @@ all: build
 # Invariant: impure code lives ONLY under Sources/Vim/Runtime/.
 VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 
+# Sources/Core is NOT swept: most of it is UserDefaults- or AX-bound. Files are
+# listed here one at a time, and only when they are pure enough to link against
+# nothing but the stdlib — Surface.swift holds the rung algebra and precedence
+# walks, which are the part of per-surface config worth pinning.
+CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift
+
 # Permission-free unit tests for the pure Vim engine. No Xcode/app build, no Accessibility grant.
 test:
 	@mkdir -p $(DERIVED)
-	@swiftc -o $(DERIVED)/vim-engine-test $(VIM_PURE) Tests/VimEngineTests/main.swift
+	@swiftc -o $(DERIVED)/vim-engine-test $(VIM_PURE) $(CORE_PURE) Tests/VimEngineTests/main.swift
 	@$(DERIVED)/vim-engine-test
 
 gen:

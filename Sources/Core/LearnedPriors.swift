@@ -20,6 +20,19 @@ import Foundation
 /// degrades to an empty store, i.e. claims trusted as before. LoomCore
 /// cannot see the engine's `Capability` type, so the store speaks its raw
 /// strings; the runtime converts.
+///
+/// **Unwired, and its identity is stale.** Nothing calls `demoted`,
+/// `recordStrike`, or `recordSuccess`; `Executor.lastRun` collects the
+/// evidence and nothing reads it. When that wiring lands, replace
+/// `(bundleID, version, role)` with a `Surface` rung — inside a browser,
+/// `role` cannot tell chrome from web content, so a demotion learned in a
+/// page would silently apply to the app's own search box. Write at the
+/// **role** rung specifically, never the identifier one: a key per individual
+/// input would never accumulate `strikesToCommit`. And an explicit user entry
+/// must silence the learner for that atom at that scope and below, or a user's
+/// `.on` loses to an inference and clearing an override stops restoring
+/// auto-detection. The store is empty in the field until wiring, so re-keying
+/// then costs exactly what it costs now.
 public enum LearnedPriors {
     static let storeKey = "learnedCapabilityPriors"
     static let strikesToCommit = 2

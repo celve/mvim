@@ -106,21 +106,51 @@ public enum AX {
         public let role: String?
         public let subrole: String?
         public let enabled: Bool
+
+        /// A name for this one field, when the app or page supplies one:
+        /// `AXDOMIdentifier` in web content, `AXIdentifier` natively. Lets
+        /// capability config address a single field rather than every field of
+        /// its role. Empty strings are nil — a web element with no `id`
+        /// answers `""`, which names nothing.
+        public let identifier: String?
+
+        /// Whether this element lives in web content, so only web fields pay
+        /// the parent walk that finds their origin.
+        ///
+        /// The marker is `AXDOMIdentifier`'s *presence*, distinct from its
+        /// value: a native field does not list the attribute at all, while a
+        /// web input with no `id` lists it holding `""`. Confirmed against Dia
+        /// — its native command bar omits it; a GitHub `<input>` lists it, its
+        /// enclosing web area lists it empty. `""` therefore reads as web, and
+        /// the batch resolves an absent attribute to nil and a present-empty
+        /// one to `""`, which is exactly the distinction.
+        public let isWebElement: Bool
     }
 
     public static func gateAttributes(of element: AXUIElement) -> GateAttributes {
-        let attributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXEnabledAttribute] as CFArray
-        var values: CFArray?
-        // Without .stopOnError, failed slots come back as AXValue error
-        // markers; the casts turn them into nil → the per-attribute defaults.
-        guard AXUIElementCopyMultipleAttributeValues(element, attributes, AXCopyMultipleAttributeOptions(), &values) == .success,
-              let list = values as? [AnyObject], list.count == 3 else {
-            return GateAttributes(role: nil, subrole: nil, enabled: true)
-        }
+        // Through the batch helper rather than a bare multi-read, so this
+        // inherits the serial fallback — Electron hosts are exactly the case it
+        // exists for, and they are exactly the hosts that carry web content.
+        let reads = attributes([
+            kAXRoleAttribute,     // 0
+            kAXSubroleAttribute,  // 1
+            kAXEnabledAttribute,  // 2
+            "AXDOMIdentifier",    // 3
+            "AXIdentifier",       // 4
+        ], of: element)
+        let domIdentifier = reads.string(3)
+        let identifier = [domIdentifier, reads.string(4)]
+            .compactMap { $0 }
+            .first { !$0.isEmpty }
         return GateAttributes(
-            role: list[0] as? String,
-            subrole: list[1] as? String,
-            enabled: list[2] as? Bool ?? true
+            role: reads.string(0),
+            subrole: reads.string(1),
+            // Absent or unreadable reads permissively as enabled, as before:
+            // a field we cannot ask about should not be silently un-engageable.
+            enabled: reads.bool(2) ?? true,
+            identifier: identifier,
+            // Presence, not non-emptiness: `""` is a web input without an id.
+            isWebElement: domIdentifier != nil
         )
     }
 
@@ -142,6 +172,8 @@ public enum AX {
 
         public func int(_ index: Int) -> Int? { slot(index) as? Int }
 
+        public func bool(_ index: Int) -> Bool? { slot(index) as? Bool }
+
         /// Type-ID checked before the cast — the `copyElement` pattern. Error
         /// markers *are* `AXValue`s, so the `AXValueGetValue` result is what
         /// rejects them; the type check guards the case where an app answers
@@ -150,6 +182,19 @@ public enum AX {
             guard let slot = slot(index), CFGetTypeID(slot) == AXValueGetTypeID() else { return nil }
             var range = CFRange()
             return AXValueGetValue((slot as! AXValue), .cfRange, &range) ? range : nil
+        }
+
+        /// Type-ID checked before the cast, for the same reason `range(_:)` is:
+        /// an app answering with a non-element would trap the force-cast.
+        public func element(_ index: Int) -> AXUIElement? {
+            guard let slot = slot(index), CFGetTypeID(slot) == AXUIElementGetTypeID() else { return nil }
+            return (slot as! AXUIElement)
+        }
+
+        /// `AXURL` answers an `NSURL`, not a `String` — `string(_:)` is an
+        /// unguarded `as? String` and would silently return nil for it.
+        public func url(_ index: Int) -> String? {
+            (slot(index) as? NSURL)?.absoluteString
         }
 
         private func slot(_ index: Int) -> AnyObject? {
@@ -179,6 +224,59 @@ public enum AX {
                   let value = ref else { return NSNull() }
             return value
         })
+    }
+
+    /// The URL of the web area enclosing `element`, or nil when there is none
+    /// — i.e. when the field is native chrome rather than page content.
+    ///
+    /// The one question `AXRole` cannot answer: a browser's own search box and
+    /// an `<input>` in the page it is showing are both `AXTextField`, and only
+    /// their ancestry tells them apart.
+    ///
+    /// **Round trips are the whole design constraint here.** Every AX read is
+    /// a synchronous Mach call bounded by `setGlobalMessagingTimeout`, so an
+    /// unbounded walk is a hang on the tap thread. Three bounds:
+    ///
+    /// - one batched read per hop (role, parent, URL together), so finding the
+    ///   web area costs no extra call to then read its URL;
+    /// - termination on `AXWindow` / `AXApplication`, which a native field
+    ///   reaches in a few hops — nothing above a window can be a web area;
+    /// - a hard `maxHops` backstop for hosts that answer neither.
+    ///
+    /// The caller gates this on `GateAttributes.isWebElement`, so a native
+    /// field never walks. The cap is a logical-depth backstop, not a time
+    /// budget: the real bound is the per-hop messaging timeout, and a hop that
+    /// times out returns no parent and stops the walk. It is set well above
+    /// observed depth — Dia sat a GitHub `<input>` seven hops under its web
+    /// area — because a field nested in a modal or a sub-frame goes deeper, and
+    /// overshooting the cap silently costs the site scoping.
+    public static func enclosingWebURL(of element: AXUIElement, maxHops: Int = 16) -> String? {
+        var current = element
+        for _ in 0..<maxHops {
+            // Exactly one round trip per level: role and URL answer "is this
+            // the web area, and what is it showing?", parent carries the walk.
+            // The focused element itself is a text field, never a web area, so
+            // the first iteration's role check costs nothing it would not have
+            // paid anyway to reach the parent.
+            let reads = attributes([
+                kAXRoleAttribute,    // 0
+                "AXURL",             // 1
+                kAXParentAttribute,  // 2
+            ], of: current)
+            switch reads.string(0) {
+            case "AXWebArea":
+                return reads.url(1)
+            // Nothing above a window is web content; stop before paying for the
+            // app element and the system-wide root.
+            case "AXWindow", "AXApplication":
+                return nil
+            default:
+                break
+            }
+            guard let parent = reads.element(2) else { return nil }
+            current = parent
+        }
+        return nil
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)

@@ -38,10 +38,15 @@ public final class FocusTracker {
         /// session.
         public let window: AXUIElement?
 
-        /// The learner's binding identity, resolved once at publish time.
-        public let bundleID: String?
+        /// What capability config is keyed by — the text engine behind the
+        /// field, not the app hosting it. Resolved once at publish time and
+        /// frozen: a republish resets the field to Insert, so this must never
+        /// be recomputed mid-session.
+        public let surface: Surface
+
+        /// The learner's TTL. Unused until that wiring lands; kept because an
+        /// app update is what re-opens a cached write demotion.
         public let appVersion: String?
-        public let role: String?
 
         /// Provenance behind `capabilities`, for the menu's badge rows.
         /// nil for forced bindings — empty profile, nothing resolved.
@@ -158,7 +163,8 @@ public final class FocusTracker {
             return
         }
         let identity = Self.appIdentity(for: bound.pid)
-        let resolved = FieldProber.resolve(bound.element, bundleID: identity.bundleID)
+        let surface = Self.surface(for: bound.element, gate: gate, bundleID: identity.bundleID)
+        let resolved = FieldProber.resolve(bound.element, surface: surface)
         publish(Binding(
             element: bound.element,
             pid: bound.pid,
@@ -172,9 +178,8 @@ public final class FocusTracker {
             // would leave `sameDocument` unreachable until the next full
             // resolve.
             window: Self.documentWindow(of: bound.element, profile: resolved.profile),
-            bundleID: identity.bundleID,
+            surface: surface,
             appVersion: identity.version,
-            role: gate.role,
             capabilityReport: resolved.report
         ))
     }
@@ -195,7 +200,20 @@ public final class FocusTracker {
         let gate = FieldProber.gate(element)
         guard gate.engageable else { return nil }
         let identity = Self.appIdentity(for: current.pid)
-        let resolved = FieldProber.resolve(element, bundleID: identity.bundleID)
+        // The origin is INHERITED, not walked. This is the one hot path — it
+        // runs on the block-crossing keystroke — and a parent walk per
+        // keystroke is exactly what the round-trip budget cannot absorb.
+        // Sound because retarget only survives a `.sameDocument` verdict below,
+        // which demands the same window in the same app: the page cannot have
+        // navigated out from under it. The element half is still recomputed,
+        // since that is the thing that just changed.
+        let surface = Surface(
+            bundleID: identity.bundleID,
+            origin: current.surface.origin,
+            role: gate.role,
+            identifier: gate.identifier
+        )
+        let resolved = FieldProber.resolve(element, surface: surface)
         let candidate = Binding(
             element: element,
             pid: current.pid,
@@ -204,9 +222,8 @@ public final class FocusTracker {
             isForced: false,
             windowID: current.windowID,
             window: Self.documentWindow(of: element, profile: resolved.profile),
-            bundleID: identity.bundleID,
+            surface: surface,
             appVersion: identity.version,
-            role: gate.role,
             capabilityReport: resolved.report
         )
         guard transition(from: current, to: candidate) == .sameDocument else { return nil }
@@ -260,7 +277,8 @@ public final class FocusTracker {
         let isOverlay = pid != frontPid
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
-        let resolved = FieldProber.resolve(element, bundleID: identity.bundleID)
+        let surface = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
+        let resolved = FieldProber.resolve(element, surface: surface)
         publish(Binding(
             element: element,
             pid: pid,
@@ -269,11 +287,40 @@ public final class FocusTracker {
             isForced: false,
             windowID: 0,
             window: Self.documentWindow(of: element, profile: resolved.profile),
-            bundleID: identity.bundleID,
+            surface: surface,
             appVersion: identity.version,
-            role: gate.role,
             capabilityReport: resolved.report
         ))
+    }
+
+    /// What capability config is keyed by: the app, the field's role, and —
+    /// for web content — the origin and identifier that tell a browser's own
+    /// chrome apart from the page it is showing. Both report `AXTextField`, so
+    /// role alone cannot separate them.
+    /// Costs one bounded parent walk, at publish time only — never per
+    /// keystroke, and `retarget` inherits rather than repeating it. Native
+    /// fields skip the walk: `isWebElement` is false, so a plain text field
+    /// pays nothing beyond the gate it already ran.
+    private static func surface(
+        for element: AXUIElement, gate: FieldProber.FieldGate, bundleID: String?
+    ) -> Surface {
+        let origin = gate.isWebElement
+            ? Surface.normalizedHost(host(ofURL: AX.enclosingWebURL(of: element)))
+            : nil
+        return Surface(
+            bundleID: bundleID,
+            origin: origin,
+            role: gate.role,
+            identifier: gate.identifier
+        )
+    }
+
+    /// Host of an absolute URL string, without dragging `URLComponents` into
+    /// the hot path. nil for anything that does not name one (`file://`,
+    /// `about:blank`) — those are not sites and must not become rungs.
+    private static func host(ofURL string: String?) -> String? {
+        guard let string, let url = URL(string: string) else { return nil }
+        return url.host
     }
 
     /// Resolved only at real publish sites — the same-element short-circuit
@@ -356,9 +403,10 @@ public final class FocusTracker {
             windowID: window.id,
             window: nil,   // forced identity is (pid, windowID); there is no real element
 
-            bundleID: bundleID,
+            // App-only: a forced binding has no real element, so there is no
+            // role and nothing to resolve an origin from.
+            surface: Surface(bundleID: bundleID),
             appVersion: nil,   // the learner ignores forced bindings
-            role: nil,
             capabilityReport: nil
         ))
     }
@@ -399,9 +447,15 @@ public final class FocusTracker {
         let scoped = { (binding: Binding) in
             Self.deniesFieldIsSession(binding.capabilities)
         }
+        // `site`, never the whole surface: the identifier is per-element, and a
+        // block editor hands out one element per block, so comparing whole
+        // surfaces would call every line move a new session — the exact failure
+        // `fieldIsSession` exists to prevent. Site keeps the old role check and
+        // adds the origin, so crossing from a page into the chrome (same window,
+        // same role) correctly reads as a new session.
         guard scoped(old), scoped(new),
               old.pid == new.pid,
-              old.role == new.role,
+              old.surface.site == new.surface.site,
               let oldWindow = old.window, let newWindow = new.window,
               CFEqual(oldWindow, newWindow) else { return .newSession }
         return .sameDocument

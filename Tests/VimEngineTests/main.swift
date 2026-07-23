@@ -1013,4 +1013,179 @@ precondition(!opaqueYank.contains(where: {
     return false
 }), "a synchronous AX read would beat the queued presses")
 
+// MARK: - Surface rungs and the precedence walks
+
+// The whole point: one app, two engines. Dia's own search box is native; the
+// <input> in the page it is showing is not; both are AXTextField.
+let diaChrome = Surface(bundleID: "com.dia.app", role: "AXTextField", identifier: "address-bar")
+let diaPage = Surface(bundleID: "com.dia.app", origin: "notion.so", role: "AXTextField")
+let diaPageField = Surface(
+    bundleID: "com.dia.app", origin: "notion.so", role: "AXTextField", identifier: "search-input"
+)
+
+// Narrowest first, and both element rungs coexist so an identified field still
+// inherits from "all text fields on this site".
+precondition(diaPageField.rungs == [
+    "com.dia.app|notion.so|id:search-input",
+    "com.dia.app|notion.so|role:AXTextField",
+    "com.dia.app|notion.so",
+    "web:notion.so",
+    "com.dia.app",
+])
+// No identifier: the id rung simply drops out.
+precondition(diaPage.rungs == [
+    "com.dia.app|notion.so|role:AXTextField",
+    "com.dia.app|notion.so",
+    "web:notion.so",
+    "com.dia.app",
+])
+// Native: no origin, so no site rung and no web: rung. The element rungs hang
+// off the app instead.
+precondition(diaChrome.rungs == [
+    "com.dia.app|id:address-bar",
+    "com.dia.app|role:AXTextField",
+    "com.dia.app",
+])
+// The bare bundle ID is still the last rung, which is what makes every override
+// written before surfaces existed keep resolving.
+precondition(Surface(bundleID: "notion.id").rungs == ["notion.id"])
+precondition(Surface().rungs.isEmpty)
+
+// Host normalization: case-folded, `www.` dropped, unusable hosts refused.
+precondition(Surface.normalizedHost("WWW.Notion.SO") == "notion.so")
+precondition(Surface.normalizedHost("docs.google.com") == "docs.google.com")
+precondition(Surface.normalizedHost("") == nil)
+precondition(Surface.normalizedHost(nil) == nil)
+// Subdomains are kept: these are genuinely different editors.
+precondition(Surface.normalizedHost("mail.google.com") != Surface.normalizedHost("docs.google.com"))
+
+// A `|` in a DOM id must not forge a rung boundary.
+precondition(Surface(bundleID: "a", role: "R", identifier: "x|y").rungs.first == "a|id:x%7Cy")
+
+// The menu never offers the app-independent web: rung — that is curation's
+// claim, not one a user makes standing in one app.
+precondition(diaPageField.writableScopes.map(\.scope) == [
+    .field(identifier: "search-input"), .fieldsOfRole("AXTextField"), .site("notion.so"), .app,
+])
+precondition(diaChrome.writableScopes.map(\.scope) == [
+    .field(identifier: "address-bar"), .fieldsOfRole("AXTextField"), .app,
+])
+precondition(!diaPageField.writableScopes.contains { $0.rung == "web:notion.so" })
+
+// `site` drops the element half. transition() compares THIS: every Notion block
+// is a different element, so comparing whole surfaces would end the session on
+// every line move — the exact failure fieldIsSession exists to prevent.
+precondition(diaPage.site == diaPageField.site)
+precondition(diaPage != diaPageField)
+
+// --- The two walks -------------------------------------------------------
+
+let seeds: SurfaceLadder.Seeds = [
+    "web:notion.so": ["wholeDocument", "drawCursor"],
+    "com.dia.app": ["fieldIsSession"],
+]
+
+// Seeds resolve at whichever rung names them, narrowest first.
+precondition(SurfaceLadder.seedEntry("wholeDocument", rungs: diaPageField.rungs, seeds: seeds)
+             == "web:notion.so")
+precondition(SurfaceLadder.seedEntry("fieldIsSession", rungs: diaPageField.rungs, seeds: seeds)
+             == "com.dia.app")
+precondition(SurfaceLadder.seedEntry("readText", rungs: diaPageField.rungs, seeds: seeds) == nil)
+// A native field in the same app never sees the site's seed.
+precondition(SurfaceLadder.seedEntry("wholeDocument", rungs: diaChrome.rungs, seeds: seeds) == nil)
+
+// The narrowest user entry wins over wider ones.
+let layered: SurfaceLadder.UserStore = [
+    "com.dia.app": ["insertText": "off"],
+    "com.dia.app|notion.so": ["insertText": "on"],
+]
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaPageField.rungs, store: layered)?.rung
+             == "com.dia.app|notion.so")
+// ...and the app-level entry is what a native field in the same app still sees.
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaChrome.rungs, store: layered)?.rung
+             == "com.dia.app")
+precondition(SurfaceLadder.userEntry("readText", rungs: diaChrome.rungs, store: layered) == nil)
+
+// THE law a single merged walk would have broken: a user's `.on` at the app
+// rung must still un-seed curation at the narrower web: rung. The walks stay
+// separate precisely so the existing precedence table can see both and apply
+// "`.on` un-seeds" itself.
+let unseeding: SurfaceLadder.UserStore = ["com.dia.app": ["wholeDocument": "on"]]
+precondition(SurfaceLadder.seedEntry("wholeDocument", rungs: diaPageField.rungs, seeds: seeds)
+             == "web:notion.so")
+precondition(SurfaceLadder.userEntry("wholeDocument", rungs: diaPageField.rungs, store: unseeding)?.value
+             == "on")
+
+// --- The write rule ------------------------------------------------------
+
+// "The picker must never show a lie": writing at a rung clears the same atom at
+// every narrower one, so the choice just made is the choice that resolves.
+let conflicted: SurfaceLadder.UserStore = [
+    "com.dia.app|notion.so|id:search-input": ["insertText": "on"],
+    "com.dia.app|notion.so": ["insertText": "on"],
+]
+let widened = SurfaceLadder.setting(
+    "off", "insertText", at: "com.dia.app", rungs: diaPageField.rungs, store: conflicted
+)
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaPageField.rungs, store: widened)?.value
+             == "off", "a wider write must not be shadowed by the narrow entries it replaces")
+precondition(widened["com.dia.app|notion.so|id:search-input"] == nil)
+precondition(widened["com.dia.app|notion.so"] == nil)
+
+// Writing narrow leaves wider rungs alone — nothing below them to clear.
+let narrowed = SurfaceLadder.setting(
+    "off", "insertText", at: "com.dia.app|notion.so", rungs: diaPageField.rungs, store: layered
+)
+precondition(narrowed["com.dia.app"]?["insertText"] == "off")
+precondition(narrowed["com.dia.app|notion.so"]?["insertText"] == "off")
+
+// The Dia shape, end to end: denying the page must leave the chrome untouched.
+let scoped = SurfaceLadder.setting(
+    "off", "insertText", at: "com.dia.app|notion.so|role:AXTextField",
+    rungs: diaPage.rungs, store: [:]
+)
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaPage.rungs, store: scoped)?.value == "off")
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaChrome.rungs, store: scoped) == nil,
+             "denying the page must not reach the app's own search box")
+
+// Auto clears the atom at every rung, and touches nothing else.
+let mixed: SurfaceLadder.UserStore = [
+    "com.dia.app|notion.so": ["insertText": "off", "drawCursor": "off"],
+    "com.dia.app": ["insertText": "on"],
+]
+let autoed = SurfaceLadder.setting(
+    nil, "insertText", at: nil, rungs: diaPageField.rungs, store: mixed
+)
+precondition(SurfaceLadder.userEntry("insertText", rungs: diaPageField.rungs, store: autoed) == nil)
+precondition(autoed["com.dia.app|notion.so"]?["drawCursor"] == "off", "Auto must be per-atom")
+
+// Emptied rungs are pruned, so `defaults read` shows exactly what was chosen.
+precondition(SurfaceLadder.setting(
+    nil, "insertText", at: nil, rungs: diaChrome.rungs,
+    store: ["com.dia.app": ["insertText": "off"]]
+).isEmpty)
+
+// The clear actions wipe a scope and everything narrower than it.
+let cleared = SurfaceLadder.clearing(
+    atAndBelow: "com.dia.app|notion.so", rungs: diaPageField.rungs, store: conflicted
+)
+precondition(cleared.isEmpty)
+// ...but never a wider one.
+precondition(SurfaceLadder.clearing(
+    atAndBelow: "com.dia.app|notion.so", rungs: diaPageField.rungs, store: layered
+)["com.dia.app"]?["insertText"] == "off")
+
+// Every capability the shipped seeds name must still exist, and the rungs they
+// are keyed by must be rungs some surface can actually produce. A renamed atom
+// or a malformed seed key orphans curation silently.
+for (rung, capabilities) in CapabilitySeeds.denied {
+    for raw in capabilities {
+        precondition(Capability(rawValue: raw) != nil, "seed names unknown capability \(raw)")
+    }
+    let reachable = rung.hasPrefix("web:")
+        ? Surface(bundleID: "any", origin: String(rung.dropFirst(4))).rungs.contains(rung)
+        : Surface(bundleID: rung).rungs.contains(rung)
+    precondition(reachable, "no surface can ever produce seed rung \(rung)")
+}
+
 print("Vim engine tests passed")

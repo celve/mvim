@@ -62,16 +62,24 @@ public enum FieldProber {
     /// committed demotions subtract in the mechanism loop when that wiring
     /// lands.) The profile is what the planner consumes; the report is the
     /// menu's why.
+    ///
+    /// The `surface` is the whole point: config is keyed by the text engine
+    /// behind the field, not by the app hosting it, so a browser's own search
+    /// box and an `<input>` in the page it is showing resolve independently
+    /// even though both report `AXTextField`.
     public static func resolve(
-        _ element: AXUIElement, bundleID: String?
+        _ element: AXUIElement, surface: Surface
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
         let probed = probe(element)
         var statuses: [Capability: CapabilityStatus] = [:]
         var entries: [Capability: CapabilityReport.Entry] = [:]
 
+        // One store read for all nine atoms — the ladder is the same for each.
+        let config = CapabilityConfig.resolveAll(
+            surface, capabilities: Capability.allCases.map(\.rawValue)
+        )
         func choice(_ capability: Capability) -> CapabilityConfig.Override? {
-            guard let bundleID else { return nil }
-            return CapabilityConfig.userOverride(for: bundleID, capability: capability.rawValue)
+            config[capability.rawValue]?.override
         }
 
         // Mechanism atoms: an override may only demote — probe truth wins
@@ -101,10 +109,13 @@ public enum FieldProber {
             // this, `mechanism` is nil and the check below would deny it
             // permanently.
             let mechanism = capability.parent.map { entries[$0] ?? unavailableEntry }
-            let userChoice = choice(capability)
-            let seeded = bundleID.map {
-                CapabilityConfig.seededOff(bundleID: $0, capability: capability.rawValue)
-            } ?? false
+            let resolved = config[capability.rawValue] ?? .auto
+            let userChoice = resolved.override
+            // Seeds and the user's choice come from two separate ladder walks,
+            // so a seed at a narrow rung and an `.on` at a wide one are both
+            // visible here — and the precedence below is the one this table
+            // always had, unchanged.
+            let seeded = resolved.isSeededOff
             let entry: CapabilityReport.Entry
             if let mechanism, mechanism.status != .available {
                 entry = CapabilityReport.Entry(status: .unavailable, source: mechanism.source)
@@ -129,6 +140,12 @@ public enum FieldProber {
         public let isSecure: Bool
         public let isEnabled: Bool
         public let role: String?
+        /// The field's own name, when it has one — the narrowest rung capability
+        /// config can be keyed at. Rides the gate's existing round trip.
+        public let identifier: String?
+        /// Web content, so worth the parent walk that finds its origin. Rides
+        /// the same round trip; native fields skip the walk entirely.
+        public let isWebElement: Bool
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
 
@@ -150,7 +167,9 @@ public enum FieldProber {
             isTextual: textual,
             isSecure: secure,
             isEnabled: attributes.enabled,
-            role: attributes.role
+            role: attributes.role,
+            identifier: attributes.identifier,
+            isWebElement: attributes.isWebElement
         )
     }
 }

@@ -32,6 +32,16 @@ public final class Controller {
     }
     private var publishedMode: VimState.Mode?
 
+    /// Fired whenever the binding changes, mode or no mode.
+    ///
+    /// The menu used to ride `onModeChange` for this, but `publishMode`
+    /// early-returns on an unchanged indicator — so moving between two fields
+    /// that are both in Normal fired nothing. That is exactly the case the
+    /// capability rows care about: a browser's search box and an `<input>` in
+    /// the page are different surfaces, and the menu would have gone on naming
+    /// and configuring the one focus had left.
+    public var onBindingChange: (() -> Void)?
+
     private let tracker = FocusTracker()
     private var monitor = RawMonitor()
     private var state = VimState.initial
@@ -71,9 +81,10 @@ public final class Controller {
     /// nil when unbound or forced (nothing configurable resolves there).
     public var capabilityReport: CapabilityReport? { binding?.capabilityReport }
 
-    /// Bundle ID of the bound app, so the menu badges only rows for the
-    /// app they actually describe (overlays bind across apps).
-    public var boundBundleID: String? { binding?.bundleID }
+    /// The bound field's surface — what the menu configures and names. Its
+    /// bundle ID also gates the badges, so rows only describe the app they
+    /// belong to (overlays bind across apps).
+    public var boundSurface: Surface? { binding?.surface }
 
     /// A capability override changed (menu): rebuild the binding's profile
     /// now. Deliberately not `refreshPolicy` — its same-element
@@ -194,6 +205,9 @@ public final class Controller {
         }
         state.field = state.field.carried(across: transition)
         publishMode()
+        // Unconditional, unlike publishMode: a same-mode rebind still changes
+        // which surface the menu describes.
+        onBindingChange?()
     }
 
     private var currentIndicatorMode: VimState.Mode? {

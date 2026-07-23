@@ -22,15 +22,37 @@ struct NormApp: App {
                     Text("Off").tag(VimPolicy.off)
                     Text("Force").tag(VimPolicy.forced)
                 }
-                Menu("Capabilities in \(front.name)") {
+                // Scope is structural, not a setting: every item below is a
+                // complete sentence naming the rung it writes, so there is no
+                // mode to misread and exactly one item is ever checked.
+                Menu("Capabilities in \(model.surfaceLabel)") {
                     ForEach(model.capabilityRows) { row in
-                        Picker("\(row.title) — \(row.badge)", selection: Binding(
-                            get: { row.choice },
-                            set: { model.setCapabilityOverride($0, for: row.capability) }
-                        )) {
-                            Text("Auto").tag(AppModel.OverrideChoice.auto)
-                            Text("On").tag(AppModel.OverrideChoice.on)
-                            Text("Off").tag(AppModel.OverrideChoice.off)
+                        Menu("\(row.title) — \(row.badge)") {
+                            Button(row.choice == .auto ? "✓ Auto — inherit" : "Auto — inherit") {
+                                model.setCapabilityOverride(nil, at: nil, for: row.capability)
+                            }
+                            Divider()
+                            ForEach(row.onOptions) { option in
+                                Button(option.label) {
+                                    model.setCapabilityOverride(
+                                        option.override, at: option.rung, for: row.capability
+                                    )
+                                }
+                            }
+                            Divider()
+                            ForEach(row.offOptions) { option in
+                                Button(option.label) {
+                                    model.setCapabilityOverride(
+                                        option.override, at: option.rung, for: row.capability
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if !model.clearActions.isEmpty {
+                        Divider()
+                        ForEach(model.clearActions) { action in
+                            Button(action.label) { model.clearOverrides(at: action.rung) }
                         }
                     }
                 }
@@ -76,17 +98,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// One On/Off action inside an atom's submenu: a full sentence and the
+    /// rung it writes. Checked when it is the entry currently in force.
+    struct ScopeOption: Identifiable, Equatable {
+        let label: String
+        let rung: String
+        let override: CapabilityConfig.Override
+        var id: String { rung + "|" + override.rawValue }
+    }
+
     /// One capabilities-menu row: the atom, its resolved verdict for the
-    /// bound field (badge), and the user's stored choice for the front app.
+    /// bound field (badge), and every scope the user may write it at.
     struct CapabilityRow: Identifiable, Equatable {
         let capability: Capability
         let title: String
         let badge: String
         let choice: OverrideChoice
+        /// Kept apart so the menu can rule between them — a flat list of eight
+        /// near-identical sentences is unreadable.
+        let onOptions: [ScopeOption]
+        let offOptions: [ScopeOption]
         var id: String { capability.rawValue }
     }
 
-    /// The picker's projection of `CapabilityConfig.Override?`.
+    /// A "Clear overrides…" item: wipes every atom at a rung and below.
+    struct ClearAction: Identifiable, Equatable {
+        let label: String
+        let rung: String
+        var id: String { rung }
+    }
+
+    /// Whether an atom currently defers (`auto`) or is pinned by the user.
     enum OverrideChoice: String, CaseIterable {
         case auto, on, off
     }
@@ -98,6 +140,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var frontApp: FrontApp?
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published private(set) var capabilityRows: [CapabilityRow] = []
+    @Published private(set) var clearActions: [ClearAction] = []
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
@@ -124,9 +167,13 @@ final class AppModel: ObservableObject {
             case .visual?: self.mode = .visual
             case .replace?: self.mode = .replace
             }
-            // Mode changes ride every rebind, so the badge rows track the
-            // binding without their own channel.
-            self.refreshCapabilityRows()
+        }
+        // Its own channel, deliberately: mode changes do NOT ride every rebind
+        // — publishMode early-returns when the indicator is unchanged, so
+        // moving between two Normal-mode fields fired nothing and the rows kept
+        // describing the surface focus had left.
+        controller.onBindingChange = { [weak self] in
+            self?.refreshCapabilityRows()
         }
         token = InputHub.shared.register(.editor) { event in
             MainActor.assumeIsolated { controller.handle(event) }
@@ -174,33 +221,71 @@ final class AppModel: ObservableObject {
         controller.refreshPolicy()
     }
 
-    func setCapabilityOverride(_ choice: OverrideChoice, for capability: Capability) {
-        guard let frontApp else { return }
-        let stored: CapabilityConfig.Override?
-        switch choice {
-        case .auto: stored = nil
-        case .on: stored = .on
-        case .off: stored = .off
-        }
-        CapabilityConfig.setUserOverride(stored, for: frontApp.bundleID, capability: capability.rawValue)
+    /// `rung` of nil is Auto: clear the atom everywhere. Otherwise the write
+    /// also clears every narrower rung, so the checkmark that lands is the one
+    /// that resolves — the `Prefs.setPolicy` invariant, kept here too.
+    func setCapabilityOverride(
+        _ override: CapabilityConfig.Override?, at rung: String?, for capability: Capability
+    ) {
+        CapabilityConfig.setUserOverride(
+            override, at: rung, on: menuSurface, capability: capability.rawValue
+        )
         controller.refreshCapabilities()
         refreshCapabilityRows()
     }
 
+    func clearOverrides(at rung: String) {
+        CapabilityConfig.clearOverrides(atAndBelow: rung, on: menuSurface)
+        controller.refreshCapabilities()
+        refreshCapabilityRows()
+    }
+
+    /// The surface the menu configures: the bound field's when it belongs to
+    /// the front app, otherwise the app alone.
+    ///
+    /// The fallback is what keeps rows editable while unbound — config is
+    /// config, and an app-scope choice is still meaningful with no field in
+    /// hand. It also collapses the scope list to just the app, which is
+    /// honest: nothing narrower is known.
+    private var menuSurface: Surface {
+        guard let frontApp else { return Surface() }
+        if let bound = controller.boundSurface, bound.bundleID == frontApp.bundleID {
+            return bound
+        }
+        return Surface(bundleID: frontApp.bundleID)
+    }
+
+    /// "Dia › notion.so" — the menu must name what it is about to configure,
+    /// or a scoped write reads as an app-wide one.
+    var surfaceLabel: String {
+        guard let frontApp else { return "—" }
+        guard let origin = menuSurface.origin else { return frontApp.name }
+        return "\(frontApp.name) › \(origin)"
+    }
+
     /// Rebuilt on menu open, app activation, and every rebind — cheap, and
     /// the badges must describe the field vim is actually driving. Rows
-    /// exist without a binding too (overrides are per-app config); the
+    /// exist without a binding too (overrides are config, not evidence); the
     /// badge is "—" until a field of the front app binds. An overlay's
     /// binding (other pid) must not label the front app's rows.
     private func refreshCapabilityRows() {
-        guard let frontApp else {
+        guard frontApp != nil else {
             capabilityRows = []
+            clearActions = []
             return
         }
-        let report = controller.boundBundleID == frontApp.bundleID ? controller.capabilityReport : nil
+        let surface = menuSurface
+        let scopes = surface.writableScopes
+        let report = controller.boundSurface?.bundleID == frontApp?.bundleID
+            ? controller.capabilityReport : nil
+        let config = CapabilityConfig.resolveAll(
+            surface, capabilities: Capability.allCases.map(\.rawValue)
+        )
+
         capabilityRows = Capability.allCases.map { capability in
+            let resolution = config[capability.rawValue] ?? .auto
             let choice: OverrideChoice
-            switch CapabilityConfig.userOverride(for: frontApp.bundleID, capability: capability.rawValue) {
+            switch resolution.override {
             case .on: choice = .on
             case .off: choice = .off
             case nil: choice = .auto
@@ -216,12 +301,57 @@ final class AppModel: ObservableObject {
             } else {
                 badge = "—"
             }
+            // Narrowest-first scope order within each group. The check marks the
+            // stored entry — the *user's* choice, not the resolved verdict: an
+            // `.on` that a failed probe overrules is still the choice they made,
+            // and the badge is where the truth shows.
+            func options(_ override: CapabilityConfig.Override) -> [ScopeOption] {
+                scopes.map { scope, rung in
+                    let checked = resolution.override == override && resolution.overrideRung == rung
+                    return ScopeOption(
+                        label: (checked ? "✓ " : "") + Self.sentence(override, scope),
+                        rung: rung,
+                        override: override
+                    )
+                }
+            }
             return CapabilityRow(
                 capability: capability,
                 title: Self.displayName(capability),
                 badge: badge,
-                choice: choice
+                choice: choice,
+                onOptions: options(.on),
+                offOptions: options(.off)
             )
+        }
+
+        // Only the scopes that could plausibly hold something worth wiping —
+        // clearing "this one field" is what Auto already does per atom.
+        clearActions = scopes.compactMap { scope, rung in
+            switch scope {
+            case .site, .app:
+                return ClearAction(label: "Clear overrides \(Self.phrase(scope))", rung: rung)
+            case .field, .fieldsOfRole:
+                return nil
+            }
+        }
+    }
+
+    /// UI strings stay in the app layer — `Surface` names rungs, not rows.
+    /// Pure string work, so `nonisolated`: the row builder calls it from inside
+    /// a `map` closure, which does not inherit the model's actor.
+    private nonisolated static func sentence(
+        _ override: CapabilityConfig.Override, _ scope: Surface.Scope
+    ) -> String {
+        "\(override == .on ? "On" : "Off") \(phrase(scope))"
+    }
+
+    private nonisolated static func phrase(_ scope: Surface.Scope) -> String {
+        switch scope {
+        case .field(let identifier): return "in field \"\(identifier)\""
+        case .fieldsOfRole: return "in fields like this one"
+        case .site(let origin): return "on \(origin)"
+        case .app: return "in this app"
         }
     }
 
