@@ -40,12 +40,12 @@ public final class FocusTracker {
 
         /// What capability config is keyed by — the text engine behind the
         /// field, not the app hosting it. Resolved once at publish time and
-        /// frozen: a republish resets the field to Insert, so this must never
-        /// be recomputed mid-session.
+        /// frozen; recomputing it mid-session would let the key drift out from
+        /// under the answers already resolved against it.
         public let surface: Surface
 
-        /// The learner's TTL. Unused until that wiring lands; kept because an
-        /// app update is what re-opens a cached write demotion.
+        /// The learner's TTL: an app update re-opens every write demotion
+        /// concluded against the old build.
         public let appVersion: String?
 
         /// Provenance behind `capabilities`, for the menu's badge rows.
@@ -148,13 +148,17 @@ public final class FocusTracker {
         resolveAndPublish(revalidateGate: true)
     }
 
-    /// A capability override changed (menu): rebuild the bound element's
-    /// profile and republish — `resolveAndPublish`'s same-element
-    /// short-circuit deliberately never re-probes, so this is its own
-    /// entry. The republish rebinds, resetting the field to the Insert
-    /// entry policy — acceptable for a menu-driven change. Forced bindings
-    /// carry no profile; a dead or de-gated element falls back to the full
-    /// resolve.
+    /// A capability answer changed — a menu override, or a demotion the learner
+    /// just committed: rebuild the bound element's profile and republish.
+    /// `resolveAndPublish`'s same-element short-circuit deliberately never
+    /// re-probes, so this is its own entry.
+    ///
+    /// The republish is **session-preserving**: it hands `publish` the same
+    /// element, so the edge is `.sameElement` and `carried(across:)` returns the
+    /// field untouched — mode, marks and drawn cursor all survive. That is what
+    /// lets the learner apply a demotion mid-edit without bouncing the user out
+    /// of Normal. Forced bindings carry no profile; a dead or de-gated element
+    /// falls back to the full resolve.
     public func reresolveCapabilities() {
         guard enabled, let bound = binding, !bound.isForced else { return }
         let gate = FieldProber.gate(bound.element)
@@ -164,7 +168,7 @@ public final class FocusTracker {
         }
         let identity = Self.appIdentity(for: bound.pid)
         let surface = Self.surface(for: bound.element, gate: gate, bundleID: identity.bundleID)
-        let resolved = FieldProber.resolve(bound.element, surface: surface)
+        let resolved = FieldProber.resolve(bound.element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: bound.element,
             pid: bound.pid,
@@ -213,7 +217,7 @@ public final class FocusTracker {
             role: gate.role,
             identifier: gate.identifier
         )
-        let resolved = FieldProber.resolve(element, surface: surface)
+        let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
         let candidate = Binding(
             element: element,
             pid: current.pid,
@@ -278,7 +282,7 @@ public final class FocusTracker {
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
         let surface = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
-        let resolved = FieldProber.resolve(element, surface: surface)
+        let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: element,
             pid: pid,

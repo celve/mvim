@@ -227,9 +227,17 @@ final class AppModel: ObservableObject {
     func setCapabilityOverride(
         _ override: CapabilityConfig.Override?, at rung: String?, for capability: Capability
     ) {
+        let surface = menuSurface
         CapabilityConfig.setUserOverride(
-            override, at: rung, on: menuSurface, capability: capability.rawValue
+            override, at: rung, on: surface, capability: capability.rawValue
         )
+        // Disposing of the learner's suggestion retires it. Promoting it (Off)
+        // makes the same denial a permanent decision, and overruling it (On)
+        // rejects it outright — either way the inference has served its purpose
+        // and should not linger to be re-applied if the user returns to Auto.
+        if override != nil, let rung = surface.roleRung {
+            LearnedPriors.forget(rung: rung, capability: capability.rawValue)
+        }
         controller.refreshCapabilities()
         refreshCapabilityRows()
     }
@@ -297,6 +305,9 @@ final class AppModel: ObservableObject {
                 case .probed: badge = "\(mark) probed"
                 case .seeded: badge = "\(mark) seeded"
                 case .user: badge = "\(mark) user"
+                // The learner's suggestion, made visible so it can be disposed
+                // of: Off promotes it to a permanent decision, On overrules it.
+                case .learned: badge = "\(mark) learned"
                 }
             } else {
                 badge = "—"

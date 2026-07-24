@@ -47,6 +47,11 @@ public final class Controller {
     private var state = VimState.initial
     private let executor = Executor()
 
+    /// The lazy write probe's running tally. In memory on purpose: a structural
+    /// lie fails every command and commits in seconds, while a flaky field
+    /// interleaves successes and is correctly forgotten at exit.
+    private var ledger = StrikeLedger()
+
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
 
@@ -247,6 +252,14 @@ public final class Controller {
         )
         let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
         let executed = executor.execute(physical, on: binding.element, state: &state)
+        // Harvested before anything else can touch the executor: the abort path
+        // below runs `repairStrandedSelection`, which executes its own plan and
+        // resets `lastRun` — and that is precisely the path a failed write takes.
+        let evidence = executor.lastRun
+        // Deferred so it runs after hygiene and the dot bookkeeping, on both
+        // paths, and so the republish a commit triggers happens as `run`
+        // unwinds rather than re-entering the tracker mid-command.
+        defer { learn(from: evidence, on: binding) }
         guard executed else {
             // Abort hygiene: a plan that died mid-flight may leave its
             // operator selection painted, and must not record memories for
@@ -268,6 +281,52 @@ public final class Controller {
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// Fold one command's settle verdicts into the write probe's tally.
+    ///
+    /// Only hard settles produce evidence, and only an AX write is ever
+    /// attributed — so this speaks exclusively about `writeSelection` and
+    /// `insertText`, the two capabilities a field can *claim* and then fail to
+    /// deliver. Reads were proven at bind; policies have no settle signal.
+    ///
+    /// Two consecutive strikes commit a demotion, which is persisted and applied
+    /// at once, so the very next command routes around the lie instead of
+    /// belling again. The re-resolve is session-preserving (`.sameElement`), so
+    /// a demotion landing mid-edit does not move the user.
+    private func learn(from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding) {
+        // A command that issued no AX write — the whole blind lane, and any plan
+        // whose steps were all commits — teaches nothing and should not pay for
+        // the config lookups below.
+        guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
+            return
+        }
+        // No role means no stable key to accumulate against (a forced binding,
+        // or an element AX would not name).
+        guard let rung = binding.surface.roleRung else { return }
+
+        /// The user has the last word: once they have set an atom explicitly,
+        /// stop inferring about it. Without this their `.on` would lose to a
+        /// machine guess, and clearing an override would not restore
+        /// auto-detection because the learned demotion would silently persist.
+        func isAuto(_ capability: Capability) -> Bool {
+            CapabilityConfig.resolve(binding.surface, capability: capability.rawValue)
+                .override == nil
+        }
+
+        // No silence check on the success path: clearing a tally is forgetting,
+        // not inferring, and a capability the user has set can never have
+        // accumulated one anyway — strikes below are what the rule gates.
+        for capability in evidence.settledCapabilities {
+            ledger.clear(rung: rung, capability: capability.rawValue)
+        }
+
+        guard let failed = evidence.failedCapability, isAuto(failed) else { return }
+        guard ledger.strike(rung: rung, capability: failed.rawValue) else { return }
+        LearnedPriors.commit(
+            rung: rung, version: binding.appVersion, capability: failed.rawValue
+        )
+        tracker.reresolveCapabilities()
     }
 
     /// Collapse whatever selection an aborted plan stranded — through the

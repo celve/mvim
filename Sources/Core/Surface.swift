@@ -117,6 +117,24 @@ public extension Surface {
         return rungs
     }
 
+    /// The rung the **learner** writes at: every field of this role on this
+    /// site (or in this app, natively).
+    ///
+    /// Deliberately not the identifier rung. A demotion has to accumulate two
+    /// consecutive strikes to commit, and a key per individual `<input>` would
+    /// scatter the evidence so thinly it never would — the user visits a given
+    /// field once or twice, but hits fields *of a kind* constantly. Reads still
+    /// walk the whole ladder; only writes are pinned here.
+    ///
+    /// `nil` when there is no role or no app to hang it on, in which case there
+    /// is nothing stable enough to learn against.
+    var roleRung: String? {
+        guard let role, !role.isEmpty else { return nil }
+        guard let bundleID else { return nil }
+        let prefix = origin.map { bundleID + Self.separator + $0 } ?? bundleID
+        return prefix + Self.separator + "role:" + role
+    }
+
     /// The app-independent rung for a site. Seeds only — the menu never writes
     /// it, because "notion.so in every browser I will ever install" is a claim
     /// curation makes, not one a user makes from a menu standing in one app.

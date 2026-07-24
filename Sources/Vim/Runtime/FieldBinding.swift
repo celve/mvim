@@ -12,6 +12,10 @@ public struct CapabilityReport: Equatable, Sendable {
         case seeded
         /// The user's menu override.
         case user
+        /// A committed `LearnedPriors` demotion: the field claimed this write
+        /// and then failed to deliver it twice running. A suggestion, not a
+        /// decision — the user can promote it (Off) or overrule it (On).
+        case learned
     }
 
     public struct Entry: Equatable, Sendable {
@@ -56,19 +60,19 @@ public enum FieldProber {
         return CapabilityProfile(available: available)
     }
 
-    /// The full resolution for one binding: probed truth minus the user's
-    /// demotions, then the policy atoms derived from their parent mechanisms
-    /// under `CapabilityConfig` seeds and overrides. (The learner's
-    /// committed demotions subtract in the mechanism loop when that wiring
-    /// lands.) The profile is what the planner consumes; the report is the
-    /// menu's why.
+    /// The full resolution for one binding: probed truth, minus what the field
+    /// has demonstrably failed to deliver, minus the user's demotions — then the
+    /// policy atoms derived from their parent mechanisms under `CapabilityConfig`
+    /// seeds and overrides. The profile is what the planner consumes; the report
+    /// is the menu's why.
     ///
     /// The `surface` is the whole point: config is keyed by the text engine
     /// behind the field, not by the app hosting it, so a browser's own search
     /// box and an `<input>` in the page it is showing resolve independently
-    /// even though both report `AXTextField`.
+    /// even though both report `AXTextField`. `appVersion` keys the learner's
+    /// TTL — an app update re-opens every trial it had concluded.
     public static func resolve(
-        _ element: AXUIElement, surface: Surface
+        _ element: AXUIElement, surface: Surface, appVersion: String?
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
         let probed = probe(element)
         var statuses: [Capability: CapabilityStatus] = [:]
@@ -81,13 +85,22 @@ public enum FieldProber {
         func choice(_ capability: Capability) -> CapabilityConfig.Override? {
             config[capability.rawValue]?.override
         }
+        // Only the write mechanisms are ever in here: they are the only claims
+        // a settle can contradict.
+        let learned = LearnedPriors.demoted(rungs: surface.rungs, version: appVersion)
 
-        // Mechanism atoms: an override may only demote — probe truth wins
-        // upward, the user's off wins downward.
+        // Mechanism atoms: probe truth wins upward, and two things subtract from
+        // it — evidence (the field failed to deliver) and the user's `off`. An
+        // explicit `on` un-does the evidence exactly the way it un-seeds
+        // curation, so a decision always outranks an inference.
         for capability in Capability.allCases where capability.species == .mechanism {
             let entry: CapabilityReport.Entry
             if probed.has(capability), choice(capability) == .off {
                 entry = CapabilityReport.Entry(status: .unavailable, source: .user)
+            } else if probed.has(capability),
+                      learned.contains(capability.rawValue),
+                      choice(capability) != .on {
+                entry = CapabilityReport.Entry(status: .unavailable, source: .learned)
             } else {
                 entry = CapabilityReport.Entry(
                     status: probed.has(capability) ? .available : .unavailable,

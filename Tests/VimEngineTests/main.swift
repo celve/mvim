@@ -1235,4 +1235,61 @@ for (rung, capabilities) in CapabilitySeeds.denied {
     precondition(reachable, "no surface can ever produce seed rung \(rung)")
 }
 
+// MARK: - The learner's commit rule
+
+// The learner writes at the ROLE learnRung, never the identifier rung: a key per
+// individual field would scatter the evidence so thinly two consecutive strikes
+// would never land.
+precondition(diaPageField.roleRung == "com.dia.app|notion.so|role:AXTextField")
+precondition(diaPageField.roleRung != diaPageField.rungs.first,
+             "the learner must not write at the identifier learnRung")
+precondition(diaChrome.roleRung == "com.dia.app|role:AXTextField")
+precondition(Surface(bundleID: "com.dia.app").roleRung == nil)   // no role: nothing to learn against
+precondition(Surface(role: "AXTextField").roleRung == nil)       // no app: likewise
+// The role learnRung is always a learnRung the ladder actually produces, or a demotion
+// would be written where no lookup could ever find it.
+precondition(diaPageField.rungs.contains(diaPageField.roleRung!))
+precondition(diaChrome.rungs.contains(diaChrome.roleRung!))
+
+let learnRung = "com.dia.app|notion.so|role:AXTextField"
+let otherRung = "com.other.app|role:AXTextField"
+
+// One strike commits. The fields this catches no-op the write on every single
+// command, so a second reading buys no certainty and costs another dead command
+// on every new surface. `true` means "persist this and re-resolve the binding".
+var learnerLedger = StrikeLedger()
+precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == true)
+
+// ...and says so exactly once. A demoted capability stops being exercised, but a
+// stray strike (a stale cursor collapse, a queued command) must not re-fire the
+// republish a commit triggers.
+precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false)
+precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false)
+
+// A success never un-commits. Once demoted the capability is not exercised, so
+// it generates no evidence either way — only the version TTL re-opens the trial.
+learnerLedger.clear(rung: learnRung, capability: "insertText")
+precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false,
+             "a cleared tally must not resurrect a committed demotion")
+
+// Clearing something that never struck is a no-op — the honest-app path, which
+// runs on essentially every command.
+var learnerHonest = StrikeLedger()
+learnerHonest.clear(rung: learnRung, capability: "insertText")
+precondition(learnerHonest.pending(rung: learnRung, capability: "insertText") == 0)
+
+// Commits are independent per capability and per rung: a lying insertText must
+// not drag writeSelection down with it, nor one site another.
+var learnerMixed = StrikeLedger()
+precondition(learnerMixed.strike(rung: learnRung, capability: "insertText") == true)
+precondition(learnerMixed.strike(rung: learnRung, capability: "writeSelection") == true)
+precondition(learnerMixed.strike(rung: otherRung, capability: "insertText") == true)
+// Each of those is its own conclusion, so none of them re-fires.
+precondition(learnerMixed.strike(rung: learnRung, capability: "insertText") == false)
+precondition(learnerMixed.strike(rung: otherRung, capability: "insertText") == false)
+
+// The threshold is the single knob: raising it restores the forgiving behaviour
+// (a success clearing a pending tally) without touching anything else.
+precondition(StrikeLedger.strikesToCommit == 1)
+
 print("Vim engine tests passed")
