@@ -68,6 +68,15 @@ struct NormApp: App {
             Button("Open Accessibility Settings") { model.openPrivacyPane("Privacy_Accessibility") }
             Button("Open Input Monitoring Settings") { model.openPrivacyPane("Privacy_ListenEvent") }
             Divider()
+            // Checked answers "will Norm start at login?" — a revoked item is not.
+            Toggle("Start at Login", isOn: Binding(
+                get: { model.loginItem == .on },
+                set: { model.setLaunchAtLogin($0) }
+            ))
+            if model.loginItem == .blocked {
+                Button("Approve Norm in Login Items Settings") { model.openLoginItemsSettings() }
+            }
+            Divider()
             Button("Quit Norm") { NSApplication.shared.terminate(nil) }
         } label: {
             Image(systemName: model.mode.symbolName)
@@ -141,6 +150,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published private(set) var capabilityRows: [CapabilityRow] = []
     @Published private(set) var clearActions: [ClearAction] = []
+    @Published private(set) var loginItem: LoginItem.State = .off
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
@@ -203,6 +213,7 @@ final class AppModel: ObservableObject {
         accessibilityTrusted = AX.ensureTrusted(prompt: false)
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
+        loginItem = LoginItem.state
         // Norm is LSUIElement, so opening the menu keeps the target app
         // frontmost; if frontmost somehow IS Norm, keep the last snapshot.
         if let app = NSWorkspace.shared.frontmostApplication,
@@ -381,6 +392,17 @@ final class AppModel: ObservableObject {
         case .wholeDocument: return "Text covers whole document"
         case .fieldIsSession: return "New field starts a session"
         }
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        Task.detached {
+            let state = LoginItem.setEnabled(enabled)
+            await MainActor.run { self.loginItem = state }
+        }
+    }
+
+    func openLoginItemsSettings() {
+        LoginItem.openSettings()
     }
 
     func openPrivacyPane(_ anchor: String) {
