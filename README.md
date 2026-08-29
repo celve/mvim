@@ -62,7 +62,8 @@ norm/
 ├── Sources/
 │   ├── Core/                   # LoomCore framework — shared, feature-agnostic:
 │   │                           #   InputHub (one shared CGEventTap), KeyEvent/Mods/Trigger,
-│   │                           #   AX/Clipboard/Synth, Prefs store. NO Keychain in Norm's copy.
+│   │                           #   AX/Clipboard/Synth, Prefs store, LoginItem (start at
+│   │                           #   login). NO Keychain in Norm's copy.
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
@@ -98,6 +99,29 @@ profiles, toggles) from the `com.loom.Loom` defaults domain — once, guarded by
 `migratedFromLoomV1` sentinel; nothing is written back. If you previously granted the
 combined Loom app permissions, its rows in System Settings → Privacy & Security are now
 orphans — remove them manually.
+
+## Start at login
+
+The menu's **Start at Login** toggle registers Norm with `SMAppService.mainApp`, the
+API that replaced `SMLoginItemSetEnabled`. The system owns the bit — nothing is
+mirrored into `Prefs`, and the menu re-reads the real status every time it opens.
+Three consequences worth knowing:
+
+- **It needs a real signature.** `SMAppService` requires a properly code-signed
+  bundle and fails with `kSMErrorInvalidSignature` otherwise, so the toggle needs a
+  build made with the Apple Development identity — see [Signing](#signing).
+- **Registration records the bundle's path.** Register from
+  `build/Build/Products/Debug/Norm.app` and a `make clean` strands the login item;
+  move the app afterwards and it still points at the old location. Register from
+  wherever Norm will actually live.
+- **A denial in System Settings is one-way from Norm's side.** Switching the item off
+  under System Settings → General → Login Items leaves the status at
+  `requiresApproval` — registered but denied — and `register()` cannot clear it. The
+  menu shows the toggle unchecked and grows an **Approve Norm in Login Items
+  Settings** row.
+
+A login-launched Norm keeps its Accessibility and Input Monitoring grants: same
+bundle, same signature.
 
 ## Running alongside Sotto
 
