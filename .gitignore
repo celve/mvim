@@ -5,6 +5,7 @@
 build/
 DerivedData/
 .build/
+.release/
 
 # Xcode user state
 xcuserdata/

@@ -33,16 +33,32 @@ build/Build/Products/Debug/Norm.app
 make run
 ```
 
+### Release
+
+```sh
+make release
+```
+
+The Release build is copied to a short, stable path:
+
+```
+.release/Norm.app
+```
+
+Nothing is launched or installed — open it yourself. `make clean` leaves `.release/`
+alone (see [Start at login](#start-at-login)); `make distclean` removes it too.
+
 ### Other targets
 
-| Command       | Description                                       |
-| ------------- | ------------------------------------------------- |
-| `make gen`    | Generate `Norm.xcodeproj` from `project.yml`      |
-| `make build`  | Generate + build a Debug binary                   |
-| `make run`    | Build, then launch `Norm.app`                     |
-| `make test`   | Run the pure Vim engine tests                     |
-| `make release`| Generate + build a Release binary                 |
-| `make clean`  | Remove `build/` and the generated `.xcodeproj`    |
+| Command          | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `make gen`       | Generate `Norm.xcodeproj` from `project.yml`   |
+| `make build`     | Generate + build a Debug binary                |
+| `make run`       | Build, then launch the Debug `Norm.app`        |
+| `make test`      | Run the pure Vim engine tests                  |
+| `make release`   | Build Release, copy it to `.release/Norm.app`  |
+| `make clean`     | Remove `build/` and the generated `.xcodeproj` |
+| `make distclean` | `clean`, plus remove `.release/`               |
 
 ### Manual invocation
 
@@ -57,7 +73,7 @@ xcodebuild -project Norm.xcodeproj -scheme Norm -configuration Debug \
 ```
 norm/
 ├── project.yml                 # XcodeGen spec — 2 framework targets + the app
-├── Makefile                    # gen / build / run / release / clean / test
+├── Makefile                    # gen / build / run / release / clean / distclean / test
 ├── Norm.entitlements           # intentionally empty — Norm runs non-sandboxed
 ├── Sources/
 │   ├── Core/                   # LoomCore framework — shared, feature-agnostic:
@@ -112,8 +128,10 @@ Three consequences worth knowing:
   build made with the Apple Development identity — see [Signing](#signing).
 - **Registration records the bundle's path.** Register from
   `build/Build/Products/Debug/Norm.app` and a `make clean` strands the login item;
-  move the app afterwards and it still points at the old location. Register from
-  wherever Norm will actually live.
+  move the app afterwards and it still points at the old location. `.release/Norm.app`
+  is the stable path `make clean` spares — but it still lives inside the repo, so
+  `make distclean` or deleting the clone strands the item just the same. Register
+  from wherever Norm will actually live.
 - **A denial in System Settings is one-way from Norm's side.** Switching the item off
   under System Settings → General → Login Items leaves the status at
   `requiresApproval` — registered but denied — and `register()` cannot clear it. The

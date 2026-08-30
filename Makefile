@@ -2,9 +2,11 @@ PROJECT := Norm
 SCHEME  := Norm
 CONFIG  := Debug
 DERIVED := build
+RELEASE := .release
 APP     := $(DERIVED)/Build/Products/$(CONFIG)/$(PROJECT).app
+RELAPP  := $(RELEASE)/$(PROJECT).app
 
-.PHONY: all gen build run release clean test
+.PHONY: all gen build run release clean distclean test
 
 all: build
 
@@ -39,6 +41,8 @@ build: gen
 run: build
 	open "$(APP)"
 
+# The rm before ditto is load-bearing: ditto merges into an existing bundle, and a file left
+# from an older build breaks the signature's seal.
 release: gen
 	xcodebuild \
 		-project $(PROJECT).xcodeproj \
@@ -46,6 +50,14 @@ release: gen
 		-configuration Release \
 		-derivedDataPath $(DERIVED) \
 		build
+	rm -rf $(RELAPP)
+	ditto $(DERIVED)/Build/Products/Release/$(PROJECT).app $(RELAPP)
+	codesign --verify --deep --strict $(RELAPP)
+	@echo "Release app: $(RELAPP)"
 
+# Spares $(RELEASE): SMAppService records the path of the bundle its login item was registered from.
 clean:
 	rm -rf $(DERIVED) $(PROJECT).xcodeproj
+
+distclean: clean
+	rm -rf $(RELEASE)
