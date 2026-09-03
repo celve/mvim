@@ -1306,11 +1306,11 @@ func traced(
 
 // Lane A writes and verifies; lane B actuates the same exact offsets as
 // counted keypresses; lane C is blind and emits no settle at all.
-precondition(Trace.shape(ciwA) == "W!R!...")
+precondition(Trace.shape(ciwA) == "W!R!CCC")
 precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: readProfile))
-             == "P2P5!P?...")
+             == "P2P5!P?CCC")
 precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
-             == "P2P5P...")
+             == "P2P5PCCC")
 
 // The shape this exists to make visible: a HARD settle (`!`) directly behind a
 // press, which is a blind actuation. `Executor`'s attribution is positional and
@@ -1329,7 +1329,7 @@ precondition(!settleFollowsPress(ciwA))
 precondition(!Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
              .contains("!"))
 
-precondition(Trace.shape(physical("3w", text: "say hello world", caret: 0, profile: readProfile)) == "P15!.")
+precondition(Trace.shape(physical("3w", text: "say hello world", caret: 0, profile: readProfile)) == "P15!C")
 
 // Declaration order, so columns line up between lines — and an atom the report
 // never mentions says `??` rather than vanishing.
@@ -1362,15 +1362,36 @@ let leakySteps = PhysicalPlan(steps: [
     .commit(.setLastInsert(secret)),
 ])
 precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
-precondition(Trace.shape(leakySteps) == "RTV.")
+precondition(Trace.shape(leakySteps) == "RTVC")
 
-// A search pattern and an Ex command line are typed by the user; every other
-// command source is vim syntax.
+// `keys=` shows the literal source only where the parse proves the user
+// supplied no operand character. The top-level intent is NOT a safe
+// discriminator — the payloads nest: `d/hunter2<CR>` is an `.operatorCommand`
+// whose target is a search, `rS` an `.edit` holding a character of the
+// document, `dfS` an operator holding a find target.
+//
+// An operand is never merely syntax here, because of the bug this recorder is
+// for: with the mode stale the user believes they are typing, so `ma`, `"a`,
+// `rS` and every unrecognised `.custom` are letters of their prose.
+for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
+             ":s/hunter2/x<CR>", "rh", "dfh", "ct;", "\"aY", "mh", "`h", "ci\"", "qh"] {
+    precondition(!Trace.keys(RawCommand(leak)).contains(String(leak.dropFirst())),
+                 "Trace.keys leaked an operand: " + leak)
+}
+precondition(Trace.keys(RawCommand("d/hunter2<CR>")) == "op(delete)…(13)")
+precondition(Trace.keys(RawCommand("rS")) == "edit…(2)")
+precondition(Trace.keys(RawCommand("dfS")) == "op(delete)…(3)")
+precondition(Trace.keys(RawCommand("mS")) == "mark…(2)")
+precondition(Trace.keys(RawCommand("`S")) == "motion(mark)…(2)")
+precondition(Trace.keys(RawCommand("\"aY")) == "edit…(3)")
 precondition(Trace.keys(RawCommand("/hunter2<CR>")) == "search…(12)")
-precondition(!Trace.keys(RawCommand("/hunter2<CR>")).contains(secret))
-precondition(!Trace.keys(RawCommand(":s/hunter2/x<CR>")).contains(secret))
-precondition(Trace.keys(RawCommand("ciw")) == "ciw")
-precondition(Trace.keys(RawCommand("3dd")) == "3dd")
+precondition(Trace.keys(RawCommand(":s/x/y<CR>")) == "cmdline…(10)")
+
+// The ordinary vocabulary carries no operand and survives intact, which is the
+// whole readability of the log.
+for plain in ["ciw", "3dd", "w", "b", "0", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
+    precondition(Trace.keys(RawCommand(plain)) == plain, "needlessly redacted: " + plain)
+}
 
 // MARK: - Rejections and the reason that already existed
 
@@ -1417,5 +1438,7 @@ precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil)
 precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
 precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))
 precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 14))
+
+
 
 print("Vim engine tests passed")

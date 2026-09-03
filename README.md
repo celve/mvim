@@ -165,7 +165,8 @@ Five categories: `bind` (a field became vim's, with its whole capability resolut
 `cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
 answered instead), `learn` (a demotion committed, or the reason one was not), `gate` (an
 element that did not become a binding). Every line carries `e<epoch>.c<seq>` — the binding
-and the command — so `grep 'e12\.'` is the whole join.
+and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
+command line `e12.c47 …`; the word boundary catches both and keeps `e120` out.
 
 Reading a `cmd` line, `steps=` is the ordered, payload-free plan; `Trace`'s doc comment has
 the alphabet. Order is the diagnostic — a `!` (hard settle) directly after a `P` (blind
@@ -181,6 +182,10 @@ every `bind` line announces while it is on:
 defaults write com.loom.Norm normRecordText -bool YES
 defaults delete com.loom.Norm normRecordText
 ```
+
+**Both edges need a relaunch.** The flag is read once per process, deliberately — re-reading
+it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
+does not stop a Norm that is already running.
 
 ## Running alongside Sotto
 

@@ -152,6 +152,11 @@ public final class Controller {
         case .pending, .cancelled:
             return true
         case .command(let completed):
+            // A completed command gets its number here rather than in `run`, so
+            // the three drops below are numbered too — they are commands that
+            // happened, and each was silent.
+            seq &+= 1
+            let commandSeq = seq
             // Verify-before-run: never mutate a field focus has left. An
             // overlay summoned over a bound Normal-mode field emits no event
             // the tracker can see, so a completed command buys one bounded
@@ -163,12 +168,12 @@ public final class Controller {
                     // the granularity forced bindings have: (pid, window).
                     guard binding.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
                           AX.frontWindow(of: binding.pid)?.id == binding.windowID else {
-                        tracker.reverify(force: true)
+                        drop(completed, commandSeq, "stale-forced")
                         return false
                     }
                 } else {
                     guard let focused = AX.focusedElement() else {
-                        tracker.reverify(force: true)
+                        drop(completed, commandSeq, "no-focused-element")
                         return false
                     }
                     if !CFEqual(focused, binding.element) {
@@ -179,19 +184,27 @@ public final class Controller {
                         // ⇒ retarget and run; bailing here would both destroy
                         // the command and type its final key into the text.
                         guard let moved = tracker.retarget(to: focused, from: binding) else {
-                            tracker.reverify(force: true)
+                            // Destroys the command AND swallows its final key.
+                            drop(completed, commandSeq, "retarget-failed")
                             return false
                         }
                         binding = moved
                     }
                 }
             }
-            run(completed, on: binding)
+            run(completed, on: binding, seq: commandSeq)
             // Publish even on mid-plan aborts: a .setMode commit may have
             // landed before a later step failed.
             publishMode()
             return true
         }
+    }
+
+    /// A completed command that verify-before-run threw away, recorded and
+    /// then handed to the reverify it always triggered.
+    private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
+        Diag.dropped(tracker.epoch, seq, command: completed.command, reason: reason)
+        tracker.reverify(force: true)
     }
 
     /// Focus moved (tracker event). The element plumbing is unconditional;
@@ -247,7 +260,7 @@ public final class Controller {
         }
     }
 
-    private func run(_ completed: RawMonitor.Completed, on binding: FocusTracker.Binding) {
+    private func run(_ completed: RawMonitor.Completed, on binding: FocusTracker.Binding, seq commandSeq: UInt64) {
         let command = completed.command
         let logical = LogicalPlanner.plan(command, state: state)
         var anchor: Int?
@@ -262,9 +275,7 @@ public final class Controller {
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
-        seq &+= 1
         let epoch = tracker.epoch
-        let commandSeq = seq
         let before = state.field.mode
         let executed = executor.execute(physical, on: binding.element, state: &state)
         // Harvested before anything else can touch the executor: the abort path

@@ -57,12 +57,20 @@ enum Diag {
     /// Field text is the user's mail and messages. It is occasionally the only
     /// way to explain a `TextModel` disagreement, which is why the switch
     /// exists — and why every bind says so out loud while it is on.
+    ///
+    /// **Read once per process, so both edges need a relaunch.** Deliberate:
+    /// re-reading `UserDefaults` per line would put a store lookup on the
+    /// command path. The cost is that `defaults delete` does not stop a running
+    /// Norm, which is why the warning below says so rather than only naming the
+    /// command.
     static let recordsText = UserDefaults.standard.bool(forKey: recordsTextKey)
 
     // MARK: - Binding
 
-    /// One binding published. `epoch` is the binding's identity; every command
-    /// line below carries it, so `grep 'e12\\.'` is the whole join.
+    /// One binding published. `epoch` is the binding's identity, and every
+    /// line below carries it — but a bind line is `e12 …` and a command line
+    /// `e12.c47 …`, so the join is `grep -E 'e12\b'`. The word boundary is
+    /// what keeps `e120` out; a trailing dot would drop the bind lines.
     static func bind(_ epoch: UInt64, _ transition: FocusTransition, _ binding: FocusTracker.Binding?) {
         guard let binding else {
             self.bind.log("e\(epoch, privacy: .public) unbound \(Trace.name(transition), privacy: .public)")
@@ -82,7 +90,10 @@ enum Diag {
         }
         self.bind.log("\(line, privacy: .public)")
         if recordsText {
-            self.bind.log("TEXT RECORDING ON — defaults delete com.loom.Norm \(recordsTextKey, privacy: .public)")
+            self.bind.log("""
+                TEXT RECORDING ON — to stop: defaults delete com.loom.Norm \
+                \(recordsTextKey, privacy: .public), then RELAUNCH Norm (read once per process)
+                """)
         }
     }
 
@@ -186,13 +197,34 @@ enum Diag {
     /// Why an element did not become a binding. `FieldProber.gate` computes
     /// all three of these and the tracker used to drop them, so "Norm just
     /// doesn't work in this app" produced no signal of any kind.
-    static func denied(_ epoch: UInt64, _ gate: FieldProber.FieldGate, fresh: Bool) {
-        self.gate.log("""
-            e\(epoch, privacy: .public) deny \(fresh ? "fresh" : "bound", privacy: .public) \
-            textual=\(gate.isTextual ? 1 : 0, privacy: .public) \
-            secure=\(gate.isSecure ? 1 : 0, privacy: .public) \
-            enabled=\(gate.isEnabled ? 1 : 0, privacy: .public) \
-            role=\(gate.role ?? "nil", privacy: .public)
+    ///
+    /// `repeated` is load-bearing, not cosmetic. An unbound, non-textual
+    /// surface re-resolves on the **keydown** path — `bindingForKeydown`, at
+    /// most every 150ms — and nil→nil publishes nothing, so there is no state
+    /// edge to ride. At `.default` that is ~7 lines a second drowning the
+    /// signal in the exact session being diagnosed. The first denial, and
+    /// every change of verdict, stays at `.default`; an identical repeat drops
+    /// to `.debug`, where the count is still there when it is wanted.
+    static func denied(_ epoch: UInt64, _ gate: FieldProber.FieldGate, fresh: Bool, repeated: Bool) {
+        let line = """
+            e\(epoch) deny \(fresh ? "fresh" : "bound") \
+            textual=\(gate.isTextual ? 1 : 0) secure=\(gate.isSecure ? 1 : 0) \
+            enabled=\(gate.isEnabled ? 1 : 0) role=\(gate.role ?? "nil")
+            """
+        if repeated {
+            self.gate.debug("\(line, privacy: .public)")
+        } else {
+            self.gate.log("\(line, privacy: .public)")
+        }
+    }
+
+    /// A completed command that never reached the planner. `Controller.handle`
+    /// drops one on three verify-before-run paths and each is silent today —
+    /// the third destroys the command *and* swallows its final key.
+    static func dropped(_ epoch: UInt64, _ seq: UInt64, command: RawCommand, reason: String) {
+        cmd.log("""
+            e\(epoch, privacy: .public).c\(seq, privacy: .public) \
+            keys=\(Trace.keys(command), privacy: .public) drop=\(reason, privacy: .public)
             """)
     }
 

@@ -78,6 +78,10 @@ public final class FocusTracker {
     /// Shared stamp: the negative-cache window and the reverify rate limit.
     private var lastResolveAt: CFAbsoluteTime = 0
     private var reverifyScheduled = false
+    /// The last gate denial's verdict, so an unbound non-text surface being
+    /// re-resolved on every keydown does not restate it at `.default`. Cleared
+    /// on every publish, so the next denial after a real binding speaks up.
+    private var lastDenial: String?
     private var enabled = true
     private var started = false
 
@@ -276,7 +280,7 @@ public final class FocusTracker {
             }
             let gate = FieldProber.gate(element)
             if gate.engageable { return }
-            Diag.denied(epoch, gate, fresh: false)
+            reportDenial(gate, fresh: false)
             publishForcedOrNil()   // the bound element lost the gate
             return
         }
@@ -285,7 +289,7 @@ public final class FocusTracker {
         retargetObserver(to: pid)
         let gate = FieldProber.gate(element)
         guard gate.engageable else {
-            Diag.denied(epoch, gate, fresh: true)
+            reportDenial(gate, fresh: true)
             publishForcedOrNil()   // the fresh element fails the gate
             return
         }
@@ -294,12 +298,6 @@ public final class FocusTracker {
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
         let surface = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
-        // Web content whose origin did not resolve is now keyed as though it
-        // were native, which merges the page's fields with the browser's own
-        // chrome at the very rung the learner writes to.
-        if gate.isWebElement, surface.origin == nil {
-            Diag.originLost(epoch, role: gate.role)
-        }
         let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: element,
@@ -313,6 +311,22 @@ public final class FocusTracker {
             appVersion: identity.version,
             capabilityReport: resolved.report
         ))
+        // After the publish, so it carries the epoch of the binding it is about
+        // rather than the one being replaced. Web content whose origin did not
+        // resolve is now keyed as though it were native, which merges the
+        // page's fields with the browser's own chrome at the very rung the
+        // learner writes to.
+        if gate.isWebElement, surface.origin == nil {
+            Diag.originLost(epoch, role: gate.role)
+        }
+    }
+
+    /// One denial, at `.default` the first time and on every change of verdict,
+    /// at `.debug` for an identical repeat — see `Diag.denied`.
+    private func reportDenial(_ gate: FieldProber.FieldGate, fresh: Bool) {
+        let verdict = "\(fresh)|\(gate.isTextual)|\(gate.isSecure)|\(gate.isEnabled)|\(gate.role ?? "nil")"
+        Diag.denied(epoch, gate, fresh: fresh, repeated: lastDenial == verdict)
+        lastDenial = verdict
     }
 
     /// What capability config is keyed by: the app, the field's role, and —
@@ -437,6 +451,7 @@ public final class FocusTracker {
         if binding == nil, new == nil { return }
         let edge = transition(from: binding, to: new)
         epoch &+= 1
+        lastDenial = nil
         // The element-destroyed registration moves with the binding; forced
         // stand-ins register nothing.
         if let old = binding, !old.isForced {
