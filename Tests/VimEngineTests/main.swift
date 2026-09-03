@@ -1304,8 +1304,6 @@ func traced(
     )
 }
 
-// Lane A writes and verifies; lane B actuates the same exact offsets as
-// counted keypresses; lane C is blind and emits no settle at all.
 precondition(Trace.shape(ciwA) == "W!R!CCC")
 precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: readProfile))
              == "P2P5!P?CCC")
@@ -1340,9 +1338,6 @@ precondition(Trace.caps(CapabilityReport(entries: [
 
 // MARK: - The redaction rule
 
-// Field text, typed text, search patterns and Ex command lines all reach the
-// engine as `String`/`Character` payloads, and none is diagnostic — lengths and
-// case names are. `Trace` is pure so this rule is a machine's job, not a habit.
 let secret = "hunter2"
 let leaky: [LogicalStep] = [
     .insertText(secret),
@@ -1364,11 +1359,8 @@ let leakySteps = PhysicalPlan(steps: [
 precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
 precondition(Trace.shape(leakySteps) == "RTVC")
 
-// The top-level intent is NOT a safe discriminator — the payloads nest:
-// `d/hunter2<CR>` is an `.operatorCommand` whose target is a search.
-//
-// `Z` and `hunter2` are the operands; no case name `shape` can emit contains
-// either, so their absence is exactly the property under test.
+// The top-level intent is not a safe discriminator — the payloads nest.
+// `Z` and `hunter2` are the operands; no case name `shape` emits holds either.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
              ":s/hunter2/x<CR>", "rZ", "dfZ", "ctZ", "\"ZY", "mZ", "`Z", "ciZ", "qZ"] {
     let rendered = Trace.keys(RawCommand(leak))
@@ -1376,11 +1368,8 @@ for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
                  "Trace.keys leaked an operand: " + leak + " -> " + rendered)
 }
 
-// A count is unbounded user text: the parser eats an arbitrarily long digit run
-// and `source` keeps every digit — a card number with a `w` on the end.
-// The `.incomplete` forms are why the check scans `source`: `parseOperator`
-// consumes a target count and discards it, so the model holds no count while
-// the string holds every digit.
+// The `.incomplete` forms are why the check scans `source` rather than the
+// parse: `parseOperator` consumes a target count and then discards it.
 for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111",
                "3dd", "12j", "2yy", "d3w",
                "d4111111111111111", "d4111111111111111f", "y4155551234"] {
@@ -1406,8 +1395,6 @@ precondition(Trace.keys(RawCommand("\"aY")) == "edit(yankLine)…(3)")
 precondition(Trace.keys(RawCommand("/hunter2<CR>")) == "search…(12)")
 precondition(Trace.keys(RawCommand(":s/x/y<CR>")) == "cmdline…(10)")
 
-// The ordinary vocabulary carries no operand and survives intact, which is the
-// whole readability of the log.
 for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
     precondition(Trace.keys(RawCommand(plain)) == plain, "needlessly redacted: " + plain)
 }
@@ -1428,9 +1415,8 @@ precondition(Trace.name(markReject.rejection!.step) == "setMark")
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).rejection == nil)
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).plan == ciwA)
 
-// The 27th reason is the one `BellReason` has carried "for the flight recorder"
-// since before there was one. The physical lowering drops it, but it never had
-// to survive the planner — the logical plan still holds it.
+// The 27th reason: the lowering drops `BellReason`, but it never had to survive
+// the planner — the logical plan still holds it.
 func bellReason(_ keys: String) -> String? {
     for step in LogicalPlanner.plan(RawCommand(keys), state: .initial).steps {
         if case .bell(let reason) = step { return Trace.name(reason) }

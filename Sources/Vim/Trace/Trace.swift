@@ -177,22 +177,23 @@ enum Trace {
     // MARK: - Commands
 
     /// The keys that produced a command — the literal source only when it is
-    /// provably free of anything the user supplied, and a shape plus a length
-    /// otherwise (`d/needle<CR>` → `op(delete,search)…(12)`).
+    /// provably free of **variable, data-bearing** input, and a shape plus a
+    /// length otherwise (`d/needle<CR>` → `op(delete,search)…(12)`).
     ///
-    /// Three conditions, and the third is a different **kind** of check on
-    /// purpose. `register` and `carriesOperand` interrogate the parse, which
-    /// works because that walk is exhaustive over closed enums. But **the parse
-    /// is lossy**, so it can never certify `source`: `parseOperator` consumes a
-    /// target count and then discards it into `.incomplete(.operatorTarget)`,
-    /// leaving `d4111111111111111` with no count anywhere in the model and
-    /// every digit still in the string. A count is always digits, so scanning
-    /// the string actually being emitted closes that whole class — including
-    /// the next place the parser decides to drop one.
+    /// `ciw` is user-supplied too; what makes it safe is that it is drawn from
+    /// a finite grammar, where a count or an operand is not.
     ///
-    /// It costs `0` and `g0`, which redact to `motion(lineStart)…(1)`. No
-    /// length threshold is offered: "short counts are harmless" is the taste
-    /// judgement that produced this leak twice.
+    /// The digit scan is a different **kind** of check on purpose. Interrogating
+    /// the parse works for typed payloads, whose enums are closed — but **the
+    /// parse is lossy**, so it can never certify `source`: `parseOperator`
+    /// consumes a target count and discards it into `.incomplete(.operatorTarget)`,
+    /// leaving `d4111111111111111` with no count in the model and every digit in
+    /// the string. Scanning what is actually emitted closes that whole class,
+    /// including the next place the parser drops one.
+    ///
+    /// It costs `0` and `g0`, which redact to `motion(lineStart)…(1)`. No length
+    /// threshold: "short counts are harmless" is the judgement that lost this
+    /// twice.
     static func keys(_ command: RawCommand) -> String {
         guard command.register == nil,
               !command.source.contains(where: \.isNumber),

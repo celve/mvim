@@ -174,8 +174,9 @@ keypress) is a settle that can never name the capability it failed, so it rings 
 teaching the learner anything.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
-what you typed only where it is provably free of anything you supplied — no operand, no
-register, no digit; otherwise it shows the command's shape and a length. `d/needle<CR>`
+what you typed only where it is provably free of variable, data-bearing input — no operand,
+no register, no digit; otherwise it shows the command's shape and a length. (`ciw` is
+user-supplied too; what makes it safe is that it comes from a finite grammar.) `d/needle<CR>`
 becomes `op(delete,search)…(12)`, `3dd` becomes `op(delete,line)…(3)`, and even `0` becomes
 `motion(lineStart)…(1)`, because the digit test scans the string being written rather than
 the parse — which is lossy and drops a count outright when the command is still incomplete.
