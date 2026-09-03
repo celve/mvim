@@ -46,6 +46,7 @@ enum Diag {
     /// such query, and a clean command must not pay to render a line nobody
     /// asked for.
     private static let cmdLevel = OSLog(subsystem: Log.subsystem, category: "cmd")
+    private static let gateLevel = OSLog(subsystem: Log.subsystem, category: "gate")
 
     static let recordsTextKey = "normRecordText"
 
@@ -206,6 +207,10 @@ enum Diag {
     /// every change of verdict, stays at `.default`; an identical repeat drops
     /// to `.debug`, where the count is still there when it is wanted.
     static func denied(_ epoch: UInt64, _ gate: FieldProber.FieldGate, fresh: Bool, repeated: Bool) {
+        // The repeat path is the one on the keydown negative cache, so it must
+        // not render a line nobody will read — the same guard the clean
+        // command line gets.
+        guard !repeated || gateLevel.isEnabled(type: .debug) else { return }
         let line = """
             e\(epoch) deny \(fresh ? "fresh" : "bound") \
             textual=\(gate.isTextual ? 1 : 0) secure=\(gate.isSecure ? 1 : 0) \

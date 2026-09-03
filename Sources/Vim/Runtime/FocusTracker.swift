@@ -79,9 +79,23 @@ public final class FocusTracker {
     private var lastResolveAt: CFAbsoluteTime = 0
     private var reverifyScheduled = false
     /// The last gate denial's verdict, so an unbound non-text surface being
-    /// re-resolved on every keydown does not restate it at `.default`. Cleared
-    /// on every publish, so the next denial after a real binding speaks up.
-    private var lastDenial: String?
+    /// re-resolved on every keydown does not restate it at `.default`.
+    ///
+    /// Carries the pid, and that is the load-bearing field: while unbound,
+    /// `publish(nil)` returns before the clear below, so nothing marks the edge
+    /// between two apps. Without it, focusing a non-text `AXGroup` in one app
+    /// and then another would compare equal and demote the second app's first
+    /// denial to `.debug` — losing the default-level signal for precisely the
+    /// "Norm does not work in this app" report this event exists to answer.
+    private struct Denial: Equatable {
+        let pid: pid_t
+        let fresh: Bool
+        let textual: Bool
+        let secure: Bool
+        let enabled: Bool
+        let role: String?
+    }
+    private var lastDenial: Denial?
     private var enabled = true
     private var started = false
 
@@ -280,7 +294,7 @@ public final class FocusTracker {
             }
             let gate = FieldProber.gate(element)
             if gate.engageable { return }
-            reportDenial(gate, fresh: false)
+            reportDenial(gate, fresh: false, pid: pid)
             publishForcedOrNil()   // the bound element lost the gate
             return
         }
@@ -289,7 +303,7 @@ public final class FocusTracker {
         retargetObserver(to: pid)
         let gate = FieldProber.gate(element)
         guard gate.engageable else {
-            reportDenial(gate, fresh: true)
+            reportDenial(gate, fresh: true, pid: pid)
             publishForcedOrNil()   // the fresh element fails the gate
             return
         }
@@ -322,9 +336,13 @@ public final class FocusTracker {
     }
 
     /// One denial, at `.default` the first time and on every change of verdict,
-    /// at `.debug` for an identical repeat — see `Diag.denied`.
-    private func reportDenial(_ gate: FieldProber.FieldGate, fresh: Bool) {
-        let verdict = "\(fresh)|\(gate.isTextual)|\(gate.isSecure)|\(gate.isEnabled)|\(gate.role ?? "nil")"
+    /// at `.debug` for an identical repeat — see `Diag.denied`. The comparison
+    /// is value-typed so the keydown negative cache allocates nothing.
+    private func reportDenial(_ gate: FieldProber.FieldGate, fresh: Bool, pid: pid_t) {
+        let verdict = Denial(
+            pid: pid, fresh: fresh, textual: gate.isTextual,
+            secure: gate.isSecure, enabled: gate.isEnabled, role: gate.role
+        )
         Diag.denied(epoch, gate, fresh: fresh, repeated: lastDenial == verdict)
         lastDenial = verdict
     }

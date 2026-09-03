@@ -173,10 +173,16 @@ the alphabet. Order is the diagnostic — a `!` (hard settle) directly after a `
 keypress) is a settle that can never name the capability it failed, so it rings without
 teaching the learner anything.
 
-**Text is not recorded.** No renderer can emit a text payload, and that is a unit test
-rather than a convention. Search patterns and Ex command lines are reduced to their length;
-everything else in `keys=` is vim syntax. The opt-in, which the menu does not offer and
-every `bind` line announces while it is on:
+**Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
+what you typed only where the parse proves you supplied no operand and no count; otherwise
+it shows the command's shape and a length — `d/needle<CR>` becomes `op(delete,search)…(12)`
+and `3dd` becomes `op(delete,line)…(3)`.
+
+The rule is not "syntax is safe, content is not". It is that when Norm's mode tracking is
+wrong — the bug this exists to find — you believe you are typing and every keystroke parses
+as a Normal-mode command, so an operand or a count *is* a letter of your prose. `4111…w` is
+a card number with a `w` on the end. The opt-in for recording content, which the menu does
+not offer and every `bind` line announces while it is on:
 
 ```sh
 defaults write com.loom.Norm normRecordText -bool YES

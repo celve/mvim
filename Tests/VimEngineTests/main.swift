@@ -1373,23 +1373,44 @@ precondition(Trace.shape(leakySteps) == "RTVC")
 // An operand is never merely syntax here, because of the bug this recorder is
 // for: with the mode stale the user believes they are typing, so `ma`, `"a`,
 // `rS` and every unrecognised `.custom` are letters of their prose.
+// `Z` and `hunter2` are the operands; no case name `shape` can emit contains
+// either, so their absence is exactly the property under test.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
-             ":s/hunter2/x<CR>", "rh", "dfh", "ct;", "\"aY", "mh", "`h", "ci\"", "qh"] {
-    precondition(!Trace.keys(RawCommand(leak)).contains(String(leak.dropFirst())),
-                 "Trace.keys leaked an operand: " + leak)
+             ":s/hunter2/x<CR>", "rZ", "dfZ", "ctZ", "\"ZY", "mZ", "`Z", "ciZ", "qZ"] {
+    let rendered = Trace.keys(RawCommand(leak))
+    precondition(!rendered.contains("Z") && !rendered.contains("hunter2"),
+                 "Trace.keys leaked an operand: " + leak + " -> " + rendered)
 }
-precondition(Trace.keys(RawCommand("d/hunter2<CR>")) == "op(delete)…(13)")
-precondition(Trace.keys(RawCommand("rS")) == "edit…(2)")
-precondition(Trace.keys(RawCommand("dfS")) == "op(delete)…(3)")
+
+// A count is user-supplied text too, and unbounded: the parser eats an
+// arbitrarily long digit run and `source` keeps every digit, so under a stale
+// mode this is a card number with a `w` on the end. The operator form hides in
+// `targetCount`, where the outer `count` is nil.
+for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111",
+               "3dd", "12j", "2yy", "d3w"] {
+    let rendered = Trace.keys(RawCommand(digits))
+    precondition(rendered != digits, "a counted command reached the log verbatim: " + digits)
+    // Only the shape is checked — the length suffix after `…` legitimately
+    // holds digits, and no case name `shape` can emit holds any.
+    let shape = String(rendered.split(separator: "…").first ?? "")
+    precondition(!shape.contains(where: \.isNumber),
+                 "Trace.keys leaked a count digit: " + digits + " -> " + rendered)
+}
+precondition(Trace.keys(RawCommand("3dd")) == "op(delete,line)…(3)")
+precondition(Trace.keys(RawCommand("4111111111111111w")) == "motion(word)…(17)")
+precondition(Trace.keys(RawCommand("d4111111111111111w")) == "op(delete,word)…(18)")
+precondition(Trace.keys(RawCommand("d/hunter2<CR>")) == "op(delete,search)…(13)")
+precondition(Trace.keys(RawCommand("rS")) == "edit(replaceCharacter)…(2)")
+precondition(Trace.keys(RawCommand("dfS")) == "op(delete,find)…(3)")
 precondition(Trace.keys(RawCommand("mS")) == "mark…(2)")
 precondition(Trace.keys(RawCommand("`S")) == "motion(mark)…(2)")
-precondition(Trace.keys(RawCommand("\"aY")) == "edit…(3)")
+precondition(Trace.keys(RawCommand("\"aY")) == "edit(yankLine)…(3)")
 precondition(Trace.keys(RawCommand("/hunter2<CR>")) == "search…(12)")
 precondition(Trace.keys(RawCommand(":s/x/y<CR>")) == "cmdline…(10)")
 
 // The ordinary vocabulary carries no operand and survives intact, which is the
 // whole readability of the log.
-for plain in ["ciw", "3dd", "w", "b", "0", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
+for plain in ["ciw", "w", "b", "0", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
     precondition(Trace.keys(RawCommand(plain)) == plain, "needlessly redacted: " + plain)
 }
 
@@ -1438,6 +1459,7 @@ precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil)
 precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
 precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))
 precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 14))
+
 
 
 

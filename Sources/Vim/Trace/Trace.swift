@@ -177,8 +177,8 @@ enum Trace {
     // MARK: - Commands
 
     /// The keys that produced a command — the literal source **only when the
-    /// parse proves the user supplied no operand character**, and a shape plus
-    /// a length otherwise.
+    /// parse proves the user supplied no operand character and no count**, and
+    /// a shape plus a length otherwise.
     ///
     /// The discriminator cannot be the top-level intent: the payloads nest.
     /// `d/hunter2<CR>` is an `.operatorCommand` whose target is a search, and
@@ -193,14 +193,32 @@ enum Trace {
     /// — the unrecognized sequence a stranded session produces most — redacts
     /// rather than being waved through as "just keys".
     ///
-    /// `ciw`, `3dd`, `w`, `dd`, `x`, `p`, `gg` and the rest of the ordinary
-    /// vocabulary carry no operand and survive intact, which is the whole
-    /// readability of the log.
+    /// `ciw`, `w`, `dd`, `x`, `p`, `gg` and the rest of the uncounted ordinary
+    /// vocabulary survive intact, which is the whole readability of the log. A
+    /// count is the same variable input by another name — see `carriesCount`.
     static func keys(_ command: RawCommand) -> String {
-        guard command.register == nil, !carriesOperand(command.intent) else {
+        guard command.register == nil,
+              command.count == nil,
+              !carriesCount(command.intent),
+              !carriesOperand(command.intent) else {
             return "\(shape(command.intent))…(\(command.source.utf16.count))"
         }
         return command.source
+    }
+
+    /// A count is user-supplied text too, and an unbounded amount of it: the
+    /// parser consumes an arbitrarily long digit run and `source` keeps every
+    /// digit, so under a stale mode `4111111111111111w` is a card number with a
+    /// `w` on the end. The operator form hides in `targetCount`, where the outer
+    /// `count` is nil — `d4111111111111111w`.
+    ///
+    /// No length threshold. "Short counts are harmless" is exactly the kind of
+    /// taste judgement that produced this leak twice; `3dd` losing its literal
+    /// form to `op(delete,line)…(3)` is the price, and `shape` is detailed
+    /// enough to pay it.
+    static func carriesCount(_ intent: RawCommand.Intent) -> Bool {
+        guard case .operatorCommand(let command) = intent else { return false }
+        return command.targetCount != nil
     }
 
     /// Did the user supply a character this command carries? **Exhaustive on
@@ -311,7 +329,12 @@ enum Trace {
         }
     }
 
-    /// What a redacted command was, without its operand. Display only.
+    /// What a redacted command was, without its operand or its digits. Display
+    /// only, so it may `default:` freely — the safety property is the
+    /// `carriesOperand` family above.
+    ///
+    /// Detailed on purpose: every counted command now routes through here, so
+    /// this is the whole readout for `3dd` and `12j`.
     static func shape(_ intent: RawCommand.Intent) -> String {
         switch intent {
         case .search: return "search"
@@ -320,23 +343,70 @@ enum Trace {
         case .window: return "window"
         case .mark: return "mark"
         case .macro: return "macro"
+        case .history: return "history"
+        case .repeat: return "repeat"
+        case .modeChange: return "modeChange"
         case .incomplete: return "incomplete"
-        case .motion(let motion): return "motion(\(shape(motion)))"
-        case .operatorCommand(let command): return "op(\(command.kind.rawValue))"
-        case .edit: return "edit"
         case .view: return "view"
         case .fold: return "fold"
-        default: return "cmd"
+        case .motion(let motion): return "motion(\(shape(motion)))"
+        case .edit(let edit): return "edit(\(shape(edit)))"
+        case .operatorCommand(let command):
+            return "op(\(command.kind.rawValue),\(shape(command.target)))"
+        }
+    }
+
+    static func shape(_ target: RawCommand.OperatorTarget) -> String {
+        switch target {
+        case .pending: return "pending"
+        case .line: return "line"
+        case .motion(let motion): return shape(motion)
+        case .textObject: return "textObject"
+        case .custom: return "custom"
+        }
+    }
+
+    static func shape(_ edit: RawCommand.Edit) -> String {
+        switch edit {
+        case .deleteCharacter: return "deleteCharacter"
+        case .substituteCharacter: return "substituteCharacter"
+        case .substituteLine: return "substituteLine"
+        case .changeToLineEnd: return "changeToLineEnd"
+        case .deleteToLineEnd: return "deleteToLineEnd"
+        case .yankLine: return "yankLine"
+        case .replaceCharacter: return "replaceCharacter"
+        case .joinLines: return "joinLines"
+        case .put: return "put"
+        case .toggleCase: return "toggleCase"
+        case .increment: return "increment"
+        case .decrement: return "decrement"
         }
     }
 
     static func shape(_ motion: Motion) -> String {
         switch motion {
+        case .character: return "character"
+        case .displayLine: return "displayLine"
+        case .line: return "line"
+        case .word: return "word"
+        case .lineStart: return "lineStart"
+        case .lineEnd: return "lineEnd"
+        case .lastNonBlank: return "lastNonBlank"
+        case .column: return "column"
+        case .fileStart: return "fileStart"
+        case .fileEnd: return "fileEnd"
+        case .screenLine: return "screenLine"
+        case .sentence: return "sentence"
+        case .paragraph: return "paragraph"
+        case .section: return "section"
+        case .matchingItem: return "matchingItem"
         case .find: return "find"
+        case .repeatFind: return "repeatFind"
         case .mark: return "mark"
         case .search: return "search"
+        case .page: return "page"
+        case .scrollLine: return "scrollLine"
         case .custom: return "custom"
-        default: return "motion"
         }
     }
 
