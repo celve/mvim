@@ -2,39 +2,7 @@ import Foundation
 import LoomCore
 import os
 
-/// Norm's flight recorder: the decision log the probe-and-learn system never
-/// had.
-///
-/// The unit of record is **one command's decision**, not one keystroke. Norm's
-/// central bet is that it cannot predict what a field will do, so it probes,
-/// verifies and remembers — and until this existed that bet was unfalsifiable,
-/// because a field that lied and a learner that drew the wrong conclusion from
-/// the lie both went unrecorded. What a reader wants back is "the engine
-/// believed X about this field, and X was false".
-///
-/// **Retrieval**, from a machine nobody is sitting at:
-///
-///     log show --predicate 'subsystem == "com.loom.Norm"' --last 1h --info --debug
-///     log collect --last 2h --output norm.logarchive
-///
-/// A command that did not fully succeed logs at `.default` and is persisted to
-/// disk for free — surviving the quit that a stranded user is about to
-/// perform, which is what rules out an in-memory ring. A clean command logs at
-/// `.debug`, off unless someone asks for it:
-///
-///     sudo log config --subsystem com.loom.Norm --mode "level:debug,persist:debug"
-///     sudo log config --subsystem com.loom.Norm --mode "level:default"   # off again
-///
-/// **Promptness.** `InputHub`'s contract forbids work on the per-keystroke
-/// path. The invariant, checkable by grep: no `Diag.` call appears in
-/// `Controller.handle` outside the `case .command` arm. Everything here is on
-/// the command path, which already spends up to 250ms in `Executor.settle` by
-/// design; the clean-path `.debug` line is additionally guarded by
-/// `isEnabled`, so its render never runs when nobody is listening.
-///
-/// **Privacy.** `Trace` cannot emit a text payload at all — that rule is a
-/// unit test, not a convention. This type may emit more, and only under an
-/// opt-in the menu does not offer and every bind announces.
+/// One line per command decision; no call sits on `InputHub`'s per-keystroke path.
 enum Diag {
     static let bind = Logger(subsystem: Log.subsystem, category: "bind")
     static let cmd = Logger(subsystem: Log.subsystem, category: "cmd")
@@ -42,36 +10,18 @@ enum Diag {
     static let learn = Logger(subsystem: Log.subsystem, category: "learn")
     static let gate = Logger(subsystem: Log.subsystem, category: "gate")
 
-    /// The same category as `cmd`, kept only for `isEnabled`: `Logger` has no
-    /// such query, and a clean command must not pay to render a line nobody
-    /// asked for.
+    /// Kept only for `isEnabled`, which `Logger` does not have.
     private static let cmdLevel = OSLog(subsystem: Log.subsystem, category: "cmd")
     private static let gateLevel = OSLog(subsystem: Log.subsystem, category: "gate")
 
     static let recordsTextKey = "normRecordText"
 
-    /// Whether to record field content — text, DOM identifiers, insert
-    /// payloads. Off, undiscoverable from the menu, and read once per process:
-    ///
-    ///     defaults write com.loom.Norm normRecordText -bool YES
-    ///
-    /// Field text is the user's mail and messages. It is occasionally the only
-    /// way to explain a `TextModel` disagreement, which is why the switch
-    /// exists — and why every bind says so out loud while it is on.
-    ///
-    /// **Read once per process, so both edges need a relaunch.** Deliberate:
-    /// re-reading `UserDefaults` per line would put a store lookup on the
-    /// command path. The cost is that `defaults delete` does not stop a running
-    /// Norm, which is why the warning below says so rather than only naming the
-    /// command.
+    /// Records field content; read once per process, so both edges need a relaunch.
     static let recordsText = UserDefaults.standard.bool(forKey: recordsTextKey)
 
     // MARK: - Binding
 
-    /// One binding published. `epoch` is the binding's identity, and every
-    /// line below carries it — but a bind line is `e12 …` and a command line
-    /// `e12.c47 …`, so the join is `grep -E 'e12\b'`. The word boundary is
-    /// what keeps `e120` out; a trailing dot would drop the bind lines.
+    /// `epoch` is the binding's identity; every line below carries it.
     static func bind(_ epoch: UInt64, _ transition: FocusTransition, _ binding: FocusTracker.Binding?) {
         guard let binding else {
             self.bind.log("e\(epoch, privacy: .public) unbound \(Trace.name(transition), privacy: .public)")
@@ -79,8 +29,7 @@ enum Diag {
         }
         var line = "e\(epoch) \(Trace.name(transition))"
         line += " forced=\(binding.isForced ? 1 : 0) overlay=\(binding.isOverlay ? 1 : 0)"
-        // nil is the signal, not a gap: the learner keys on this rung and can
-        // conclude nothing at all without one.
+        // nil is the signal: the learner keys on this rung and needs one.
         line += " rung=\(binding.surface.roleRung ?? "nil")"
         line += " ver=\(binding.appVersion ?? "nil")"
         if let report = binding.capabilityReport {
@@ -100,11 +49,7 @@ enum Diag {
 
     // MARK: - Commands
 
-    /// One command's whole decision. The anchor event: everything else joins
-    /// to it through `e<epoch>.c<seq>`.
-    ///
-    /// `steps` is the ordered, payload-free plan — `Trace` has the alphabet and
-    /// why the order is the diagnostic.
+    /// The anchor event — everything else joins to it through `e<epoch>.c<seq>`.
     static func command(
         _ epoch: UInt64, _ seq: UInt64,
         command: RawCommand,
@@ -153,16 +98,14 @@ enum Diag {
         }
     }
 
-    /// A settle that did not converge — including the soft ones, which ring
-    /// nothing and abort nothing and were until now invisible everywhere.
+    /// Includes the soft ones, which ring nothing, abort nothing and were invisible.
     private static func settleFailed(_ tag: String, _ failure: Executor.SettleFailure) {
         var line = "\(tag) \(failure.hard ? "FAIL" : "soft")@\(failure.index)"
         line += " want sel=\(Trace.range(failure.expectation.selection))"
         line += " len=\(Trace.optional(failure.expectation.length))"
         line += " got sel=\(Trace.range(failure.observedSelection))"
         line += " len=\(Trace.optional(failure.observedLength))"
-        // The distinction the executor used to collapse: a field that answered
-        // something else, versus one that would not answer at all.
+        // A field that answered something else, versus one that would not answer.
         line += " answered=\(failure.answered ? 1 : 0)"
         line += " polls=\(failure.polls) ms=\(failure.milliseconds)"
         if let error = failure.writeError {
@@ -181,8 +124,7 @@ enum Diag {
             """)
     }
 
-    /// A command that produced evidence the learner then declined to use. Each
-    /// reason is a way the probe-and-learn system can be silently inert.
+    /// Each reason is a way the probe-and-learn system can be silently inert.
     static func notLearned(_ epoch: UInt64, _ seq: UInt64, reason: String, failed: Capability?) {
         learn.log("""
             e\(epoch, privacy: .public).c\(seq, privacy: .public) skip=\(reason, privacy: .public) \
@@ -192,20 +134,9 @@ enum Diag {
 
     // MARK: - The gate
 
-    /// Why an element did not become a binding. `FieldProber.gate` computes
-    /// all three of these and the tracker used to drop them, so "Norm just
-    /// doesn't work in this app" produced no signal of any kind.
-    ///
-    /// `repeated` is load-bearing, not cosmetic. An unbound, non-textual
-    /// surface re-resolves on the **keydown** path — `bindingForKeydown`, at
-    /// most every 150ms — and nil→nil publishes nothing, so there is no state
-    /// edge to ride. At `.default` that is ~7 lines a second drowning the
-    /// signal in the exact session being diagnosed. The first denial, and
-    /// every change of verdict, stays at `.default`; an identical repeat drops
-    /// to `.debug`, where the count is still there when it is wanted.
+    /// A repeat demotes: the keydown path re-resolves every 150ms and publishes nothing.
     static func denied(_ epoch: UInt64, _ gate: FieldProber.FieldGate, fresh: Bool, repeated: Bool) {
-        // The repeat path is on the keydown negative cache: render nothing
-        // when no one is listening.
+        // The repeat path is on the keydown cache: render nothing if unread.
         guard !repeated || gateLevel.isEnabled(type: .debug) else { return }
         let line = """
             e\(epoch) deny \(fresh ? "fresh" : "bound") \
@@ -219,9 +150,7 @@ enum Diag {
         }
     }
 
-    /// A completed command that never reached the planner. `Controller.handle`
-    /// drops one on three verify-before-run paths and each is silent today —
-    /// the third destroys the command *and* swallows its final key.
+    /// A completed command verify-before-run threw away; one form eats its final key.
     static func dropped(_ epoch: UInt64, _ seq: UInt64, command: RawCommand, reason: String) {
         cmd.log("""
             e\(epoch, privacy: .public).c\(seq, privacy: .public) \
@@ -229,16 +158,12 @@ enum Diag {
             """)
     }
 
-    /// The bound element short-circuited a resolve without re-probing. Every
-    /// AX notification, activation and keydown resolve takes this exit, so a
-    /// field that changes what it can do mid-session is never noticed.
+    /// Every notification, activation and keydown resolve takes this exit without re-probing.
     static func shortCircuited(_ epoch: UInt64) {
         gate.debug("e\(epoch, privacy: .public) short-circuit same-element revalidate=0")
     }
 
-    /// A web field whose origin did not resolve. It is now keyed as though it
-    /// were native, which merges a page's fields with the browser's own
-    /// chrome at the rung the learner writes to.
+    /// A web field keyed as native, merging the page with the browser's own chrome.
     static func originLost(_ epoch: UInt64, role: String?) {
         gate.log("""
             e\(epoch, privacy: .public) surface origin=nil web=1 \

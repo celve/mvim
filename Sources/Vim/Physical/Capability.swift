@@ -143,12 +143,7 @@ public struct CapabilityProfile: Equatable, Sendable {
     }
 }
 
-/// Why each atom of one binding resolved the way it did — the menu's badge
-/// vocabulary, and the recorder's. Consumed by the runtime and the app, never
-/// by the snapshot or the planner, which take the bare `CapabilityProfile`.
-///
-/// Lives here rather than beside `FieldProber` so `Trace` can render it under
-/// `make test`: the prober is impure, this is four value types.
+/// Why each atom resolved as it did. Here, not beside the impure `FieldProber`, so `make test` reaches it.
 public struct CapabilityReport: Equatable, Sendable {
     public enum Source: Equatable, Sendable {
         /// The AX trial — or, for `drawCursor`, its writeSelection mechanism.

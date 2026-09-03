@@ -35,26 +35,16 @@ public final class Executor {
         public internal(set) var failedCapability: Capability?
         public internal(set) var settledCapabilities: Set<Capability> = []
 
-        /// Which step `execute` stopped on, when it stopped early. Recorder
-        /// only — the learner reads the two fields above.
+        /// Recorder only — the learner reads the two fields above.
         public internal(set) var abortedAt: Int?
 
-        /// Every settle that did not converge, **hard and soft**. A soft one
-        /// is the class of failure that is otherwise invisible: it neither
-        /// rings nor aborts, and its attribution is already cleared, so
-        /// nothing downstream would ever hear about it.
+        /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
         public internal(set) var settleFailures: [SettleFailure] = []
 
         public init() {}
     }
 
-    /// What a settle saw when it gave up — the prediction, and what the field
-    /// answered instead.
-    ///
-    /// `answered == false` means the field did not produce the attribute at
-    /// all (unreadable, or an AX error `AX.attributes` resolved to nil). That
-    /// is a different failure from disagreeing about the value, and until this
-    /// existed the two were the same bare `false`.
+    /// `answered == false` is a field that produced no attribute at all, not one that disagreed.
     public struct SettleFailure: Equatable, Sendable {
         public let hard: Bool
         public let index: Int
@@ -64,17 +54,13 @@ public final class Executor {
         public let answered: Bool
         public let polls: Int
         public let milliseconds: Int
-        /// The `AXError` from the write this settle is verifying, when it was
-        /// not `.success`. `AX` hands it back for exactly this and the
-        /// executor used to drop it, so "the app refused the write" and "the
-        /// write landed but the read-back disagrees" were indistinguishable.
+        /// Told a refused write apart from one that landed and then read back wrong.
         public let writeError: Int32?
     }
 
     public private(set) var lastRun = RunEvidence()
 
-    /// The rejection from the write a following settle verifies, if any. Reset
-    /// per run and cleared by any step that ends attribution's reach.
+    /// From the write a following settle verifies; cleared where attribution is.
     private var lastWriteError: Int32?
 
     /// An `AXError` worth reporting: `.success` is not one.
@@ -82,8 +68,7 @@ public final class Executor {
         error == .success ? nil : error.rawValue
     }
 
-    /// Fold one settle's reading into the run's evidence. Returns whether it
-    /// converged, so the two call sites read as they did before.
+    /// Returns whether it converged, so the two call sites read as they did before.
     @discardableResult
     private func record(
         _ outcome: SettleOutcome, _ expectation: Expectation, at index: Int, hard: Bool
@@ -128,9 +113,7 @@ public final class Executor {
                 lastWriteError = nil
             default:
                 attribution = nil
-                // The error belongs to the write a settle verifies, so the
-                // settle consumes it and any other step ends its reach —
-                // exactly as both do for attribution.
+                // The settle consumes the error; any other step ends its reach.
                 lastWriteError = nil
             }
             guard passed else {
@@ -241,9 +224,7 @@ public final class Executor {
         }
     }
 
-    /// One settle's reading. The observed values ride along on every exit so
-    /// a timeout can say what the field answered — they are already in hand,
-    /// so reporting them costs no extra round trip.
+    /// The observed values ride every exit, so a timeout costs no extra round trip.
     private struct SettleOutcome {
         let converged: Bool
         let observedSelection: Range<Int>?
@@ -296,9 +277,7 @@ public final class Executor {
             if let slot = lengthSlot {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
-            // Not the same question as convergence: an attribute the field
-            // never produced is a silent app, where a wrong value is a lying
-            // one, and the learner should eventually tell them apart.
+            // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
             func outcome(_ converged: Bool) -> SettleOutcome {

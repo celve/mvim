@@ -19,13 +19,7 @@
 /// it never talks to AX, and it writes no state (it only *authors* commit
 /// steps for the reducer).
 public enum PhysicalPlanner {
-    /// Which logical step no lane could realize, and where in the plan it sat.
-    ///
-    /// Out-of-band on purpose: `PhysicalPlan` still stores only the program.
-    /// The step's *type* is the diagnostic — it partitions the 26 rejection
-    /// sites below to one or two apiece, which is all a reader needs to find
-    /// the `return nil` that fired. Threading a reason through every one of
-    /// them would buy a bit more resolution for a great deal more code.
+    /// Out-of-band, so the plan still stores only the program; the step's type narrows the 26 sites.
     public struct Rejection: Equatable, Sendable {
         public let index: Int
         public let step: LogicalStep
@@ -40,8 +34,7 @@ public enum PhysicalPlanner {
         planning(logical, snapshot: snapshot).plan
     }
 
-    /// `plan` plus why it rejected. Same walk, same result — the recorder
-    /// calls this one, everything else keeps calling `plan`.
+    /// `plan` plus why it rejected; everything but the recorder keeps calling `plan`.
     public static func planning(
         _ logical: LogicalPlan, snapshot: FieldSnapshot
     ) -> (plan: PhysicalPlan, rejection: Rejection?) {

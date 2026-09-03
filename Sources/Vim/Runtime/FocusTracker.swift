@@ -62,10 +62,7 @@ public final class FocusTracker {
     public var onPointerAction: (() -> Void)?
     public private(set) var binding: Binding?
 
-    /// The recorder's name for the current binding — every published edge gets
-    /// a new one. It lives here rather than on the controller because the
-    /// gate events below fire where no binding is published at all, and they
-    /// still need to say *when*. See `Diag`.
+    /// Here, not on the controller: the gate events below fire where nothing is published.
     public private(set) var epoch: UInt64 = 0
 
     private var appObserver: AXObserver?
@@ -78,15 +75,7 @@ public final class FocusTracker {
     /// Shared stamp: the negative-cache window and the reverify rate limit.
     private var lastResolveAt: CFAbsoluteTime = 0
     private var reverifyScheduled = false
-    /// The last gate denial's verdict, so an unbound non-text surface being
-    /// re-resolved on every keydown does not restate it at `.default`.
-    ///
-    /// Carries the pid, and that is the load-bearing field: while unbound,
-    /// `publish(nil)` returns before the clear below, so nothing marks the edge
-    /// between two apps. Without it, focusing a non-text `AXGroup` in one app
-    /// and then another would compare equal and demote the second app's first
-    /// denial to `.debug` — losing the default-level signal for precisely the
-    /// "Norm does not work in this app" report this event exists to answer.
+    /// Throttles the keydown path; the pid is load-bearing, as nothing else marks an app change.
     private struct Denial: Equatable {
         let pid: pid_t
         let fresh: Bool
@@ -325,19 +314,13 @@ public final class FocusTracker {
             appVersion: identity.version,
             capabilityReport: resolved.report
         ))
-        // After the publish, so it carries the epoch of the binding it is about
-        // rather than the one being replaced. Web content whose origin did not
-        // resolve is now keyed as though it were native, which merges the
-        // page's fields with the browser's own chrome at the very rung the
-        // learner writes to.
+        // After the publish, so it carries its own binding's epoch, not the outgoing one.
         if gate.isWebElement, surface.origin == nil {
             Diag.originLost(epoch, role: gate.role)
         }
     }
 
-    /// One denial, at `.default` the first time and on every change of verdict,
-    /// at `.debug` for an identical repeat — see `Diag.denied`. The comparison
-    /// is value-typed so the keydown negative cache allocates nothing.
+    /// Value-typed, so the keydown negative cache allocates nothing.
     private func reportDenial(_ gate: FieldProber.FieldGate, fresh: Bool, pid: pid_t) {
         let verdict = Denial(
             pid: pid, fresh: fresh, textual: gate.isTextual,

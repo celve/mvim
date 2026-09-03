@@ -55,10 +55,7 @@ public final class Controller {
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
 
-    /// The recorder's command counter. Its other half — the binding's epoch —
-    /// lives on the tracker, which is what publishes bindings. Every line
-    /// carries `e<epoch>.c<seq>`, and that is the entire join: the pure layer
-    /// has no clock and needs no id, because it does not emit. See `Diag`.
+    /// The recorder's command counter; its other half, the epoch, is on the tracker.
     private var seq: UInt64 = 0
 
     /// A mutating command that entered Insert leaves its dot body open until
@@ -70,8 +67,7 @@ public final class Controller {
             self?.rebind(to: binding, transition: transition)
         }
         tracker.onPointerAction = { [weak self] in self?.pointerActed() }
-        // Force the recorder's one `UserDefaults` read here, so it never lands
-        // on the tap callback's first command.
+        // Force the recorder's one store read off the tap callback's first command.
         _ = Diag.recordsText
         tracker.start()
     }
@@ -152,9 +148,7 @@ public final class Controller {
         case .pending, .cancelled:
             return true
         case .command(let completed):
-            // A completed command gets its number here rather than in `run`, so
-            // the three drops below are numbered too — they are commands that
-            // happened, and each was silent.
+            // Numbered here, not in `run`, so the three silent drops below are too.
             seq &+= 1
             let commandSeq = seq
             // Verify-before-run: never mutate a field focus has left. An
@@ -200,8 +194,7 @@ public final class Controller {
         }
     }
 
-    /// A completed command that verify-before-run threw away, recorded and
-    /// then handed to the reverify it always triggered.
+    /// A completed command verify-before-run threw away, then handed to its reverify.
     private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
         Diag.dropped(tracker.epoch, seq, command: completed.command, reason: reason)
         tracker.reverify(force: true)
@@ -286,8 +279,7 @@ public final class Controller {
         // paths, and so the republish a commit triggers happens as `run`
         // unwinds rather than re-entering the tracker mid-command.
         defer { learn(from: evidence, on: binding, epoch: epoch, seq: commandSeq) }
-        // Declared second, so LIFO runs it first: the command's own line lands
-        // before the demotion and republish it may go on to cause.
+        // Declared second so LIFO runs it first, before the republish it may cause.
         defer {
             Diag.command(
                 epoch, commandSeq,
@@ -324,12 +316,7 @@ public final class Controller {
         recordChange(for: command, mutated: physical.mutatesText)
     }
 
-    /// The reason a logical plan rang, recovered where it still exists.
-    ///
-    /// `LogicalStep.BellReason` has carried this "for the flight recorder"
-    /// since before there was one, and the physical lowering drops it —
-    /// deliberately, since execution treats every reason alike. It never had
-    /// to survive the planner: the logical plan is right here.
+    /// The lowering drops `BellReason`, but it never had to survive the planner.
     private static func bellReason(_ logical: LogicalPlan) -> LogicalStep.BellReason? {
         for step in logical.steps {
             if case .bell(let reason) = step { return reason }
@@ -344,21 +331,16 @@ public final class Controller {
     /// `insertText`, the two capabilities a field can *claim* and then fail to
     /// deliver. Reads were proven at bind; policies have no settle signal.
     ///
-    /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), which is
-    /// persisted and applied at once, so the very next command routes around the
-    /// lie instead of belling again. The re-resolve is session-preserving
-    /// (`.sameElement`), so a demotion landing mid-edit does not move the user.
-    ///
-    /// Every early return below is a way this can be silently inert, so each one
-    /// that had evidence to work with says so.
+    /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), persisted and applied
+    /// at once, so the next command routes around the lie. The re-resolve is
+    /// session-preserving (`.sameElement`), so it does not move the user mid-edit.
     private func learn(
         from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64
     ) {
         // A command that issued no AX write — the whole blind lane, and any plan
         // whose steps were all commits — teaches nothing and should not pay for
-        // the config lookups below. Already visible on the command's own line as
-        // `fail=nil settled=[]`, so it is not logged again here.
+        // the config lookups below. Already on the command's line as `fail=nil`.
         guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
             return
         }
@@ -390,9 +372,7 @@ public final class Controller {
             Diag.notLearned(epoch, seq, reason: "user-override", failed: failed)
             return
         }
-        // At a threshold of one the only false case is a rung already committed
-        // this session — i.e. a demotion that took and is still failing, which
-        // is the shape of a misattributed lie.
+        // At a threshold of one, false means already committed — a misattributed lie.
         guard ledger.strike(rung: rung, capability: failed.rawValue) else {
             Diag.notLearned(epoch, seq, reason: "already-committed", failed: failed)
             return

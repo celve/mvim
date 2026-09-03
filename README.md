@@ -168,10 +168,17 @@ element that did not become a binding). Every line carries `e<epoch>.c<seq>` —
 and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
 command line `e12.c47 …`; the word boundary catches both and keeps `e120` out.
 
-Reading a `cmd` line, `steps=` is the ordered, payload-free plan; `Trace`'s doc comment has
-the alphabet. Order is the diagnostic — a `!` (hard settle) directly after a `P` (blind
-keypress) is a settle that can never name the capability it failed, so it rings without
-teaching the learner anything.
+Reading a `cmd` line, `steps=` is the ordered, payload-free plan, one character per step:
+
+```
+W setSelection   R replaceSelection   P press (P3 = three times)   T typeText
+X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSelectedText
+! settle         ? softSettle         C commit                     B bell
+```
+
+Order is the diagnostic — a `!` directly after a `P` is a hard settle verifying a blind
+keypress, which can never name the capability it failed, so it rings without teaching the
+learner anything.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,

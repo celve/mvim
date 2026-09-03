@@ -1310,11 +1310,7 @@ precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, prof
 precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
              == "P2P5PCCC")
 
-// The shape this exists to make visible: a HARD settle (`!`) directly behind a
-// press, which is a blind actuation. `Executor`'s attribution is positional and
-// a press clears it, so that settle can fail with no capability to blame — the
-// ledger learns nothing and the field rings forever. Lane B emits it; lane A
-// never does, because there the `!` always follows a `W` or an `R`.
+// A hard settle behind a press can name no capability, so it rings and teaches nothing.
 func settleFollowsPress(_ plan: PhysicalPlan) -> Bool {
     for (index, step) in plan.steps.enumerated() where index > 0 {
         guard case .settle = step, case .press = plan.steps[index - 1] else { continue }
@@ -1329,8 +1325,6 @@ precondition(!Trace.shape(physical("ciw", text: "say hello world", caret: 6, pro
 
 precondition(Trace.shape(physical("3w", text: "say hello world", caret: 0, profile: readProfile)) == "P15!C")
 
-// Declaration order, so columns line up between lines — and an atom the report
-// never mentions says `??` rather than vanishing.
 precondition(Trace.caps(CapabilityReport(entries: [
     .readText: .init(status: .available, source: .probed),
     .writeSelection: .init(status: .unavailable, source: .learned),
@@ -1359,7 +1353,6 @@ let leakySteps = PhysicalPlan(steps: [
 precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
 precondition(Trace.shape(leakySteps) == "RTVC")
 
-// The top-level intent is not a safe discriminator — the payloads nest.
 // `Z` and `hunter2` are the operands; no case name `shape` emits holds either.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
              ":s/hunter2/x<CR>", "rZ", "dfZ", "ctZ", "\"ZY", "mZ", "`Z", "ciZ", "qZ"] {
@@ -1368,14 +1361,12 @@ for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
                  "Trace.keys leaked an operand: " + leak + " -> " + rendered)
 }
 
-// The `.incomplete` forms are why the check scans `source` rather than the
-// parse: `parseOperator` consumes a target count and then discards it.
+// The `.incomplete` forms are why the check scans `source`: the parse discards a count.
 for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111",
                "3dd", "12j", "2yy", "d3w",
                "d4111111111111111", "d4111111111111111f", "y4155551234"] {
     let rendered = Trace.keys(RawCommand(digits))
     precondition(rendered != digits, "a counted command reached the log verbatim: " + digits)
-    // The length suffix after `…` legitimately holds digits; no case name does.
     let shape = String(rendered.split(separator: "…").first ?? "")
     precondition(!shape.contains(where: \.isNumber),
                  "Trace.keys leaked a count digit: " + digits + " -> " + rendered)
@@ -1401,8 +1392,7 @@ for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy"
 
 // MARK: - Rejections and the reason that already existed
 
-// 26 of the planner's 27 rejection sites carry no reason at any layer, so the
-// failing step's TYPE is the diagnostic: it narrows them to one or two apiece.
+// 26 of the 27 rejection sites carry no reason, so the failing step's type is it.
 let joinReject = traced("J", text: "a\nb", caret: 0, profile: blockProfile)
 precondition(joinReject.plan == .rejected)
 precondition(joinReject.rejection?.index == 0)
@@ -1415,8 +1405,7 @@ precondition(Trace.name(markReject.rejection!.step) == "setMark")
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).rejection == nil)
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).plan == ciwA)
 
-// The 27th reason: the lowering drops `BellReason`, but it never had to survive
-// the planner — the logical plan still holds it.
+// The 27th: the lowering drops `BellReason`, but the logical plan still holds it.
 func bellReason(_ keys: String) -> String? {
     for step in LogicalPlanner.plan(RawCommand(keys), state: .initial).steps {
         if case .bell(let reason) = step { return Trace.name(reason) }
@@ -1431,14 +1420,10 @@ precondition(bellReason("ciw") == nil)
 
 // MARK: - The settle's comparison
 
-// Lifted out of `Executor.settle` so the part that can be WRONG is pinned here
-// and only the part that can be SLOW stays untested.
 precondition(Expectation().matches(selection: nil, length: nil), "a prediction of nothing is already met")
 precondition(Expectation().matches(selection: 3..<4, length: 99), "unpredicted fields are not checked")
 precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil))
 precondition(!Expectation(selection: 4..<9).matches(selection: 0..<0, length: nil), "disagreed")
-// A field that would not answer at all can never satisfy a prediction — the
-// case the old bare `Bool` could not tell apart from disagreeing.
 precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil), "no answer")
 precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
 precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))

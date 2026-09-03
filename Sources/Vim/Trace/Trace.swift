@@ -1,34 +1,8 @@
-/// Engine values as short strings, for the recorder's log lines.
-///
-/// Pure and `Foundation`-free so `make test` pins every renderer — this is the
-/// highest-churn code in the feature and the only place the redaction rule can
-/// be enforced by a machine rather than by discipline.
-///
-/// **The redaction rule.** No renderer here ever emits a `String` or
-/// `Character` payload carried by a step, an effect or a register. Field text,
-/// typed text, search patterns and Ex command lines all reach the engine as
-/// those payloads, and none of them is diagnostic — lengths and case names
-/// are. `Diag` may log more when the user has opted in; `Trace` never does.
-///
-/// **The plan alphabet** (`shape`), one character per step, in order:
-///
-///     W setSelection   R replaceSelection   P press      T typeText
-///     X clipboardCut   Y clipboardCopy      V clipboardInsert
-///     G captureSelectedText                 ! settle     ? softSettle
-///     C commit         B bell
-///
-/// A `press` posting more than once carries its count (`P3`), so `P3` and `PP`
-/// stay distinguishable. Order is the diagnostic: a `!` directly after a `P` is
-/// a hard settle verifying a blind actuation, which can never attribute its
-/// failure to a capability (`Executor`'s positional attribution clears on
-/// `press`), so it teaches the learner nothing and rings forever.
+/// Engine values as short strings. Pure, so `make test` pins the rule that none holds user text.
 enum Trace {
     // MARK: - Capabilities
 
-    /// One binding's whole capability resolution: `RT+p RL+p WS-l …`, in
-    /// `Capability.allCases` order so the columns line up between lines.
-    /// Status is `+ - ?`, source is `p s u l`; `??` is an atom the report
-    /// does not mention at all.
+    /// `RT+p RL+p WS-l …` in `allCases` order; status `+ - ?`, source `p s u l`, `??` absent.
     static func caps(_ report: CapabilityReport) -> String {
         var out = ""
         for capability in Capability.allCases {
@@ -45,7 +19,7 @@ enum Trace {
 
     static func name(_ capability: Capability) -> String { capability.rawValue }
 
-    /// `[writeSelection insertText]`, in declaration order — a `Set` has none.
+    /// Declaration order — a `Set` has none.
     static func names(_ capabilities: Set<Capability>) -> String {
         "[" + Capability.allCases.filter(capabilities.contains).map(name).joined(separator: " ") + "]"
     }
@@ -83,8 +57,7 @@ enum Trace {
 
     // MARK: - Plans
 
-    /// The physical plan as an ordered string of opcodes. See the type's doc
-    /// comment for the alphabet.
+    /// One character per step, in order; `P3` is one press posting three times.
     static func shape(_ plan: PhysicalPlan) -> String {
         plan.steps.map(opcode).joined()
     }
@@ -106,9 +79,7 @@ enum Trace {
         }
     }
 
-    /// A logical step by case name, with only non-textual payloads. The step
-    /// type is what identifies a rejection: it narrows the planner's 26
-    /// `return nil` sites to one or two.
+    /// The step type is what identifies a rejection among the planner's 26 `return nil` sites.
     static func name(_ step: LogicalStep) -> String {
         switch step {
         case .moveCaret: return "moveCaret"
@@ -132,9 +103,7 @@ enum Trace {
         }
     }
 
-    /// Why a plan rang — the reason `LogicalStep.BellReason` has carried for
-    /// the recorder since before one existed. Register and mark names are
-    /// dropped: `keys` already shows the command that named them.
+    /// The reason `BellReason` has carried for a recorder that did not exist yet.
     static func name(_ reason: LogicalStep.BellReason) -> String {
         switch reason {
         case .unsupported: return "unsupported"
@@ -176,24 +145,7 @@ enum Trace {
 
     // MARK: - Commands
 
-    /// The keys that produced a command — the literal source only when it is
-    /// provably free of **variable, data-bearing** input, and a shape plus a
-    /// length otherwise (`d/needle<CR>` → `op(delete,search)…(12)`).
-    ///
-    /// `ciw` is user-supplied too; what makes it safe is that it is drawn from
-    /// a finite grammar, where a count or an operand is not.
-    ///
-    /// The digit scan is a different **kind** of check on purpose. Interrogating
-    /// the parse works for typed payloads, whose enums are closed — but **the
-    /// parse is lossy**, so it can never certify `source`: `parseOperator`
-    /// consumes a target count and discards it into `.incomplete(.operatorTarget)`,
-    /// leaving `d4111111111111111` with no count in the model and every digit in
-    /// the string. Scanning what is actually emitted closes that whole class,
-    /// including the next place the parser drops one.
-    ///
-    /// It costs `0` and `g0`, which redact to `motion(lineStart)…(1)`. No length
-    /// threshold: "short counts are harmless" is the judgement that lost this
-    /// twice.
+    /// The digit test reads `source`, not the parse, which discards a count when incomplete.
     static func keys(_ command: RawCommand) -> String {
         guard command.register == nil,
               !command.source.contains(where: \.isNumber),
@@ -203,19 +155,14 @@ enum Trace {
         return command.source
     }
 
-    /// Did the user supply a character this command carries? **Exhaustive on
-    /// purpose — no `default:` anywhere below**, so a new case cannot be added
-    /// without deciding, and the decision is a compile error rather than a
-    /// silent leak. That is the whole safety property; `shape` beneath it is
-    /// only display and may default freely.
+    /// Recurses because the payloads nest; no `default:` below, so a new case cannot leak.
     static func carriesOperand(_ intent: RawCommand.Intent) -> Bool {
         switch intent {
         case .modeChange, .history, .repeat:
             return false
-        // A mark or macro register is a name the user typed — see above.
         case .mark, .macro:
             return true
-        // Kept as raw keys by their own design, so nothing has parsed them.
+        // Kept as raw keys by design, so nothing has parsed them.
         case .window, .custom:
             return true
         case .search, .commandLine:
@@ -261,8 +208,7 @@ enum Trace {
 
     static func carriesOperand(_ kind: TextObjectKind) -> Bool {
         switch kind {
-        // `ci"`, `ci(`, `cit` — the delimiter is the object's name, but the
-        // user still typed it, and under a stale mode it is their text.
+        // `ci"`, `ci(`: the delimiter names the object, but the user still typed it.
         case .block, .quote, .custom:
             return true
         case .word, .sentence, .paragraph, .tag:
@@ -301,8 +247,7 @@ enum Trace {
 
     static func carriesOperand(_ incomplete: RawCommand.IncompleteCommand) -> Bool {
         switch incomplete {
-        // The half-typed operand has not arrived; what is held is the prefix
-        // Norm recognized (`f`, `r`, `g`), which is its own syntax.
+        // What is held is the prefix Norm recognised, not the operand still to come.
         case .command, .register, .operatorTarget, .characterArgument, .macroRegister,
              .markName, .namespace:
             return false
@@ -311,12 +256,7 @@ enum Trace {
         }
     }
 
-    /// What a redacted command was, without its operand or its digits. Display
-    /// only, so it may `default:` freely — the safety property is the
-    /// `carriesOperand` family above.
-    ///
-    /// Detailed on purpose: every counted command now routes through here, so
-    /// this is the whole readout for `3dd` and `12j`.
+    /// Display only — the whole readout for a redacted command, so it names every case.
     static func shape(_ intent: RawCommand.Intent) -> String {
         switch intent {
         case .search: return "search"
