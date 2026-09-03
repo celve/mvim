@@ -158,4 +158,17 @@ public struct Expectation: Equatable, Sendable {
         self.selection = selection
         self.length = length
     }
+
+    /// Has the field converged? Arguments are what it *answered*; `nil` is a
+    /// non-answer (unreadable attribute, or an AX error the batch resolved
+    /// away), which can never satisfy a prediction. An expectation that
+    /// predicts nothing is already met.
+    ///
+    /// Extracted from the settle loop so the comparison is pinned by `make
+    /// test` — only the polling is left untested.
+    public func matches(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
+        if let selection, observed != selection { return false }
+        if let length, observedLength != length { return false }
+        return true
+    }
 }

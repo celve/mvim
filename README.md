@@ -83,9 +83,9 @@ norm/
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
-│   │   │   State,Text,Sim      #   assembly, planners, state + reducer, text math,
-│   │   │                       #   simulated host
-│   │   └── Runtime/            #   tap routing, AX execution, Controller
+│   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
+│   │   │   Trace               #   simulated host, the recorder's renderers
+│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)
 └── Resources/
@@ -140,6 +140,47 @@ Three consequences worth knowing:
 
 A login-launched Norm keeps its Accessibility and Input Monitoring grants: same
 bundle, same signature.
+
+## Diagnostics
+
+Norm records one line per **command decision** to `os_log`, under subsystem
+`com.loom.Norm`. The unit is the decision, not the keystroke: what a reader wants back is
+*"the engine believed X about this field, and X was false"*.
+
+```sh
+log show --predicate 'subsystem == "com.loom.Norm"' --last 1h --info --debug
+log collect --last 2h --output norm.logarchive     # to send somewhere
+```
+
+A command that did **not** fully succeed logs at `.default` and is persisted to disk for
+free, surviving the quit a stranded user is about to perform. A clean command logs at
+`.debug`, which is off until asked for:
+
+```sh
+sudo log config --subsystem com.loom.Norm --mode "level:debug,persist:debug"
+sudo log config --subsystem com.loom.Norm --mode "level:default"    # off again — it is sticky
+```
+
+Five categories: `bind` (a field became vim's, with its whole capability resolution),
+`cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
+answered instead), `learn` (a demotion committed, or the reason one was not), `gate` (an
+element that did not become a binding). Every line carries `e<epoch>.c<seq>` — the binding
+and the command — so `grep 'e12\.'` is the whole join.
+
+Reading a `cmd` line, `steps=` is the ordered, payload-free plan; `Trace`'s doc comment has
+the alphabet. Order is the diagnostic — a `!` (hard settle) directly after a `P` (blind
+keypress) is a settle that can never name the capability it failed, so it rings without
+teaching the learner anything.
+
+**Text is not recorded.** No renderer can emit a text payload, and that is a unit test
+rather than a convention. Search patterns and Ex command lines are reduced to their length;
+everything else in `keys=` is vim syntax. The opt-in, which the menu does not offer and
+every `bind` line announces while it is on:
+
+```sh
+defaults write com.loom.Norm normRecordText -bool YES
+defaults delete com.loom.Norm normRecordText
+```
 
 ## Running alongside Sotto
 

@@ -142,3 +142,40 @@ public struct CapabilityProfile: Equatable, Sendable {
         statuses[capability] == .available
     }
 }
+
+/// Why each atom of one binding resolved the way it did — the menu's badge
+/// vocabulary, and the recorder's. Consumed by the runtime and the app, never
+/// by the snapshot or the planner, which take the bare `CapabilityProfile`.
+///
+/// Lives here rather than beside `FieldProber` so `Trace` can render it under
+/// `make test`: the prober is impure, this is four value types.
+public struct CapabilityReport: Equatable, Sendable {
+    public enum Source: Equatable, Sendable {
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism.
+        case probed
+        /// A shipped `CapabilityConfig` seed.
+        case seeded
+        /// The user's menu override.
+        case user
+        /// A committed `LearnedPriors` demotion: the field claimed this write
+        /// and then failed to deliver it. A suggestion, not a decision — the
+        /// user can promote it (Off) or overrule it (On).
+        case learned
+    }
+
+    public struct Entry: Equatable, Sendable {
+        public let status: CapabilityStatus
+        public let source: Source
+
+        public init(status: CapabilityStatus, source: Source) {
+            self.status = status
+            self.source = source
+        }
+    }
+
+    public var entries: [Capability: Entry]
+
+    public init(entries: [Capability: Entry] = [:]) {
+        self.entries = entries
+    }
+}

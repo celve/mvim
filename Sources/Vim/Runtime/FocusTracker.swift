@@ -62,6 +62,12 @@ public final class FocusTracker {
     public var onPointerAction: (() -> Void)?
     public private(set) var binding: Binding?
 
+    /// The recorder's name for the current binding — every published edge gets
+    /// a new one. It lives here rather than on the controller because the
+    /// gate events below fire where no binding is published at all, and they
+    /// still need to say *when*. See `Diag`.
+    public private(set) var epoch: UInt64 = 0
+
     private var appObserver: AXObserver?
     private var observedPid: pid_t = 0
     /// Exact (element, notification) pairs successfully registered — torn
@@ -264,8 +270,13 @@ public final class FocusTracker {
             return
         }
         if let bound = binding, !bound.isForced, CFEqual(bound.element, element) {
-            guard revalidateGate else { return }
-            if FieldProber.gate(element).engageable { return }
+            guard revalidateGate else {
+                Diag.shortCircuited(epoch)
+                return
+            }
+            let gate = FieldProber.gate(element)
+            if gate.engageable { return }
+            Diag.denied(epoch, gate, fresh: false)
             publishForcedOrNil()   // the bound element lost the gate
             return
         }
@@ -274,6 +285,7 @@ public final class FocusTracker {
         retargetObserver(to: pid)
         let gate = FieldProber.gate(element)
         guard gate.engageable else {
+            Diag.denied(epoch, gate, fresh: true)
             publishForcedOrNil()   // the fresh element fails the gate
             return
         }
@@ -282,6 +294,12 @@ public final class FocusTracker {
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
         let surface = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
+        // Web content whose origin did not resolve is now keyed as though it
+        // were native, which merges the page's fields with the browser's own
+        // chrome at the very rung the learner writes to.
+        if gate.isWebElement, surface.origin == nil {
+            Diag.originLost(epoch, role: gate.role)
+        }
         let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: element,
@@ -418,6 +436,7 @@ public final class FocusTracker {
     private func publish(_ new: Binding?) {
         if binding == nil, new == nil { return }
         let edge = transition(from: binding, to: new)
+        epoch &+= 1
         // The element-destroyed registration moves with the binding; forced
         // stand-ins register nothing.
         if let old = binding, !old.isForced {

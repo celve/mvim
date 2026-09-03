@@ -19,7 +19,32 @@
 /// it never talks to AX, and it writes no state (it only *authors* commit
 /// steps for the reducer).
 public enum PhysicalPlanner {
+    /// Which logical step no lane could realize, and where in the plan it sat.
+    ///
+    /// Out-of-band on purpose: `PhysicalPlan` still stores only the program.
+    /// The step's *type* is the diagnostic — it partitions the 26 rejection
+    /// sites below to one or two apiece, which is all a reader needs to find
+    /// the `return nil` that fired. Threading a reason through every one of
+    /// them would buy a bit more resolution for a great deal more code.
+    public struct Rejection: Equatable, Sendable {
+        public let index: Int
+        public let step: LogicalStep
+
+        public init(index: Int, step: LogicalStep) {
+            self.index = index
+            self.step = step
+        }
+    }
+
     public static func plan(_ logical: LogicalPlan, snapshot: FieldSnapshot) -> PhysicalPlan {
+        planning(logical, snapshot: snapshot).plan
+    }
+
+    /// `plan` plus why it rejected. Same walk, same result — the recorder
+    /// calls this one, everything else keeps calling `plan`.
+    public static func planning(
+        _ logical: LogicalPlan, snapshot: FieldSnapshot
+    ) -> (plan: PhysicalPlan, rejection: Rejection?) {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
@@ -30,13 +55,13 @@ public enum PhysicalPlanner {
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             steps.append(.setSelection(gap..<gap))
         }
-        for step in logical.steps {
+        for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
-                return .rejected
+                return (.rejected, Rejection(index: index, step: step))
             }
             steps.append(contentsOf: lowered)
         }
-        return PhysicalPlan(steps: steps)
+        return (PhysicalPlan(steps: steps), nil)
     }
 
     private static func isBellOnly(_ logical: LogicalPlan) -> Bool {

@@ -1292,4 +1292,130 @@ precondition(learnerMixed.strike(rung: otherRung, capability: "insertText") == f
 // (a success clearing a pending tally) without touching anything else.
 precondition(StrikeLedger.strikesToCommit == 1)
 
+
+// MARK: - The recorder's renderers
+
+func traced(
+    _ keys: String, text: String? = nil, caret: Int? = nil, profile: CapabilityProfile
+) -> (plan: PhysicalPlan, rejection: PhysicalPlanner.Rejection?) {
+    PhysicalPlanner.planning(
+        LogicalPlanner.plan(RawCommand(keys), state: .initial),
+        snapshot: FieldSnapshot(capabilities: profile, text: text, selection: caret.map { $0..<$0 })
+    )
+}
+
+// Lane A writes and verifies; lane B actuates the same exact offsets as
+// counted keypresses; lane C is blind and emits no settle at all.
+precondition(Trace.shape(ciwA) == "W!R!...")
+precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: readProfile))
+             == "P2P5!P?...")
+precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
+             == "P2P5P...")
+
+// The shape this exists to make visible: a HARD settle (`!`) directly behind a
+// press, which is a blind actuation. `Executor`'s attribution is positional and
+// a press clears it, so that settle can fail with no capability to blame — the
+// ledger learns nothing and the field rings forever. Lane B emits it; lane A
+// never does, because there the `!` always follows a `W` or an `R`.
+func settleFollowsPress(_ plan: PhysicalPlan) -> Bool {
+    for (index, step) in plan.steps.enumerated() where index > 0 {
+        guard case .settle = step, case .press = plan.steps[index - 1] else { continue }
+        return true
+    }
+    return false
+}
+precondition(settleFollowsPress(physical("ciw", text: "say hello world", caret: 6, profile: readProfile)))
+precondition(!settleFollowsPress(ciwA))
+precondition(!Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
+             .contains("!"))
+
+precondition(Trace.shape(physical("3w", text: "say hello world", caret: 0, profile: readProfile)) == "P15!.")
+
+// Declaration order, so columns line up between lines — and an atom the report
+// never mentions says `??` rather than vanishing.
+precondition(Trace.caps(CapabilityReport(entries: [
+    .readText: .init(status: .available, source: .probed),
+    .writeSelection: .init(status: .unavailable, source: .learned),
+])) == "RT+p RL?? RC?? RS?? WS-l IT?? DC?? WD?? FS??")
+
+// MARK: - The redaction rule
+
+// Field text, typed text, search patterns and Ex command lines all reach the
+// engine as `String`/`Character` payloads, and none is diagnostic — lengths and
+// case names are. `Trace` is pure so this rule is a machine's job, not a habit.
+let secret = "hunter2"
+let leaky: [LogicalStep] = [
+    .insertText(secret),
+    .replaceSelection(secret),
+    .setMark("h"),
+    .bell(.unsupported(secret)),
+    .bell(.emptyRegister("h")),
+    .bell(.unsetMark("h")),
+]
+for step in leaky {
+    precondition(!Trace.name(step).contains(secret), "Trace.name leaked a text payload")
+}
+precondition(Trace.name(LogicalStep.insertText(secret)) == "insertText(7)")
+
+let leakySteps = PhysicalPlan(steps: [
+    .replaceSelection(secret), .typeText(secret), .clipboardInsert(secret),
+    .commit(.setLastInsert(secret)),
+])
+precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
+precondition(Trace.shape(leakySteps) == "RTV.")
+
+// A search pattern and an Ex command line are typed by the user; every other
+// command source is vim syntax.
+precondition(Trace.keys(RawCommand("/hunter2<CR>")) == "search…(12)")
+precondition(!Trace.keys(RawCommand("/hunter2<CR>")).contains(secret))
+precondition(!Trace.keys(RawCommand(":s/hunter2/x<CR>")).contains(secret))
+precondition(Trace.keys(RawCommand("ciw")) == "ciw")
+precondition(Trace.keys(RawCommand("3dd")) == "3dd")
+
+// MARK: - Rejections and the reason that already existed
+
+// 26 of the planner's 27 rejection sites carry no reason at any layer, so the
+// failing step's TYPE is the diagnostic: it narrows them to one or two apiece.
+let joinReject = traced("J", text: "a\nb", caret: 0, profile: blockProfile)
+precondition(joinReject.plan == .rejected)
+precondition(joinReject.rejection?.index == 0)
+precondition(Trace.name(joinReject.rejection!.step) == "joinLines(2)")
+
+let markReject = traced("ma", profile: blindProfile)
+precondition(markReject.plan == .rejected)
+precondition(Trace.name(markReject.rejection!.step) == "setMark")
+
+precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).rejection == nil)
+precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).plan == ciwA)
+
+// The 27th reason is the one `BellReason` has carried "for the flight recorder"
+// since before there was one. The physical lowering drops it, but it never had
+// to survive the planner — the logical plan still holds it.
+func bellReason(_ keys: String) -> String? {
+    for step in LogicalPlanner.plan(RawCommand(keys), state: .initial).steps {
+        if case .bell(let reason) = step { return Trace.name(reason) }
+    }
+    return nil
+}
+precondition(bellReason("gv") == "noPriorVisual")
+precondition(bellReason("g-") == "unsupported")
+precondition(bellReason("\"ap") == "emptyRegister")
+precondition(bellReason("'a") == "unsetMark")
+precondition(bellReason("ciw") == nil)
+
+// MARK: - The settle's comparison
+
+// Lifted out of `Executor.settle` so the part that can be WRONG is pinned here
+// and only the part that can be SLOW stays untested.
+precondition(Expectation().matches(selection: nil, length: nil), "a prediction of nothing is already met")
+precondition(Expectation().matches(selection: 3..<4, length: 99), "unpredicted fields are not checked")
+precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil))
+precondition(!Expectation(selection: 4..<9).matches(selection: 0..<0, length: nil), "disagreed")
+// A field that would not answer at all can never satisfy a prediction — the
+// case the old bare `Bool` could not tell apart from disagreeing.
+precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil), "no answer")
+precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
+precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))
+precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 14))
+
 print("Vim engine tests passed")

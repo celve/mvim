@@ -55,6 +55,12 @@ public final class Controller {
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
 
+    /// The recorder's command counter. Its other half — the binding's epoch —
+    /// lives on the tracker, which is what publishes bindings. Every line
+    /// carries `e<epoch>.c<seq>`, and that is the entire join: the pure layer
+    /// has no clock and needs no id, because it does not emit. See `Diag`.
+    private var seq: UInt64 = 0
+
     /// A mutating command that entered Insert leaves its dot body open until
     /// the session's Esc delivers the typed payload.
     private var openChange: (source: String, count: Int?, register: Register?)?
@@ -64,6 +70,9 @@ public final class Controller {
             self?.rebind(to: binding, transition: transition)
         }
         tracker.onPointerAction = { [weak self] in self?.pointerActed() }
+        // Force the recorder's one `UserDefaults` read here, so it never lands
+        // on the tap callback's first command.
+        _ = Diag.recordsText
         tracker.start()
     }
 
@@ -202,6 +211,7 @@ public final class Controller {
             )
         }
         binding = new
+        Diag.bind(tracker.epoch, transition, new)
         // Keys-in-flight and the open dot body are one unit, and neither
         // holds an offset — a block crossing does not stale them.
         if transition.clearsChangeInFlight {
@@ -250,7 +260,12 @@ public final class Controller {
             anchor: anchor,
             cursor: state.field.cursor
         )
-        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
+        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let physical = planned.plan
+        seq &+= 1
+        let epoch = tracker.epoch
+        let commandSeq = seq
+        let before = state.field.mode
         let executed = executor.execute(physical, on: binding.element, state: &state)
         // Harvested before anything else can touch the executor: the abort path
         // below runs `repairStrandedSelection`, which executes its own plan and
@@ -259,7 +274,22 @@ public final class Controller {
         // Deferred so it runs after hygiene and the dot bookkeeping, on both
         // paths, and so the republish a commit triggers happens as `run`
         // unwinds rather than re-entering the tracker mid-command.
-        defer { learn(from: evidence, on: binding) }
+        defer { learn(from: evidence, on: binding, epoch: epoch, seq: commandSeq) }
+        // Declared second, so LIFO runs it first: the command's own line lands
+        // before the demotion and republish it may go on to cause.
+        defer {
+            Diag.command(
+                epoch, commandSeq,
+                command: command,
+                from: before, to: state.field.mode,
+                plan: physical,
+                rejection: planned.rejection,
+                bell: Self.bellReason(logical),
+                executed: executed,
+                evidence: evidence,
+                insertPayload: completed.insertPayload
+            )
+        }
         guard executed else {
             // Abort hygiene: a plan that died mid-flight may leave its
             // operator selection painted, and must not record memories for
@@ -283,6 +313,19 @@ public final class Controller {
         recordChange(for: command, mutated: physical.mutatesText)
     }
 
+    /// The reason a logical plan rang, recovered where it still exists.
+    ///
+    /// `LogicalStep.BellReason` has carried this "for the flight recorder"
+    /// since before there was one, and the physical lowering drops it —
+    /// deliberately, since execution treats every reason alike. It never had
+    /// to survive the planner: the logical plan is right here.
+    private static func bellReason(_ logical: LogicalPlan) -> LogicalStep.BellReason? {
+        for step in logical.steps {
+            if case .bell(let reason) = step { return reason }
+        }
+        return nil
+    }
+
     /// Fold one command's settle verdicts into the write probe's tally.
     ///
     /// Only hard settles produce evidence, and only an AX write is ever
@@ -290,20 +333,30 @@ public final class Controller {
     /// `insertText`, the two capabilities a field can *claim* and then fail to
     /// deliver. Reads were proven at bind; policies have no settle signal.
     ///
-    /// Two consecutive strikes commit a demotion, which is persisted and applied
-    /// at once, so the very next command routes around the lie instead of
-    /// belling again. The re-resolve is session-preserving (`.sameElement`), so
-    /// a demotion landing mid-edit does not move the user.
-    private func learn(from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding) {
+    /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), which is
+    /// persisted and applied at once, so the very next command routes around the
+    /// lie instead of belling again. The re-resolve is session-preserving
+    /// (`.sameElement`), so a demotion landing mid-edit does not move the user.
+    ///
+    /// Every early return below is a way this can be silently inert, so each one
+    /// that had evidence to work with says so.
+    private func learn(
+        from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
+        epoch: UInt64, seq: UInt64
+    ) {
         // A command that issued no AX write — the whole blind lane, and any plan
         // whose steps were all commits — teaches nothing and should not pay for
-        // the config lookups below.
+        // the config lookups below. Already visible on the command's own line as
+        // `fail=nil settled=[]`, so it is not logged again here.
         guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
             return
         }
         // No role means no stable key to accumulate against (a forced binding,
         // or an element AX would not name).
-        guard let rung = binding.surface.roleRung else { return }
+        guard let rung = binding.surface.roleRung else {
+            Diag.notLearned(epoch, seq, reason: "no-rung", failed: evidence.failedCapability)
+            return
+        }
 
         /// The user has the last word: once they have set an atom explicitly,
         /// stop inferring about it. Without this their `.on` would lose to a
@@ -321,11 +374,22 @@ public final class Controller {
             ledger.clear(rung: rung, capability: capability.rawValue)
         }
 
-        guard let failed = evidence.failedCapability, isAuto(failed) else { return }
-        guard ledger.strike(rung: rung, capability: failed.rawValue) else { return }
+        guard let failed = evidence.failedCapability else { return }
+        guard isAuto(failed) else {
+            Diag.notLearned(epoch, seq, reason: "user-override", failed: failed)
+            return
+        }
+        // At a threshold of one the only false case is a rung already committed
+        // this session — i.e. a demotion that took and is still failing, which
+        // is the shape of a misattributed lie.
+        guard ledger.strike(rung: rung, capability: failed.rawValue) else {
+            Diag.notLearned(epoch, seq, reason: "already-committed", failed: failed)
+            return
+        }
         LearnedPriors.commit(
             rung: rung, version: binding.appVersion, capability: failed.rawValue
         )
+        Diag.learned(epoch, seq, rung: rung, version: binding.appVersion, capability: failed)
         tracker.reresolveCapabilities()
     }
 
