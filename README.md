@@ -174,9 +174,11 @@ keypress) is a settle that can never name the capability it failed, so it rings 
 teaching the learner anything.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
-what you typed only where the parse proves you supplied no operand and no count; otherwise
-it shows the command's shape and a length — `d/needle<CR>` becomes `op(delete,search)…(12)`
-and `3dd` becomes `op(delete,line)…(3)`.
+what you typed only where it is provably free of anything you supplied — no operand, no
+register, no digit; otherwise it shows the command's shape and a length. `d/needle<CR>`
+becomes `op(delete,search)…(12)`, `3dd` becomes `op(delete,line)…(3)`, and even `0` becomes
+`motion(lineStart)…(1)`, because the digit test scans the string being written rather than
+the parse — which is lossy and drops a count outright when the command is still incomplete.
 
 The rule is not "syntax is safe, content is not". It is that when Norm's mode tracking is
 wrong — the bug this exists to find — you believe you are typing and every keystroke parses

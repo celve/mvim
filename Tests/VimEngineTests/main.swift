@@ -1364,15 +1364,9 @@ let leakySteps = PhysicalPlan(steps: [
 precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
 precondition(Trace.shape(leakySteps) == "RTVC")
 
-// `keys=` shows the literal source only where the parse proves the user
-// supplied no operand character. The top-level intent is NOT a safe
-// discriminator — the payloads nest: `d/hunter2<CR>` is an `.operatorCommand`
-// whose target is a search, `rS` an `.edit` holding a character of the
-// document, `dfS` an operator holding a find target.
+// The top-level intent is NOT a safe discriminator — the payloads nest:
+// `d/hunter2<CR>` is an `.operatorCommand` whose target is a search.
 //
-// An operand is never merely syntax here, because of the bug this recorder is
-// for: with the mode stale the user believes they are typing, so `ma`, `"a`,
-// `rS` and every unrecognised `.custom` are letters of their prose.
 // `Z` and `hunter2` are the operands; no case name `shape` can emit contains
 // either, so their absence is exactly the property under test.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
@@ -1382,16 +1376,17 @@ for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
                  "Trace.keys leaked an operand: " + leak + " -> " + rendered)
 }
 
-// A count is user-supplied text too, and unbounded: the parser eats an
-// arbitrarily long digit run and `source` keeps every digit, so under a stale
-// mode this is a card number with a `w` on the end. The operator form hides in
-// `targetCount`, where the outer `count` is nil.
+// A count is unbounded user text: the parser eats an arbitrarily long digit run
+// and `source` keeps every digit — a card number with a `w` on the end.
+// The `.incomplete` forms are why the check scans `source`: `parseOperator`
+// consumes a target count and discards it, so the model holds no count while
+// the string holds every digit.
 for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111",
-               "3dd", "12j", "2yy", "d3w"] {
+               "3dd", "12j", "2yy", "d3w",
+               "d4111111111111111", "d4111111111111111f", "y4155551234"] {
     let rendered = Trace.keys(RawCommand(digits))
     precondition(rendered != digits, "a counted command reached the log verbatim: " + digits)
-    // Only the shape is checked — the length suffix after `…` legitimately
-    // holds digits, and no case name `shape` can emit holds any.
+    // The length suffix after `…` legitimately holds digits; no case name does.
     let shape = String(rendered.split(separator: "…").first ?? "")
     precondition(!shape.contains(where: \.isNumber),
                  "Trace.keys leaked a count digit: " + digits + " -> " + rendered)
@@ -1399,6 +1394,9 @@ for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111"
 precondition(Trace.keys(RawCommand("3dd")) == "op(delete,line)…(3)")
 precondition(Trace.keys(RawCommand("4111111111111111w")) == "motion(word)…(17)")
 precondition(Trace.keys(RawCommand("d4111111111111111w")) == "op(delete,word)…(18)")
+precondition(Trace.keys(RawCommand("d4111111111111111")) == "incomplete…(17)")
+precondition(Trace.keys(RawCommand("y4155551234")) == "incomplete…(11)")
+precondition(Trace.keys(RawCommand("0")) == "motion(lineStart)…(1)")
 precondition(Trace.keys(RawCommand("d/hunter2<CR>")) == "op(delete,search)…(13)")
 precondition(Trace.keys(RawCommand("rS")) == "edit(replaceCharacter)…(2)")
 precondition(Trace.keys(RawCommand("dfS")) == "op(delete,find)…(3)")
@@ -1410,7 +1408,7 @@ precondition(Trace.keys(RawCommand(":s/x/y<CR>")) == "cmdline…(10)")
 
 // The ordinary vocabulary carries no operand and survives intact, which is the
 // whole readability of the log.
-for plain in ["ciw", "w", "b", "0", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
+for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
     precondition(Trace.keys(RawCommand(plain)) == plain, "needlessly redacted: " + plain)
 }
 
@@ -1459,6 +1457,7 @@ precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil)
 precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
 precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))
 precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 14))
+
 
 
 

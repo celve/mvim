@@ -103,11 +103,8 @@ enum Diag {
     /// One command's whole decision. The anchor event: everything else joins
     /// to it through `e<epoch>.c<seq>`.
     ///
-    /// `steps` is the ordered, payload-free plan — see `Trace` for the
-    /// alphabet. Order is what distinguishes the two shapes of a stranded
-    /// mode: a `!` after an `R` is a claimed AX write that did not land, and a
-    /// `!` after a `P` is a hard settle behind a blind actuation, which can
-    /// never name a capability and so teaches the learner nothing.
+    /// `steps` is the ordered, payload-free plan — `Trace` has the alphabet and
+    /// why the order is the diagnostic.
     static func command(
         _ epoch: UInt64, _ seq: UInt64,
         command: RawCommand,
@@ -207,9 +204,8 @@ enum Diag {
     /// every change of verdict, stays at `.default`; an identical repeat drops
     /// to `.debug`, where the count is still there when it is wanted.
     static func denied(_ epoch: UInt64, _ gate: FieldProber.FieldGate, fresh: Bool, repeated: Bool) {
-        // The repeat path is the one on the keydown negative cache, so it must
-        // not render a line nobody will read — the same guard the clean
-        // command line gets.
+        // The repeat path is on the keydown negative cache: render nothing
+        // when no one is listening.
         guard !repeated || gateLevel.isEnabled(type: .debug) else { return }
         let line = """
             e\(epoch) deny \(fresh ? "fresh" : "bound") \

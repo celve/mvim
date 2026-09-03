@@ -176,49 +176,30 @@ enum Trace {
 
     // MARK: - Commands
 
-    /// The keys that produced a command — the literal source **only when the
-    /// parse proves the user supplied no operand character and no count**, and
-    /// a shape plus a length otherwise.
+    /// The keys that produced a command — the literal source only when it is
+    /// provably free of anything the user supplied, and a shape plus a length
+    /// otherwise (`d/needle<CR>` → `op(delete,search)…(12)`).
     ///
-    /// The discriminator cannot be the top-level intent: the payloads nest.
-    /// `d/hunter2<CR>` is an `.operatorCommand` whose target is a search, and
-    /// `rS` and `dfS` are an `.edit` and an `.operatorCommand` carrying a
-    /// character of the document.
+    /// Three conditions, and the third is a different **kind** of check on
+    /// purpose. `register` and `carriesOperand` interrogate the parse, which
+    /// works because that walk is exhaustive over closed enums. But **the parse
+    /// is lossy**, so it can never certify `source`: `parseOperator` consumes a
+    /// target count and then discards it into `.incomplete(.operatorTarget)`,
+    /// leaving `d4111111111111111` with no count anywhere in the model and
+    /// every digit still in the string. A count is always digits, so scanning
+    /// the string actually being emitted closes that whole class — including
+    /// the next place the parser decides to drop one.
     ///
-    /// And an operand is never *merely* syntax here, because of the bug this
-    /// recorder exists to find: when Norm's mode tracking is wrong the user
-    /// believes they are typing and every keystroke parses as a Normal-mode
-    /// command, so `ma`, `"a`, `rS` and `.custom` are **letters of their
-    /// prose**. That is why the register prefix redacts too, and why `.custom`
-    /// — the unrecognized sequence a stranded session produces most — redacts
-    /// rather than being waved through as "just keys".
-    ///
-    /// `ciw`, `w`, `dd`, `x`, `p`, `gg` and the rest of the uncounted ordinary
-    /// vocabulary survive intact, which is the whole readability of the log. A
-    /// count is the same variable input by another name — see `carriesCount`.
+    /// It costs `0` and `g0`, which redact to `motion(lineStart)…(1)`. No
+    /// length threshold is offered: "short counts are harmless" is the taste
+    /// judgement that produced this leak twice.
     static func keys(_ command: RawCommand) -> String {
         guard command.register == nil,
-              command.count == nil,
-              !carriesCount(command.intent),
+              !command.source.contains(where: \.isNumber),
               !carriesOperand(command.intent) else {
             return "\(shape(command.intent))…(\(command.source.utf16.count))"
         }
         return command.source
-    }
-
-    /// A count is user-supplied text too, and an unbounded amount of it: the
-    /// parser consumes an arbitrarily long digit run and `source` keeps every
-    /// digit, so under a stale mode `4111111111111111w` is a card number with a
-    /// `w` on the end. The operator form hides in `targetCount`, where the outer
-    /// `count` is nil — `d4111111111111111w`.
-    ///
-    /// No length threshold. "Short counts are harmless" is exactly the kind of
-    /// taste judgement that produced this leak twice; `3dd` losing its literal
-    /// form to `op(delete,line)…(3)` is the price, and `shape` is detailed
-    /// enough to pay it.
-    static func carriesCount(_ intent: RawCommand.Intent) -> Bool {
-        guard case .operatorCommand(let command) = intent else { return false }
-        return command.targetCount != nil
     }
 
     /// Did the user supply a character this command carries? **Exhaustive on
