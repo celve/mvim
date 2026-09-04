@@ -251,6 +251,162 @@ public extension TextObject {
     }
 }
 
+// MARK: - Recorder
+
+/// `Motion` and `TextObjectKind` hold the two `carriesOperand` cases that live elsewhere.
+extension RawCommand {
+    /// The digit test reads `source`, not the parse, which discards a count when incomplete.
+    var traceKeys: String {
+        guard register == nil,
+              !source.contains(where: \.isNumber),
+              !intent.carriesOperand else {
+            return "\(intent.traceShape)…(\(source.utf16.count))"
+        }
+        return source
+    }
+}
+
+extension RawCommand.Intent {
+    /// Recurses because the payloads nest; no `default:` below, so a new case cannot leak.
+    var carriesOperand: Bool {
+        switch self {
+        case .modeChange, .history, .repeat:
+            return false
+        case .mark, .macro:
+            return true
+        // Kept as raw keys by design, so nothing has parsed them.
+        case .window, .custom:
+            return true
+        case .search, .commandLine:
+            return true
+        case .motion(let motion):
+            return motion.carriesOperand
+        case .operatorCommand(let command):
+            return command.target.carriesOperand
+        case .edit(let edit):
+            return edit.carriesOperand
+        case .view(let view):
+            return view.carriesOperand
+        case .fold(let fold):
+            return fold.carriesOperand
+        case .incomplete(let incomplete):
+            return incomplete.carriesOperand
+        }
+    }
+
+    /// Display only — the whole readout for a redacted command, so it names every case.
+    var traceShape: String {
+        switch self {
+        case .search: return "search"
+        case .commandLine: return "cmdline"
+        case .custom: return "custom"
+        case .window: return "window"
+        case .mark: return "mark"
+        case .macro: return "macro"
+        case .history: return "history"
+        case .repeat: return "repeat"
+        case .modeChange: return "modeChange"
+        case .incomplete: return "incomplete"
+        case .view: return "view"
+        case .fold: return "fold"
+        case .motion(let motion): return "motion(\(motion.traceShape))"
+        case .edit(let edit): return "edit(\(edit.traceShape))"
+        case .operatorCommand(let command):
+            return "op(\(command.kind.rawValue),\(command.target.traceShape))"
+        }
+    }
+}
+
+extension RawCommand.OperatorTarget {
+    var carriesOperand: Bool {
+        switch self {
+        case .pending, .line:
+            return false
+        case .motion(let motion):
+            return motion.carriesOperand
+        case .textObject(let object):
+            return object.kind.carriesOperand
+        case .custom:
+            return true
+        }
+    }
+
+    var traceShape: String {
+        switch self {
+        case .pending: return "pending"
+        case .line: return "line"
+        case .motion(let motion): return motion.traceShape
+        case .textObject: return "textObject"
+        case .custom: return "custom"
+        }
+    }
+}
+
+extension RawCommand.Edit {
+    var carriesOperand: Bool {
+        switch self {
+        case .replaceCharacter:
+            return true
+        case .deleteCharacter, .substituteCharacter, .substituteLine, .changeToLineEnd,
+             .deleteToLineEnd, .yankLine, .joinLines, .put, .toggleCase, .increment, .decrement:
+            return false
+        }
+    }
+
+    var traceShape: String {
+        switch self {
+        case .deleteCharacter: return "deleteCharacter"
+        case .substituteCharacter: return "substituteCharacter"
+        case .substituteLine: return "substituteLine"
+        case .changeToLineEnd: return "changeToLineEnd"
+        case .deleteToLineEnd: return "deleteToLineEnd"
+        case .yankLine: return "yankLine"
+        case .replaceCharacter: return "replaceCharacter"
+        case .joinLines: return "joinLines"
+        case .put: return "put"
+        case .toggleCase: return "toggleCase"
+        case .increment: return "increment"
+        case .decrement: return "decrement"
+        }
+    }
+}
+
+extension RawCommand.ViewAction {
+    var carriesOperand: Bool {
+        switch self {
+        case .custom:
+            return true
+        case .cursorAtTop, .cursorAtCenter, .cursorAtBottom, .horizontal:
+            return false
+        }
+    }
+}
+
+extension RawCommand.FoldAction {
+    var carriesOperand: Bool {
+        switch self {
+        case .custom:
+            return true
+        case .open, .close, .toggle, .delete, .openAll, .closeAll, .enable, .disable,
+             .toggleEnabled:
+            return false
+        }
+    }
+}
+
+extension RawCommand.IncompleteCommand {
+    var carriesOperand: Bool {
+        switch self {
+        // What is held is the prefix Norm recognised, not the operand still to come.
+        case .command, .register, .operatorTarget, .characterArgument, .macroRegister,
+             .markName, .namespace:
+            return false
+        case .search, .commandLine:
+            return true
+        }
+    }
+}
+
 // MARK: - Parser
 
 private extension RawCommand {

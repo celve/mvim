@@ -1356,38 +1356,38 @@ precondition(Trace.shape(leakySteps) == "RTVC")
 // `Z` and `hunter2` are the operands; no case name `shape` emits holds either.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
              ":s/hunter2/x<CR>", "rZ", "dfZ", "ctZ", "\"ZY", "mZ", "`Z", "ciZ", "qZ"] {
-    let rendered = Trace.keys(RawCommand(leak))
+    let rendered = RawCommand(leak).traceKeys
     precondition(!rendered.contains("Z") && !rendered.contains("hunter2"),
-                 "Trace.keys leaked an operand: " + leak + " -> " + rendered)
+                 "traceKeys leaked an operand: " + leak + " -> " + rendered)
 }
 
 // The `.incomplete` forms are why the check scans `source`: the parse discards a count.
 for digits in ["4111111111111111w", "d4111111111111111w", "4155551234x", "41111",
                "3dd", "12j", "2yy", "d3w",
                "d4111111111111111", "d4111111111111111f", "y4155551234"] {
-    let rendered = Trace.keys(RawCommand(digits))
+    let rendered = RawCommand(digits).traceKeys
     precondition(rendered != digits, "a counted command reached the log verbatim: " + digits)
     let shape = String(rendered.split(separator: "…").first ?? "")
     precondition(!shape.contains(where: \.isNumber),
-                 "Trace.keys leaked a count digit: " + digits + " -> " + rendered)
+                 "traceKeys leaked a count digit: " + digits + " -> " + rendered)
 }
-precondition(Trace.keys(RawCommand("3dd")) == "op(delete,line)…(3)")
-precondition(Trace.keys(RawCommand("4111111111111111w")) == "motion(word)…(17)")
-precondition(Trace.keys(RawCommand("d4111111111111111w")) == "op(delete,word)…(18)")
-precondition(Trace.keys(RawCommand("d4111111111111111")) == "incomplete…(17)")
-precondition(Trace.keys(RawCommand("y4155551234")) == "incomplete…(11)")
-precondition(Trace.keys(RawCommand("0")) == "motion(lineStart)…(1)")
-precondition(Trace.keys(RawCommand("d/hunter2<CR>")) == "op(delete,search)…(13)")
-precondition(Trace.keys(RawCommand("rS")) == "edit(replaceCharacter)…(2)")
-precondition(Trace.keys(RawCommand("dfS")) == "op(delete,find)…(3)")
-precondition(Trace.keys(RawCommand("mS")) == "mark…(2)")
-precondition(Trace.keys(RawCommand("`S")) == "motion(mark)…(2)")
-precondition(Trace.keys(RawCommand("\"aY")) == "edit(yankLine)…(3)")
-precondition(Trace.keys(RawCommand("/hunter2<CR>")) == "search…(12)")
-precondition(Trace.keys(RawCommand(":s/x/y<CR>")) == "cmdline…(10)")
+precondition(RawCommand("3dd").traceKeys == "op(delete,line)…(3)")
+precondition(RawCommand("4111111111111111w").traceKeys == "motion(word)…(17)")
+precondition(RawCommand("d4111111111111111w").traceKeys == "op(delete,word)…(18)")
+precondition(RawCommand("d4111111111111111").traceKeys == "incomplete…(17)")
+precondition(RawCommand("y4155551234").traceKeys == "incomplete…(11)")
+precondition(RawCommand("0").traceKeys == "motion(lineStart)…(1)")
+precondition(RawCommand("d/hunter2<CR>").traceKeys == "op(delete,search)…(13)")
+precondition(RawCommand("rS").traceKeys == "edit(replaceCharacter)…(2)")
+precondition(RawCommand("dfS").traceKeys == "op(delete,find)…(3)")
+precondition(RawCommand("mS").traceKeys == "mark…(2)")
+precondition(RawCommand("`S").traceKeys == "motion(mark)…(2)")
+precondition(RawCommand("\"aY").traceKeys == "edit(yankLine)…(3)")
+precondition(RawCommand("/hunter2<CR>").traceKeys == "search…(12)")
+precondition(RawCommand(":s/x/y<CR>").traceKeys == "cmdline…(10)")
 
 for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy", "u"] {
-    precondition(Trace.keys(RawCommand(plain)) == plain, "needlessly redacted: " + plain)
+    precondition(RawCommand(plain).traceKeys == plain, "needlessly redacted: " + plain)
 }
 
 // MARK: - Rejections and the reason that already existed

@@ -69,7 +69,7 @@ enum Diag {
         guard anomalous || cmdLevel.isEnabled(type: .debug) else { return }
 
         let tag = "e\(epoch).c\(seq)"
-        var line = "\(tag) keys=\(Trace.keys(command))"
+        var line = "\(tag) keys=\(command.traceKeys)"
         line += " mode=\(Trace.name(before))→\(Trace.name(after))"
         line += " steps=\(Trace.shape(plan).isEmpty ? "-" : Trace.shape(plan))"
         if let rejection {
@@ -154,7 +154,7 @@ enum Diag {
     static func dropped(_ epoch: UInt64, _ seq: UInt64, command: RawCommand, reason: String) {
         cmd.log("""
             e\(epoch, privacy: .public).c\(seq, privacy: .public) \
-            keys=\(Trace.keys(command), privacy: .public) drop=\(reason, privacy: .public)
+            keys=\(command.traceKeys, privacy: .public) drop=\(reason, privacy: .public)
             """)
     }
 
