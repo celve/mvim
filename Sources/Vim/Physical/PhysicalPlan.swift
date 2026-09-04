@@ -25,3 +25,10 @@ public struct PhysicalPlan: Equatable, Sendable {
         steps.contains { $0.mutatesText }
     }
 }
+
+// MARK: - Recorder
+
+extension PhysicalPlan {
+    /// One character per step, in order — the order is the diagnostic.
+    var traceShape: String { steps.map(\.traceCode).joined() }
+}

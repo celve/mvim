@@ -1304,10 +1304,10 @@ func traced(
     )
 }
 
-precondition(Trace.shape(ciwA) == "W!R!CCC")
-precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: readProfile))
+precondition(ciwA.traceShape == "W!R!CCC")
+precondition(physical("ciw", text: "say hello world", caret: 6, profile: readProfile).traceShape
              == "P2P5!P?CCC")
-precondition(Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
+precondition(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile).traceShape
              == "P2P5PCCC")
 
 // A hard settle behind a press can name no capability, so it rings and teaches nothing.
@@ -1320,15 +1320,15 @@ func settleFollowsPress(_ plan: PhysicalPlan) -> Bool {
 }
 precondition(settleFollowsPress(physical("ciw", text: "say hello world", caret: 6, profile: readProfile)))
 precondition(!settleFollowsPress(ciwA))
-precondition(!Trace.shape(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile))
+precondition(!physical("ciw", text: "say hello world", caret: 6, profile: blindProfile).traceShape
              .contains("!"))
 
-precondition(Trace.shape(physical("3w", text: "say hello world", caret: 0, profile: readProfile)) == "P15!C")
+precondition(physical("3w", text: "say hello world", caret: 0, profile: readProfile).traceShape == "P15!C")
 
-precondition(Trace.caps(CapabilityReport(entries: [
+precondition(CapabilityReport(entries: [
     .readText: .init(status: .available, source: .probed),
     .writeSelection: .init(status: .unavailable, source: .learned),
-])) == "RT+p RL?? RC?? RS?? WS-l IT?? DC?? WD?? FS??")
+]).traceGrid == "RT+p RL?? RC?? RS?? WS-l IT?? DC?? WD?? FS??")
 
 // MARK: - The redaction rule
 
@@ -1342,16 +1342,16 @@ let leaky: [LogicalStep] = [
     .bell(.unsetMark("h")),
 ]
 for step in leaky {
-    precondition(!Trace.name(step).contains(secret), "Trace.name leaked a text payload")
+    precondition(!step.traceName.contains(secret), "traceName leaked a text payload")
 }
-precondition(Trace.name(LogicalStep.insertText(secret)) == "insertText(7)")
+precondition(LogicalStep.insertText(secret).traceName == "insertText(7)")
 
 let leakySteps = PhysicalPlan(steps: [
     .replaceSelection(secret), .typeText(secret), .clipboardInsert(secret),
     .commit(.setLastInsert(secret)),
 ])
-precondition(!Trace.shape(leakySteps).contains(secret), "Trace.shape leaked a text payload")
-precondition(Trace.shape(leakySteps) == "RTVC")
+precondition(!leakySteps.traceShape.contains(secret), "traceShape leaked a text payload")
+precondition(leakySteps.traceShape == "RTVC")
 
 // `Z` and `hunter2` are the operands; no case name `shape` emits holds either.
 for leak in ["/hunter2<CR>", "d/hunter2<CR>", "d?hunter2<CR>", "y/hunter2<CR>",
@@ -1396,11 +1396,11 @@ for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy"
 let joinReject = traced("J", text: "a\nb", caret: 0, profile: blockProfile)
 precondition(joinReject.plan == .rejected)
 precondition(joinReject.rejection?.index == 0)
-precondition(Trace.name(joinReject.rejection!.step) == "joinLines(2)")
+precondition(joinReject.rejection!.step.traceName == "joinLines(2)")
 
 let markReject = traced("ma", profile: blindProfile)
 precondition(markReject.plan == .rejected)
-precondition(Trace.name(markReject.rejection!.step) == "setMark")
+precondition(markReject.rejection!.step.traceName == "setMark")
 
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).rejection == nil)
 precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile).plan == ciwA)
@@ -1408,7 +1408,7 @@ precondition(traced("ciw", text: "say hello world", caret: 6, profile: axProfile
 // The 27th: the lowering drops `BellReason`, but the logical plan still holds it.
 func bellReason(_ keys: String) -> String? {
     for step in LogicalPlanner.plan(RawCommand(keys), state: .initial).steps {
-        if case .bell(let reason) = step { return Trace.name(reason) }
+        if case .bell(let reason) = step { return reason.traceName }
     }
     return nil
 }

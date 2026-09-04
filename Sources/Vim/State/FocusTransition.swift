@@ -70,3 +70,15 @@ public extension VimState.Field {
         }
     }
 }
+
+// MARK: - Recorder
+
+extension FocusTransition {
+    var traceName: String {
+        switch self {
+        case .sameElement: return "sameElement"
+        case .sameDocument: return "sameDocument"
+        case .newSession: return "newSession"
+        }
+    }
+}

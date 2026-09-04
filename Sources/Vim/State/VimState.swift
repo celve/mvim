@@ -276,3 +276,19 @@ public extension VimState.Session {
         }
     }
 }
+
+// MARK: - Recorder
+
+/// On the Optional, because an unbound binding has a mode to report and the runtime
+/// only ever holds one of these.
+extension Optional where Wrapped == VimState.Mode {
+    var traceName: String {
+        switch self {
+        case .none: return "unbound"
+        case .normal: return "normal"
+        case .insert: return "insert"
+        case .replace: return "replace"
+        case .visual: return "visual"
+        }
+    }
+}

@@ -195,3 +195,57 @@ public extension LogicalStep {
         case noPriorVisual
     }
 }
+
+// MARK: - Recorder
+
+extension LogicalStep {
+    /// The step type is what identifies a rejection among the planner's 26 `return nil` sites.
+    var traceName: String {
+        switch self {
+        case .moveCaret: return "moveCaret"
+        case .select: return "select"
+        case .extendSelection: return "extendSelection"
+        case .collapseSelection: return "collapseSelection"
+        case .swapSelectionEnds: return "swapSelectionEnds"
+        case .deleteSelection: return "deleteSelection"
+        case .yankSelection: return "yankSelection"
+        case .replaceSelection(let text): return "replaceSelection(\(text.utf16.count))"
+        case .transformSelection: return "transformSelection"
+        case .insertText(let text): return "insertText(\(text.utf16.count))"
+        case .put: return "put"
+        case .joinLines(let count, _): return "joinLines(\(count))"
+        case .setMode(let mode): return "setMode(\(mode.traceName))"
+        case .setMark: return "setMark"
+        case .history: return "history"
+        case .commit: return "commit"
+        case .renderCursor: return "renderCursor"
+        case .bell(let reason): return "bell(\(reason.traceName))"
+        }
+    }
+}
+
+extension LogicalStep.BellReason {
+    /// The reason this type has carried for a recorder that did not exist yet.
+    var traceName: String {
+        switch self {
+        case .unsupported: return "unsupported"
+        case .emptyRegister: return "emptyRegister"
+        case .unsetMark: return "unsetMark"
+        case .noPriorFind: return "noPriorFind"
+        case .noPriorSearch: return "noPriorSearch"
+        case .noPriorChange: return "noPriorChange"
+        case .noPriorVisual: return "noPriorVisual"
+        }
+    }
+}
+
+extension LogicalStep.Mode {
+    var traceName: String {
+        switch self {
+        case .normal: return "normal"
+        case .insert: return "insert"
+        case .replace: return "replace"
+        case .visual: return "visual"
+        }
+    }
+}

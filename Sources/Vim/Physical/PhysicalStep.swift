@@ -166,3 +166,25 @@ public struct Expectation: Equatable, Sendable {
         return true
     }
 }
+
+// MARK: - Recorder
+
+extension PhysicalStep {
+    /// Its letter in the plan alphabet — see the README; `P3` is one press posting three times.
+    var traceCode: String {
+        switch self {
+        case .setSelection: return "W"
+        case .replaceSelection: return "R"
+        case .press(_, let count): return count > 1 ? "P\(count)" : "P"
+        case .typeText: return "T"
+        case .clipboardCut: return "X"
+        case .clipboardCopy: return "Y"
+        case .clipboardInsert: return "V"
+        case .captureSelectedText: return "G"
+        case .settle: return "!"
+        case .softSettle: return "?"
+        case .commit: return "C"
+        case .bell: return "B"
+        }
+    }
+}
