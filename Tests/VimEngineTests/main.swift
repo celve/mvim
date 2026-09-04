@@ -1420,6 +1420,16 @@ precondition(bellReason("ciw") == nil)
 
 // MARK: - The settle's comparison
 
+precondition(Expectation(selection: 4..<9, length: 15).traceFields == "sel=4..9 len=15")
+precondition(Expectation().traceFields == "sel=nil len=nil")
+// The settle line used to assemble these four fragments by hand; pinned so the one
+// restructured line in `Diag` stays byte-identical.
+precondition(
+    " want \(Expectation(selection: 4..<9, length: 15).traceFields)"
+        + " got \(Expectation(selection: 0..<0, length: 15).traceFields)"
+        == " want sel=4..9 len=15 got sel=0..0 len=15"
+)
+
 precondition(Expectation().matches(selection: nil, length: nil), "a prediction of nothing is already met")
 precondition(Expectation().matches(selection: 3..<4, length: 99), "unpredicted fields are not checked")
 precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil))

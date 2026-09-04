@@ -101,10 +101,9 @@ enum Diag {
     /// Includes the soft ones, which ring nothing, abort nothing and were invisible.
     private static func settleFailed(_ tag: String, _ failure: Executor.SettleFailure) {
         var line = "\(tag) \(failure.hard ? "FAIL" : "soft")@\(failure.index)"
-        line += " want sel=\(Trace.range(failure.expectation.selection))"
-        line += " len=\(Trace.optional(failure.expectation.length))"
-        line += " got sel=\(Trace.range(failure.observedSelection))"
-        line += " len=\(Trace.optional(failure.observedLength))"
+        line += " want \(failure.expectation.traceFields)"
+        let observed = Expectation(selection: failure.observedSelection, length: failure.observedLength)
+        line += " got \(observed.traceFields)"
         // A field that answered something else, versus one that would not answer.
         line += " answered=\(failure.answered ? 1 : 0)"
         line += " polls=\(failure.polls) ms=\(failure.milliseconds)"

@@ -169,6 +169,14 @@ public struct Expectation: Equatable, Sendable {
 
 // MARK: - Recorder
 
+extension Expectation {
+    /// `sel=4..9 len=15`. Also renders an observation, which is the same shape.
+    var traceFields: String {
+        let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
+        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+    }
+}
+
 extension PhysicalStep {
     /// Its letter in the plan alphabet — see the README; `P3` is one press posting three times.
     var traceCode: String {

@@ -83,8 +83,8 @@ norm/
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
-│   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
-│   │   │   Trace               #   simulated host, the recorder's renderers
+│   │   │   State,Text,Sim      #   assembly, planners, state + reducer, text math,
+│   │   │                       #   simulated host
 │   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)
@@ -160,6 +160,9 @@ free, surviving the quit a stranded user is about to perform. A clean command lo
 sudo log config --subsystem com.loom.Norm --mode "level:debug,persist:debug"
 sudo log config --subsystem com.loom.Norm --mode "level:default"    # off again — it is sticky
 ```
+
+The renderers live on the engine types themselves, under a `// MARK: - Recorder` banner in
+each type's file; `grep -rn '// MARK: - Recorder' Sources/Vim` is the index.
 
 Five categories: `bind` (a field became vim's, with its whole capability resolution),
 `cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
