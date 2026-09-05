@@ -55,6 +55,9 @@ public final class Controller {
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
 
+    /// The recorder's command counter; its other half, the epoch, is on the tracker.
+    private var seq: UInt64 = 0
+
     /// A mutating command that entered Insert leaves its dot body open until
     /// the session's Esc delivers the typed payload.
     private var openChange: (source: String, count: Int?, register: Register?)?
@@ -64,6 +67,8 @@ public final class Controller {
             self?.rebind(to: binding, transition: transition)
         }
         tracker.onPointerAction = { [weak self] in self?.pointerActed() }
+        // Force the recorder's one store read off the tap callback's first command.
+        _ = Diag.recordsText
         tracker.start()
     }
 
@@ -143,6 +148,9 @@ public final class Controller {
         case .pending, .cancelled:
             return true
         case .command(let completed):
+            // Numbered here, not in `run`, so the three silent drops below are too.
+            seq &+= 1
+            let commandSeq = seq
             // Verify-before-run: never mutate a field focus has left. An
             // overlay summoned over a bound Normal-mode field emits no event
             // the tracker can see, so a completed command buys one bounded
@@ -154,12 +162,12 @@ public final class Controller {
                     // the granularity forced bindings have: (pid, window).
                     guard binding.pid == NSWorkspace.shared.frontmostApplication?.processIdentifier,
                           AX.frontWindow(of: binding.pid)?.id == binding.windowID else {
-                        tracker.reverify(force: true)
+                        drop(completed, commandSeq, "stale-forced")
                         return false
                     }
                 } else {
                     guard let focused = AX.focusedElement() else {
-                        tracker.reverify(force: true)
+                        drop(completed, commandSeq, "no-focused-element")
                         return false
                     }
                     if !CFEqual(focused, binding.element) {
@@ -170,19 +178,26 @@ public final class Controller {
                         // ⇒ retarget and run; bailing here would both destroy
                         // the command and type its final key into the text.
                         guard let moved = tracker.retarget(to: focused, from: binding) else {
-                            tracker.reverify(force: true)
+                            // Destroys the command AND swallows its final key.
+                            drop(completed, commandSeq, "retarget-failed")
                             return false
                         }
                         binding = moved
                     }
                 }
             }
-            run(completed, on: binding)
+            run(completed, on: binding, seq: commandSeq)
             // Publish even on mid-plan aborts: a .setMode commit may have
             // landed before a later step failed.
             publishMode()
             return true
         }
+    }
+
+    /// A completed command verify-before-run threw away, then handed to its reverify.
+    private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
+        Diag.dropped(tracker.epoch, seq, command: completed.command, reason: reason)
+        tracker.reverify(force: true)
     }
 
     /// Focus moved (tracker event). The element plumbing is unconditional;
@@ -202,6 +217,7 @@ public final class Controller {
             )
         }
         binding = new
+        Diag.bind(tracker.epoch, transition, new)
         // Keys-in-flight and the open dot body are one unit, and neither
         // holds an offset — a block crossing does not stale them.
         if transition.clearsChangeInFlight {
@@ -237,7 +253,7 @@ public final class Controller {
         }
     }
 
-    private func run(_ completed: RawMonitor.Completed, on binding: FocusTracker.Binding) {
+    private func run(_ completed: RawMonitor.Completed, on binding: FocusTracker.Binding, seq commandSeq: UInt64) {
         let command = completed.command
         let logical = LogicalPlanner.plan(command, state: state)
         var anchor: Int?
@@ -250,7 +266,10 @@ public final class Controller {
             anchor: anchor,
             cursor: state.field.cursor
         )
-        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
+        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let physical = planned.plan
+        let epoch = tracker.epoch
+        let before = state.field.mode
         let executed = executor.execute(physical, on: binding.element, state: &state)
         // Harvested before anything else can touch the executor: the abort path
         // below runs `repairStrandedSelection`, which executes its own plan and
@@ -259,7 +278,21 @@ public final class Controller {
         // Deferred so it runs after hygiene and the dot bookkeeping, on both
         // paths, and so the republish a commit triggers happens as `run`
         // unwinds rather than re-entering the tracker mid-command.
-        defer { learn(from: evidence, on: binding) }
+        defer { learn(from: evidence, on: binding, epoch: epoch, seq: commandSeq) }
+        // Declared second so LIFO runs it first, before the republish it may cause.
+        defer {
+            Diag.command(
+                epoch, commandSeq,
+                command: command,
+                from: before, to: state.field.mode,
+                plan: physical,
+                rejection: planned.rejection,
+                bell: Self.bellReason(logical),
+                executed: executed,
+                evidence: evidence,
+                insertPayload: completed.insertPayload
+            )
+        }
         guard executed else {
             // Abort hygiene: a plan that died mid-flight may leave its
             // operator selection painted, and must not record memories for
@@ -283,6 +316,14 @@ public final class Controller {
         recordChange(for: command, mutated: physical.mutatesText)
     }
 
+    /// The lowering drops `BellReason`, but it never had to survive the planner.
+    private static func bellReason(_ logical: LogicalPlan) -> LogicalStep.BellReason? {
+        for step in logical.steps {
+            if case .bell(let reason) = step { return reason }
+        }
+        return nil
+    }
+
     /// Fold one command's settle verdicts into the write probe's tally.
     ///
     /// Only hard settles produce evidence, and only an AX write is ever
@@ -290,20 +331,25 @@ public final class Controller {
     /// `insertText`, the two capabilities a field can *claim* and then fail to
     /// deliver. Reads were proven at bind; policies have no settle signal.
     ///
-    /// Two consecutive strikes commit a demotion, which is persisted and applied
-    /// at once, so the very next command routes around the lie instead of
-    /// belling again. The re-resolve is session-preserving (`.sameElement`), so
-    /// a demotion landing mid-edit does not move the user.
-    private func learn(from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding) {
+    /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), persisted and applied
+    /// at once, so the next command routes around the lie. The re-resolve is
+    /// session-preserving (`.sameElement`), so it does not move the user mid-edit.
+    private func learn(
+        from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
+        epoch: UInt64, seq: UInt64
+    ) {
         // A command that issued no AX write — the whole blind lane, and any plan
         // whose steps were all commits — teaches nothing and should not pay for
-        // the config lookups below.
+        // the config lookups below. Already on the command's line as `fail=nil`.
         guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
             return
         }
         // No role means no stable key to accumulate against (a forced binding,
         // or an element AX would not name).
-        guard let rung = binding.surface.roleRung else { return }
+        guard let rung = binding.surface.roleRung else {
+            Diag.notLearned(epoch, seq, reason: "no-rung", failed: evidence.failedCapability)
+            return
+        }
 
         /// The user has the last word: once they have set an atom explicitly,
         /// stop inferring about it. Without this their `.on` would lose to a
@@ -321,11 +367,20 @@ public final class Controller {
             ledger.clear(rung: rung, capability: capability.rawValue)
         }
 
-        guard let failed = evidence.failedCapability, isAuto(failed) else { return }
-        guard ledger.strike(rung: rung, capability: failed.rawValue) else { return }
+        guard let failed = evidence.failedCapability else { return }
+        guard isAuto(failed) else {
+            Diag.notLearned(epoch, seq, reason: "user-override", failed: failed)
+            return
+        }
+        // At a threshold of one, false means already committed — a misattributed lie.
+        guard ledger.strike(rung: rung, capability: failed.rawValue) else {
+            Diag.notLearned(epoch, seq, reason: "already-committed", failed: failed)
+            return
+        }
         LearnedPriors.commit(
             rung: rung, version: binding.appVersion, capability: failed.rawValue
         )
+        Diag.learned(epoch, seq, rung: rung, version: binding.appVersion, capability: failed)
         tracker.reresolveCapabilities()
     }
 

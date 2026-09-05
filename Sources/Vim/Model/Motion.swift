@@ -54,3 +54,45 @@ public enum SectionBoundary: String, Equatable, Hashable, Sendable {
     case methodStart
     case methodEnd
 }
+
+// MARK: - Recorder
+
+extension Motion {
+    var carriesOperand: Bool {
+        switch self {
+        case .find, .mark, .search, .custom:
+            return true
+        case .character, .displayLine, .line, .word, .lineStart, .lineEnd, .lastNonBlank,
+             .column, .fileStart, .fileEnd, .screenLine, .sentence, .paragraph, .section,
+             .matchingItem, .repeatFind, .page, .scrollLine:
+            return false
+        }
+    }
+
+    var traceShape: String {
+        switch self {
+        case .character: return "character"
+        case .displayLine: return "displayLine"
+        case .line: return "line"
+        case .word: return "word"
+        case .lineStart: return "lineStart"
+        case .lineEnd: return "lineEnd"
+        case .lastNonBlank: return "lastNonBlank"
+        case .column: return "column"
+        case .fileStart: return "fileStart"
+        case .fileEnd: return "fileEnd"
+        case .screenLine: return "screenLine"
+        case .sentence: return "sentence"
+        case .paragraph: return "paragraph"
+        case .section: return "section"
+        case .matchingItem: return "matchingItem"
+        case .find: return "find"
+        case .repeatFind: return "repeatFind"
+        case .mark: return "mark"
+        case .search: return "search"
+        case .page: return "page"
+        case .scrollLine: return "scrollLine"
+        case .custom: return "custom"
+        }
+    }
+}

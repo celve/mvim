@@ -19,7 +19,25 @@
 /// it never talks to AX, and it writes no state (it only *authors* commit
 /// steps for the reducer).
 public enum PhysicalPlanner {
+    /// Out-of-band, so the plan still stores only the program; the step's type narrows the 26 sites.
+    public struct Rejection: Equatable, Sendable {
+        public let index: Int
+        public let step: LogicalStep
+
+        public init(index: Int, step: LogicalStep) {
+            self.index = index
+            self.step = step
+        }
+    }
+
     public static func plan(_ logical: LogicalPlan, snapshot: FieldSnapshot) -> PhysicalPlan {
+        planning(logical, snapshot: snapshot).plan
+    }
+
+    /// `plan` plus why it rejected; everything but the recorder keeps calling `plan`.
+    public static func planning(
+        _ logical: LogicalPlan, snapshot: FieldSnapshot
+    ) -> (plan: PhysicalPlan, rejection: Rejection?) {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
@@ -30,13 +48,13 @@ public enum PhysicalPlanner {
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             steps.append(.setSelection(gap..<gap))
         }
-        for step in logical.steps {
+        for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
-                return .rejected
+                return (.rejected, Rejection(index: index, step: step))
             }
             steps.append(contentsOf: lowered)
         }
-        return PhysicalPlan(steps: steps)
+        return (PhysicalPlan(steps: steps), nil)
     }
 
     private static func isBellOnly(_ logical: LogicalPlan) -> Bool {

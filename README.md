@@ -85,7 +85,7 @@ norm/
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim      #   assembly, planners, state + reducer, text math,
 │   │   │                       #   simulated host
-│   │   └── Runtime/            #   tap routing, AX execution, Controller
+│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # Norm app — composition root: NormApp, NormSettingsView,
 │                               #   LegacyMigration (one-time Loom settings import)
 └── Resources/
@@ -140,6 +140,71 @@ Three consequences worth knowing:
 
 A login-launched Norm keeps its Accessibility and Input Monitoring grants: same
 bundle, same signature.
+
+## Diagnostics
+
+Norm records one line per **command decision** to `os_log`, under subsystem
+`com.loom.Norm`. The unit is the decision, not the keystroke: what a reader wants back is
+*"the engine believed X about this field, and X was false"*.
+
+```sh
+log show --predicate 'subsystem == "com.loom.Norm"' --last 1h --info --debug
+log collect --last 2h --output norm.logarchive     # to send somewhere
+```
+
+A command that did **not** fully succeed logs at `.default` and is persisted to disk for
+free, surviving the quit a stranded user is about to perform. A clean command logs at
+`.debug`, which is off until asked for:
+
+```sh
+sudo log config --subsystem com.loom.Norm --mode "level:debug,persist:debug"
+sudo log config --subsystem com.loom.Norm --mode "level:default"    # off again — it is sticky
+```
+
+The renderers live on the engine types themselves, under a `// MARK: - Recorder` banner in
+each type's file; `grep -rn '// MARK: - Recorder' Sources/Vim` is the index.
+
+Five categories: `bind` (a field became vim's, with its whole capability resolution),
+`cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
+answered instead), `learn` (a demotion committed, or the reason one was not), `gate` (an
+element that did not become a binding). Every line carries `e<epoch>.c<seq>` — the binding
+and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
+command line `e12.c47 …`; the word boundary catches both and keeps `e120` out.
+
+Reading a `cmd` line, `steps=` is the ordered, payload-free plan, one character per step:
+
+```
+W setSelection   R replaceSelection   P press (P3 = three times)   T typeText
+X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSelectedText
+! settle         ? softSettle         C commit                     B bell
+```
+
+Order is the diagnostic — a `!` directly after a `P` is a hard settle verifying a blind
+keypress, which can never name the capability it failed, so it rings without teaching the
+learner anything.
+
+**Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
+what you typed only where it is provably free of variable, data-bearing input — no operand,
+no register, no digit; otherwise it shows the command's shape and a length. (`ciw` is
+user-supplied too; what makes it safe is that it comes from a finite grammar.) `d/needle<CR>`
+becomes `op(delete,search)…(12)`, `3dd` becomes `op(delete,line)…(3)`, and even `0` becomes
+`motion(lineStart)…(1)`, because the digit test scans the string being written rather than
+the parse — which is lossy and drops a count outright when the command is still incomplete.
+
+The rule is not "syntax is safe, content is not". It is that when Norm's mode tracking is
+wrong — the bug this exists to find — you believe you are typing and every keystroke parses
+as a Normal-mode command, so an operand or a count *is* a letter of your prose. `4111…w` is
+a card number with a `w` on the end. The opt-in for recording content, which the menu does
+not offer and every `bind` line announces while it is on:
+
+```sh
+defaults write com.loom.Norm normRecordText -bool YES
+defaults delete com.loom.Norm normRecordText
+```
+
+**Both edges need a relaunch.** The flag is read once per process, deliberately — re-reading
+it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
+does not stop a Norm that is already running.
 
 ## Running alongside Sotto
 

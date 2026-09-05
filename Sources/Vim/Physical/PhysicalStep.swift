@@ -158,4 +158,41 @@ public struct Expectation: Equatable, Sendable {
         self.selection = selection
         self.length = length
     }
+
+    /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
+    public func matches(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
+        if let selection, observed != selection { return false }
+        if let length, observedLength != length { return false }
+        return true
+    }
+}
+
+// MARK: - Recorder
+
+extension Expectation {
+    /// `sel=4..9 len=15`. Also renders an observation, which is the same shape.
+    var traceFields: String {
+        let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
+        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+    }
+}
+
+extension PhysicalStep {
+    /// Its letter in the plan alphabet — see the README; `P3` is one press posting three times.
+    var traceCode: String {
+        switch self {
+        case .setSelection: return "W"
+        case .replaceSelection: return "R"
+        case .press(_, let count): return count > 1 ? "P\(count)" : "P"
+        case .typeText: return "T"
+        case .clipboardCut: return "X"
+        case .clipboardCopy: return "Y"
+        case .clipboardInsert: return "V"
+        case .captureSelectedText: return "G"
+        case .settle: return "!"
+        case .softSettle: return "?"
+        case .commit: return "C"
+        case .bell: return "B"
+        }
+    }
 }

@@ -24,3 +24,17 @@ public enum TextObjectKind: Equatable, Hashable, Sendable {
     case tag
     case custom(Character)
 }
+
+// MARK: - Recorder
+
+extension TextObjectKind {
+    var carriesOperand: Bool {
+        switch self {
+        // `ci"`, `ci(`: the delimiter names the object, but the user still typed it.
+        case .block, .quote, .custom:
+            return true
+        case .word, .sentence, .paragraph, .tag:
+            return false
+        }
+    }
+}

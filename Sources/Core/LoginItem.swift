@@ -21,7 +21,12 @@ public enum LoginItem {
             }
         } catch {
             // Both throw when the wanted state already holds; the re-read is the verdict.
-            NSLog("Norm: login item \(enabled ? "register" : "unregister") failed — \(error.localizedDescription)")
+            Log.system.error(
+                """
+                login item \(enabled ? "register" : "unregister", privacy: .public) failed — \
+                \(error.localizedDescription, privacy: .public)
+                """
+            )
         }
         return state
     }

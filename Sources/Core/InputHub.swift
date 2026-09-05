@@ -70,7 +70,7 @@ public final class InputHub {
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                           options: .defaultTap, eventsOfInterest: mask,
                                           callback: inputHubCallback, userInfo: selfPtr) else {
-            NSLog("Norm: InputHub CGEvent.tapCreate failed — Input Monitoring not granted?")
+            Log.system.error("tapCreate failed — Input Monitoring not granted?")
             return
         }
         self.tap = tap

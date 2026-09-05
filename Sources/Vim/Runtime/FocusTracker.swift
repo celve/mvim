@@ -62,6 +62,9 @@ public final class FocusTracker {
     public var onPointerAction: (() -> Void)?
     public private(set) var binding: Binding?
 
+    /// Here, not on the controller: the gate events below fire where nothing is published.
+    public private(set) var epoch: UInt64 = 0
+
     private var appObserver: AXObserver?
     private var observedPid: pid_t = 0
     /// Exact (element, notification) pairs successfully registered — torn
@@ -72,6 +75,16 @@ public final class FocusTracker {
     /// Shared stamp: the negative-cache window and the reverify rate limit.
     private var lastResolveAt: CFAbsoluteTime = 0
     private var reverifyScheduled = false
+    /// Throttles the keydown path; the pid is load-bearing, as nothing else marks an app change.
+    private struct Denial: Equatable {
+        let pid: pid_t
+        let fresh: Bool
+        let textual: Bool
+        let secure: Bool
+        let enabled: Bool
+        let role: String?
+    }
+    private var lastDenial: Denial?
     private var enabled = true
     private var started = false
 
@@ -264,8 +277,13 @@ public final class FocusTracker {
             return
         }
         if let bound = binding, !bound.isForced, CFEqual(bound.element, element) {
-            guard revalidateGate else { return }
-            if FieldProber.gate(element).engageable { return }
+            guard revalidateGate else {
+                Diag.shortCircuited(epoch)
+                return
+            }
+            let gate = FieldProber.gate(element)
+            if gate.engageable { return }
+            reportDenial(gate, fresh: false, pid: pid)
             publishForcedOrNil()   // the bound element lost the gate
             return
         }
@@ -274,6 +292,7 @@ public final class FocusTracker {
         retargetObserver(to: pid)
         let gate = FieldProber.gate(element)
         guard gate.engageable else {
+            reportDenial(gate, fresh: true, pid: pid)
             publishForcedOrNil()   // the fresh element fails the gate
             return
         }
@@ -295,6 +314,20 @@ public final class FocusTracker {
             appVersion: identity.version,
             capabilityReport: resolved.report
         ))
+        // After the publish, so it carries its own binding's epoch, not the outgoing one.
+        if gate.isWebElement, surface.origin == nil {
+            Diag.originLost(epoch, role: gate.role)
+        }
+    }
+
+    /// Value-typed, so the keydown negative cache allocates nothing.
+    private func reportDenial(_ gate: FieldProber.FieldGate, fresh: Bool, pid: pid_t) {
+        let verdict = Denial(
+            pid: pid, fresh: fresh, textual: gate.isTextual,
+            secure: gate.isSecure, enabled: gate.isEnabled, role: gate.role
+        )
+        Diag.denied(epoch, gate, fresh: fresh, repeated: lastDenial == verdict)
+        lastDenial = verdict
     }
 
     /// What capability config is keyed by: the app, the field's role, and —
@@ -418,6 +451,8 @@ public final class FocusTracker {
     private func publish(_ new: Binding?) {
         if binding == nil, new == nil { return }
         let edge = transition(from: binding, to: new)
+        epoch &+= 1
+        lastDenial = nil
         // The element-destroyed registration moves with the binding; forced
         // stand-ins register nothing.
         if let old = binding, !old.isForced {

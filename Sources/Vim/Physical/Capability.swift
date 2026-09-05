@@ -142,3 +142,101 @@ public struct CapabilityProfile: Equatable, Sendable {
         statuses[capability] == .available
     }
 }
+
+/// Why each atom resolved as it did. Here, not beside the impure `FieldProber`, so `make test` reaches it.
+public struct CapabilityReport: Equatable, Sendable {
+    public enum Source: Equatable, Sendable {
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism.
+        case probed
+        /// A shipped `CapabilityConfig` seed.
+        case seeded
+        /// The user's menu override.
+        case user
+        /// A committed `LearnedPriors` demotion: the field claimed this write
+        /// and then failed to deliver it. A suggestion, not a decision — the
+        /// user can promote it (Off) or overrule it (On).
+        case learned
+    }
+
+    public struct Entry: Equatable, Sendable {
+        public let status: CapabilityStatus
+        public let source: Source
+
+        public init(status: CapabilityStatus, source: Source) {
+            self.status = status
+            self.source = source
+        }
+    }
+
+    public var entries: [Capability: Entry]
+
+    public init(entries: [Capability: Entry] = [:]) {
+        self.entries = entries
+    }
+}
+
+// MARK: - Recorder
+
+extension Capability {
+    /// The storage key doubles as the log spelling; kept separate so either may move.
+    var traceName: String { rawValue }
+
+    var traceCode: String {
+        switch self {
+        case .readText: return "RT"
+        case .readLength: return "RL"
+        case .readCaret: return "RC"
+        case .readSelectedText: return "RS"
+        case .writeSelection: return "WS"
+        case .insertText: return "IT"
+        case .drawCursor: return "DC"
+        case .wholeDocument: return "WD"
+        case .fieldIsSession: return "FS"
+        }
+    }
+}
+
+extension Set where Element == Capability {
+    /// Declaration order — a `Set` has none.
+    var traceNames: String {
+        "[" + Capability.allCases.filter { self.contains($0) }.map(\.traceName).joined(separator: " ") + "]"
+    }
+}
+
+extension CapabilityStatus {
+    var traceCode: String {
+        switch self {
+        case .available: return "+"
+        case .unavailable: return "-"
+        case .unknown: return "?"
+        }
+    }
+}
+
+extension CapabilityReport.Source {
+    var traceCode: String {
+        switch self {
+        case .probed: return "p"
+        case .seeded: return "s"
+        case .user: return "u"
+        case .learned: return "l"
+        }
+    }
+}
+
+extension CapabilityReport {
+    /// `RT+p RL+p WS-l …` in `allCases` order; status `+ - ?`, source `p s u l`, `??` absent.
+    var traceGrid: String {
+        var out = ""
+        for capability in Capability.allCases {
+            if !out.isEmpty { out += " " }
+            out += capability.traceCode
+            guard let entry = entries[capability] else {
+                out += "??"
+                continue
+            }
+            out += entry.status.traceCode + entry.source.traceCode
+        }
+        return out
+    }
+}

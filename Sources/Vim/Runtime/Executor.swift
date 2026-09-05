@@ -20,8 +20,9 @@ public final class Executor {
 
     private var captures: [CaptureSlot: String] = [:]
 
-    /// Capability evidence from the most recent `execute()` — the lazy
-    /// write probe's raw readings. Attribution is positional: the most
+    /// What the most recent `execute()` did — the lazy write probe's raw
+    /// readings, plus what the recorder needs to explain them. Only the two
+    /// capability fields feed the learner. Attribution is positional: the most
     /// recent attributable step before a settle (`.setSelection` →
     /// writeSelection, `.replaceSelection` → insertText; anything else
     /// clears it), and each settle consumes it. A planner shape that ever
@@ -34,10 +35,58 @@ public final class Executor {
         public internal(set) var failedCapability: Capability?
         public internal(set) var settledCapabilities: Set<Capability> = []
 
+        /// Recorder only — the learner reads the two fields above.
+        public internal(set) var abortedAt: Int?
+
+        /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
+        public internal(set) var settleFailures: [SettleFailure] = []
+
         public init() {}
     }
 
+    /// `answered == false` is a field that produced no attribute at all, not one that disagreed.
+    public struct SettleFailure: Equatable, Sendable {
+        public let hard: Bool
+        public let index: Int
+        public let expectation: Expectation
+        public let observedSelection: Range<Int>?
+        public let observedLength: Int?
+        public let answered: Bool
+        public let polls: Int
+        public let milliseconds: Int
+        /// Told a refused write apart from one that landed and then read back wrong.
+        public let writeError: Int32?
+    }
+
     public private(set) var lastRun = RunEvidence()
+
+    /// From the write a following settle verifies; cleared where attribution is.
+    private var lastWriteError: Int32?
+
+    /// An `AXError` worth reporting: `.success` is not one.
+    private static func rejection(_ error: AXError) -> Int32? {
+        error == .success ? nil : error.rawValue
+    }
+
+    /// Returns whether it converged, so the two call sites read as they did before.
+    @discardableResult
+    private func record(
+        _ outcome: SettleOutcome, _ expectation: Expectation, at index: Int, hard: Bool
+    ) -> Bool {
+        guard !outcome.converged else { return true }
+        lastRun.settleFailures.append(SettleFailure(
+            hard: hard,
+            index: index,
+            expectation: expectation,
+            observedSelection: outcome.observedSelection,
+            observedLength: outcome.observedLength,
+            answered: outcome.answered,
+            polls: outcome.polls,
+            milliseconds: outcome.milliseconds,
+            writeError: lastWriteError
+        ))
+        return false
+    }
 
     /// Runs the plan in order; a failed settle (or unrealizable step) rings
     /// and aborts the remainder. Returns whether every step ran.
@@ -45,9 +94,10 @@ public final class Executor {
     public func execute(_ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState) -> Bool {
         captures = [:]
         lastRun = RunEvidence()
+        lastWriteError = nil
         var attribution: Capability?
-        for step in plan.steps {
-            let passed = perform(step, on: element, state: &state)
+        for (index, step) in plan.steps.enumerated() {
+            let passed = perform(step, at: index, on: element, state: &state)
             switch step {
             case .setSelection:
                 attribution = .writeSelection
@@ -60,10 +110,16 @@ public final class Executor {
                     lastRun.failedCapability = attribution
                 }
                 attribution = nil
+                lastWriteError = nil
             default:
                 attribution = nil
+                // The settle consumes the error; any other step ends its reach.
+                lastWriteError = nil
             }
-            guard passed else { return false }
+            guard passed else {
+                lastRun.abortedAt = index
+                return false
+            }
         }
         return true
     }
@@ -76,14 +132,18 @@ public final class Executor {
 
     // MARK: - Steps
 
-    private func perform(_ step: PhysicalStep, on element: AXUIElement, state: inout VimState) -> Bool {
+    private func perform(
+        _ step: PhysicalStep, at index: Int, on element: AXUIElement, state: inout VimState
+    ) -> Bool {
         switch step {
         case .setSelection(let range):
-            AX.setSelectedRange(CFRange(location: range.lowerBound, length: range.count), on: element)
+            lastWriteError = Self.rejection(
+                AX.setSelectedRange(CFRange(location: range.lowerBound, length: range.count), on: element)
+            )
             return true
 
         case .replaceSelection(let replacement):
-            AX.setSelectedText(replacement, on: element)
+            lastWriteError = Self.rejection(AX.setSelectedText(replacement, on: element))
             return true
 
         case .press(let chord, let count):
@@ -142,14 +202,16 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
-            if settle(expectation, on: element) { return true }
+            if record(settle(expectation, on: element), expectation, at: index, hard: true) {
+                return true
+            }
             NSSound.beep()
             return false
 
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
-            _ = settle(expectation, on: element)
+            _ = record(settle(expectation, on: element), expectation, at: index, hard: false)
             return true
 
         case .commit(let effect):
@@ -162,6 +224,16 @@ public final class Executor {
         }
     }
 
+    /// The observed values ride every exit, so a timeout costs no extra round trip.
+    private struct SettleOutcome {
+        let converged: Bool
+        let observedSelection: Range<Int>?
+        let observedLength: Int?
+        let answered: Bool
+        let polls: Int
+        let milliseconds: Int
+    }
+
     /// Bounded convergence poll against the planner's prediction.
     ///
     /// One IPC per poll: the attribute list is built from what the
@@ -170,7 +242,7 @@ public final class Executor {
     /// the rare fallback for an element that claimed `readLength` and then
     /// answered nil, and fetching it every poll would marshal the entire
     /// document 25 times per settle.
-    private func settle(_ expectation: Expectation, on element: AXUIElement) -> Bool {
+    private func settle(_ expectation: Expectation, on element: AXUIElement) -> SettleOutcome {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
@@ -184,25 +256,40 @@ public final class Executor {
         }
         // An expectation that predicts nothing is already met — and must not
         // spend a round trip discovering that.
-        guard !names.isEmpty else { return true }
+        guard !names.isEmpty else {
+            return SettleOutcome(
+                converged: true, observedSelection: nil, observedLength: nil,
+                answered: true, polls: 0, milliseconds: 0
+            )
+        }
 
-        let deadline = Date().addingTimeInterval(0.25)
+        let start = Date()
+        let deadline = start.addingTimeInterval(0.25)
+        var polls = 0
         while true {
-            var converged = true
+            polls += 1
             let reads = AX.attributes(names, of: element)
-            if let expected = expectation.selection, let slot = selectionSlot {
-                if let range = reads.range(slot) {
-                    converged = converged && (range.location..<(range.location + range.length)) == expected
-                } else {
-                    converged = false
-                }
+            var selection: Range<Int>?
+            var length: Int?
+            if let slot = selectionSlot, let range = reads.range(slot) {
+                selection = range.location..<(range.location + range.length)
             }
-            if let expectedLength = expectation.length, let slot = lengthSlot {
-                let length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
-                converged = converged && length == expectedLength
+            if let slot = lengthSlot {
+                length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
-            if converged { return true }
-            guard Date() < deadline else { return false }
+            // Not convergence: an absent attribute is a silent app, a wrong one a liar.
+            let answered = (selectionSlot == nil || selection != nil)
+                && (lengthSlot == nil || length != nil)
+            func outcome(_ converged: Bool) -> SettleOutcome {
+                SettleOutcome(
+                    converged: converged,
+                    observedSelection: selection, observedLength: length,
+                    answered: answered, polls: polls,
+                    milliseconds: Int(Date().timeIntervalSince(start) * 1000)
+                )
+            }
+            if expectation.matches(selection: selection, length: length) { return outcome(true) }
+            guard Date() < deadline else { return outcome(false) }
             Thread.sleep(forTimeInterval: 0.01)
         }
     }
