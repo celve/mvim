@@ -17,9 +17,10 @@
 /// can only prove we emit the plans we designed, never that a blind plan
 /// works in a real app.
 ///
-/// `swallowsReplace` / `swallowsSelect` make it an honest liar instead: the
-/// host answers every read and ignores the write, which is the only way to
-/// reach the abort path from a golden.
+/// `swallowsReplace`, `swallowsSelect` and `unreadableSelection` make it a
+/// misbehaving host instead — two writes accepted and ignored, and a selection
+/// read that answers nothing — which is the only way to reach the abort path,
+/// and so the stand-down behind it, from a golden.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -153,7 +154,7 @@ private extension Sim {
             // Abort hygiene, mirroring the Controller: a selection we could not
             // collapse is one the app would type over, so residency stands down.
             if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
-                state = VimReducer.reduce(state, .setMode(before))
+                state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
             // The plan failed, but the session it closed is the user's — and the
             // monitor drained the payload it will never offer again.

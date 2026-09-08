@@ -1085,6 +1085,18 @@ precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.text == "say hello world")
 
+// Standing down never revives Visual: a failed Visual operator leaves Visual
+// regardless, and its anchor names the very selection we just failed to read.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.type("viw")
+precondition(sim.selection == 4..<9)
+sim.swallowsReplace = true
+sim.unreadableSelection = true
+sim.type("c")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.text == "say hello world")
+
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
 // Step-level: blind plans carry .press moves the Sim can't emulate.

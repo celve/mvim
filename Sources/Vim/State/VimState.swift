@@ -147,6 +147,13 @@ public extension VimState {
             case .normal, .visual: return false
             }
         }
+
+        /// Visual resolved to Normal: its anchor names a selection, so it is
+        /// not a mode to revive when reading one has just failed.
+        public var nonVisual: Mode {
+            if case .visual = self { return .normal }
+            return self
+        }
     }
 
     /// The Visual-mode state macOS cannot hold: an AX selection is location

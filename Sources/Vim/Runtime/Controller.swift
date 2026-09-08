@@ -299,7 +299,7 @@ public final class Controller {
             // so residency stands down rather than destroy text nobody selected.
             if !repairStrandedSelection(on: binding, operand: planned.operand),
                state.field.mode.isInserting {
-                executor.commit(.setMode(before), state: &state)
+                executor.commit(.setMode(before.nonVisual), state: &state)
             }
             // The session it closed is the user's, though, and `RawMonitor`
             // already drained the payload it will never offer again.
