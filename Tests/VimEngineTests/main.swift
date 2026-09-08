@@ -887,8 +887,7 @@ precondition(reduced.field.cursor == 3..<4)
 reduced = VimReducer.reduce(reduced, .setMode(.insert))
 precondition(reduced.field.cursor == nil)
 
-// Opening a session forgets where the last one began, so an aborted plan that
-// never reaches the paired commit inherits nothing.
+// Only opening a session forgets where the last one began.
 reduced = VimReducer.reduce(reduced, .setInsertStart(7))
 precondition(reduced.field.insertStart == 7)
 reduced = VimReducer.reduce(reduced, .setMode(.normal))
@@ -994,8 +993,7 @@ precondition(sim.selection == 6..<6)                       // bare caret, no blo
 precondition(sim.state.field.cursor == nil)
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
-// A field that accepts the AX write and does nothing — measured in Linear's
-// text area, where `s` read mode=normal→normal.
+// A field that accepts the AX write and does nothing — measured in Linear.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("ciw")
@@ -1020,8 +1018,7 @@ sim.type("dw")
 precondition(sim.text == "say hello")
 precondition(sim.state.session.lastChange == nil)
 
-// Esc's caret nudge can fail too, and the monitor has already drained the
-// payload, so this is its only chance to be recorded.
+// Esc's nudge can fail too, and the drained payload has no second chance.
 sim = Sim(text: "hi", caret: 0, profile: axProfile)
 sim.type("iZ")
 precondition(sim.state.field.mode == .insert)
@@ -1032,8 +1029,7 @@ precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "Z")
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "iZ<Esc>"))
 
-// Visual `c` has no settle to verify its selection — the operand comes from the
-// planner, so the user's own selection survives the abort the same way.
+// Visual `c` has no settle to verify its selection; the planner names it.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("viw")
@@ -1045,8 +1041,7 @@ sim.type("bye")
 sim.feed("<Esc>")
 precondition(sim.text == "say bye world")
 
-// The other half of the guard: Visual `d` ends in Normal, so nobody is about
-// to type over the selection.
+// The other half: Visual `d` ends in Normal, so nobody types over it.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("viwd")
@@ -1055,17 +1050,14 @@ precondition(sim.state.field.mode == .normal)          // and Visual is left reg
 precondition(sim.selection.isEmpty)                    // the stranded selection is collapsed
 precondition(sim.state.session.register("\"") == nil)
 
-// Same command, same abort, two different host lies. A swallowed *replace*
-// leaves the caret collapsed, so entering Insert is safe.
+// A swallowed *replace* leaves a bare caret, so entering Insert is safe.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("o")
 precondition(sim.state.field.mode == .insert)
 precondition(sim.selection.isEmpty)
 
-// A swallowed *select* strands a range that is not the operand, and no write we
-// have can collapse it — so residency stands down rather than let the next
-// keystroke replace text nobody selected.
+// A swallowed *select* strands a range no write of ours can collapse.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.perform([.setSelection(4..<9)])
 sim.swallowsSelect = true
@@ -1075,9 +1067,7 @@ precondition(sim.state.field.mode == .normal)
 precondition(sim.selection == 4..<9)
 precondition(sim.text == "say hello world")
 
-// A field that answers no selection at all — the recorder's `answered=0`. The
-// settle cannot converge and the repair cannot see what it stranded, so
-// residency stands down rather than ride on a read that failed.
+// Answering no selection at all: residency must not ride on a failed read.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
 sim.unreadableSelection = true
 sim.type("ciw")
@@ -1085,8 +1075,7 @@ precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.text == "say hello world")
 
-// Standing down never revives Visual: a failed Visual operator leaves Visual
-// regardless, and its anchor names the very selection we just failed to read.
+// Standing down never revives Visual, whose anchor names an unreadable selection.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.type("viw")
 precondition(sim.selection == 4..<9)

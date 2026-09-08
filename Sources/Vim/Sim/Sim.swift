@@ -17,10 +17,7 @@
 /// can only prove we emit the plans we designed, never that a blind plan
 /// works in a real app.
 ///
-/// `swallowsReplace`, `swallowsSelect` and `unreadableSelection` make it a
-/// misbehaving host instead — two writes accepted and ignored, and a selection
-/// read that answers nothing — which is the only way to reach the abort path,
-/// and so the stand-down behind it, from a golden.
+/// Its three faults are the only way a golden reaches the abort path at all.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -29,16 +26,13 @@ public struct Sim {
     public private(set) var pasteboard: String?
     public var profile: CapabilityProfile
 
-    /// A host that accepts `AXSelectedText` and does nothing — the Chromium
-    /// contenteditable a hard settle exists to catch.
+    /// Accepts `AXSelectedText` and does nothing — the Chromium contenteditable.
     public var swallowsReplace = false
 
-    /// The same lie about `AXSelectedTextRange`, which is the configuration a
-    /// committed `writeSelection` demotion leaves behind.
+    /// The same lie about `AXSelectedTextRange` — what a `writeSelection` demotion leaves.
     public var swallowsSelect = false
 
-    /// A host that answers no `AXSelectedTextRange` at all — the recorder's
-    /// `answered=0`, which `Executor.SettleFailure` keeps apart from a wrong answer.
+    /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
     public var unreadableSelection = false
 
     public private(set) var bells = 0
@@ -151,13 +145,11 @@ private extension Sim {
         captures = [:]
         let executed = execute(physical)
         guard executed else {
-            // Abort hygiene, mirroring the Controller: a selection we could not
-            // collapse is one the app would type over, so residency stands down.
+            // Abort hygiene, mirroring the Controller down to the stand-down.
             if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
-            // The plan failed, but the session it closed is the user's — and the
-            // monitor drained the payload it will never offer again.
+            // The monitor drained the payload it will never offer again.
             if let payload = completed.insertPayload, !state.field.mode.isInserting {
                 closeInsertSession(payload)
             }
@@ -172,8 +164,7 @@ private extension Sim {
         recordChange(for: command, mutated: physical.mutatesText)
     }
 
-    /// The Controller's twin, and it must obey the host the same way: a field
-    /// that denies or swallows the range write cannot be collapsed at all.
+    /// The Controller's twin, and it must obey the host the same way.
     mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !selection.isEmpty else { return true }
@@ -290,8 +281,7 @@ private extension Sim {
         return true
     }
 
-    /// Acting is over, but residency was never the field's to veto — the twin
-    /// of the real executor's surviving-commit scan.
+    /// The twin of the real executor's surviving-commit scan.
     mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
         for survivor in plan.steps[(index + 1)...] {
             if case .commit(let effect) = survivor, effect.survivesAbort {

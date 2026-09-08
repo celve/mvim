@@ -294,15 +294,12 @@ public final class Controller {
             )
         }
         guard executed else {
-            // Abort hygiene: nothing below may claim the edit happened.
-            // A selection we could not collapse is one the app would type over,
-            // so residency stands down rather than destroy text nobody selected.
+            // A selection we could not collapse is one the app would type over.
             if !repairStrandedSelection(on: binding, operand: planned.operand),
                state.field.mode.isInserting {
                 executor.commit(.setMode(before.nonVisual), state: &state)
             }
-            // The session it closed is the user's, though, and `RawMonitor`
-            // already drained the payload it will never offer again.
+            // `RawMonitor` drained the payload it will never offer again.
             if let payload = completed.insertPayload, !state.field.mode.isInserting {
                 closeInsertSession(payload)
             }
@@ -397,16 +394,12 @@ public final class Controller {
         tracker.reresolveCapabilities()
     }
 
-    /// Collapse whatever selection an aborted plan stranded — through the
-    /// executor, which owns all field writes — and report whether the field is
-    /// safe to type into afterwards.
+    /// Collapse a stranded selection, and report whether the field is safe to type into.
     private func repairStrandedSelection(on binding: FocusTracker.Binding, operand: Range<Int>?) -> Bool {
-        // Unknown is not empty: a settle can fail *because* the field stopped
-        // answering, and typing into a range we cannot see is the hazard itself.
+        // Unknown is not empty: a settle can fail *because* the read went dark.
         guard let range = AX.selectedRange(of: binding.element) else { return false }
         guard range.length > 0 else { return true }
-        // Still painted and still the operand: leave it for the app, whose own
-        // editor performs the substitute on the user's first keystroke.
+        // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, range.location..<(range.location + range.length) == operand { return true }
         guard binding.capabilities.has(.writeSelection) else { return false }
         executor.execute(

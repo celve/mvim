@@ -35,9 +35,7 @@ public enum PhysicalPlanner {
         public let plan: PhysicalPlan
         public let rejection: Rejection?
 
-        /// The range the plan meant to replace, so abort hygiene can tell an
-        /// operand it should hand to the app from a selection it must collapse.
-        /// Nil in the blind lane, which has no offsets to name one with.
+        /// The range the plan meant to replace; nil in the blind lane, which has no offsets.
         public let operand: Range<Int>?
 
         public init(plan: PhysicalPlan, rejection: Rejection?, operand: Range<Int>?) {
@@ -52,8 +50,7 @@ public enum PhysicalPlanner {
         planning(logical, snapshot: snapshot).plan
     }
 
-    /// `plan` plus what only the planner knows — why it rejected, and the
-    /// operand a failed plan was aiming at.
+    /// `plan` plus what only the planner knows: why it rejected, and the operand.
     public static func planning(
         _ logical: LogicalPlan, snapshot: FieldSnapshot
     ) -> Planning {
@@ -102,8 +99,7 @@ private extension PhysicalPlanner {
         /// the gap to collapse to before the plan acts.
         var cursorCollapse: Int?
 
-        /// The range the last predicted edit was aimed at — last one wins,
-        /// since that is the edit in flight if the plan dies.
+        /// The last predicted edit's range — the one in flight if the plan dies.
         var operand: Range<Int>?
 
         init(snapshot: FieldSnapshot) {

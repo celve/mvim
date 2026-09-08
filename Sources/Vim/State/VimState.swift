@@ -148,8 +148,7 @@ public extension VimState {
             }
         }
 
-        /// Visual resolved to Normal: its anchor names a selection, so it is
-        /// not a mode to revive when reading one has just failed.
+        /// Visual resolved to Normal: its anchor names a selection we may not be able to read.
         public var nonVisual: Mode {
             if case .visual = self { return .normal }
             return self

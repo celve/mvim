@@ -43,9 +43,7 @@ public enum VimEffect: Equatable, Sendable {
 // MARK: - Abort survival
 
 extension VimEffect {
-    /// Whether a failed step may take this commit down with it: residency is
-    /// what the user asked for, and every other effect asserts something about
-    /// a field that just refused to confirm anything.
+    /// Whether a failed step may drop this commit: residency is not the field's to veto.
     var survivesAbort: Bool {
         switch self {
         case .setMode(let mode):

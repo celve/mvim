@@ -88,9 +88,7 @@ public final class Executor {
         return false
     }
 
-    /// Runs the plan in order; a failed settle (or unrealizable step) rings and
-    /// ends the run, though the residency commits behind it still land.
-    /// Returns whether every step ran.
+    /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
     @discardableResult
     public func execute(_ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState) -> Bool {
         captures = [:]
@@ -119,8 +117,7 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
-                // A second pass, not a `continue`: `perform` would re-post a
-                // blind keypress and burn the deadline on a trailing soft settle.
+                // A second pass, not a `continue`: `perform` would re-post a blind keypress.
                 for survivor in plan.steps[(index + 1)...] {
                     if case .commit(let effect) = survivor, effect.survivesAbort {
                         commit(effect, state: &state)
