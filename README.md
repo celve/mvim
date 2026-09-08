@@ -183,6 +183,12 @@ Order is the diagnostic — a `!` directly after a `P` is a hard settle verifyin
 keypress, which can never name the capability it failed, so it rings without teaching the
 learner anything.
 
+`abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
+it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
+aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
+sat behind the settle and a lying field decided which mode Norm was in — `mode=normal→normal`
+on a `steps=W!R!CCC abort@3` line is the signature of that bug.
+
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,
 no register, no digit; otherwise it shows the command's shape and a length. (`ciw` is

@@ -4,8 +4,9 @@
 /// planner when only raw intent can decide them (`fx` writes the find
 /// memory, `;` must not), and by the physical planner when payloads need
 /// offsets or captures. The executor hands each one it *passes* to the
-/// reducer, capture slots resolved to literals; steps after a failed settle
-/// never run, so state tracks what actually happened to the field.
+/// reducer, capture slots resolved to literals; a failed step drops every
+/// commit behind it except residency, so state tracks what happened to the
+/// field plus the mode the user asked for.
 public enum VimEffect: Equatable, Sendable {
     case setMode(VimState.Mode)
 
@@ -37,6 +38,23 @@ public enum VimEffect: Equatable, Sendable {
     case yanked(into: Register?, content: TextPayload, wise: Wise)
 
     case setMark(Character, MarkPoint)
+}
+
+// MARK: - Abort survival
+
+extension VimEffect {
+    /// Whether a failed step may drop this commit: residency is not the field's to veto.
+    var survivesAbort: Bool {
+        switch self {
+        case .setMode(let mode):
+            // Visual would resume against an anchor for a range the field never painted.
+            if case .visual = mode { return false }
+            return true
+        case .setInsertStart, .setCursor, .deleted, .yanked, .setMark,
+             .searched, .found, .setLastInsert, .setLastChange, .setLastVisual:
+            return false
+        }
+    }
 }
 
 /// Register-bound text that may only exist mid-execution: known at plan

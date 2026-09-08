@@ -4,8 +4,8 @@ import LoomCore
 
 /// The real `PhysicalStep` interpreter — `Sim.execute`'s impure twin, and
 /// the **sole caller of `VimReducer`**: state changes happen only when
-/// execution passes a commit step (or when the controller routes a
-/// runtime-authored effect through `commit(_:state:)`).
+/// execution reaches a commit step the run did not abort past (or when the
+/// controller routes a runtime-authored effect through `commit(_:state:)`).
 ///
 /// Runs synchronously on the main run loop, the Loom-proven model: AX
 /// writes are fast, settle polls are bounded, and blocking the tap callback
@@ -88,8 +88,7 @@ public final class Executor {
         return false
     }
 
-    /// Runs the plan in order; a failed settle (or unrealizable step) rings
-    /// and aborts the remainder. Returns whether every step ran.
+    /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
     @discardableResult
     public func execute(_ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState) -> Bool {
         captures = [:]
@@ -118,6 +117,12 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
+                // A second pass, not a `continue`: `perform` would re-post a blind keypress.
+                for survivor in plan.steps[(index + 1)...] {
+                    if case .commit(let effect) = survivor, effect.survivesAbort {
+                        commit(effect, state: &state)
+                    }
+                }
                 return false
             }
         }

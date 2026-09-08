@@ -16,6 +16,8 @@
 /// steps (blind lanes, undo) count as `unsupportedSteps`, because the Sim
 /// can only prove we emit the plans we designed, never that a blind plan
 /// works in a real app.
+///
+/// Its three faults are the only way a golden reaches the abort path at all.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -23,6 +25,15 @@ public struct Sim {
     /// The modeled system pasteboard — the blind lanes' register.
     public private(set) var pasteboard: String?
     public var profile: CapabilityProfile
+
+    /// Accepts `AXSelectedText` and does nothing — the Chromium contenteditable.
+    public var swallowsReplace = false
+
+    /// The same lie about `AXSelectedTextRange` — what a `writeSelection` demotion leaves.
+    public var swallowsSelect = false
+
+    /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
+    public var unreadableSelection = false
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
@@ -127,52 +138,68 @@ private extension Sim {
             anchor: anchor,
             cursor: cursor
         )
-        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
+        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let physical = planned.plan
+        let before = state.field.mode
 
         captures = [:]
         let executed = execute(physical)
         guard executed else {
-            // Abort hygiene, mirroring the Controller: collapse the
-            // stranded selection, record no memories.
-            if !selection.isEmpty {
-                selection = selection.lowerBound..<selection.lowerBound
+            // Abort hygiene, mirroring the Controller down to the stand-down.
+            if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
+                state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
+            // The monitor drained the payload it will never offer again.
+            if let payload = completed.insertPayload, !state.field.mode.isInserting {
+                closeInsertSession(payload)
+            }
+            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            state = VimReducer.reduce(state, .setLastInsert(payload))
-            if let change = openChange {
-                state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
-                    body: change.source + payload + "<Esc>",
-                    count: change.count,
-                    register: change.register
-                )))
-                openChange = nil
-            }
+            closeInsertSession(payload)
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// The Controller's twin, and it must obey the host the same way.
+    mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
+        guard !unreadableSelection else { return false }   // unknown is not empty
+        guard !selection.isEmpty else { return true }
+        if state.field.mode.isInserting, selection == operand { return true }
+        guard profile.has(.writeSelection), !swallowsSelect else { return false }
+        selection = selection.lowerBound..<selection.lowerBound
+        return true
+    }
+
+    /// Fold a just-ended Insert session into the dot memories.
+    mutating func closeInsertSession(_ payload: String) {
+        state = VimReducer.reduce(state, .setLastInsert(payload))
+        guard let change = openChange else { return }
+        state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
+            body: change.source + payload + "<Esc>",
+            count: change.count,
+            register: change.register
+        )))
+        openChange = nil
     }
 
     /// Dot-worthiness, the runtime lore: a mutating command becomes
     /// `lastChange` — unless it *entered* Insert, in which case the body
     /// stays open until Esc appends the typed payload. Plain insert entries
     /// (`i`, `A`) open a body too: their mutation is the typing itself.
-    mutating func recordChange(for command: RawCommand, mutated: Bool) {
+    mutating func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
         if case .repeat = command.intent { return }   // `.` must not overwrite what it replays
-        let enteredInsert: Bool
-        switch state.field.mode {
-        case .insert, .replace: enteredInsert = true
-        default: enteredInsert = false
-        }
-        if enteredInsert {
+        if state.field.mode.isInserting {
             if openChange == nil {
                 openChange = (command.source, command.count, command.register)
             }
             return
         }
-        guard mutated else { return }
+        // An aborted plan mutated nothing, whatever its steps intended.
+        guard !aborted, mutated else { return }
         state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,
@@ -193,14 +220,15 @@ private extension Sim {
 
 private extension Sim {
     mutating func execute(_ plan: PhysicalPlan) -> Bool {
-        for step in plan.steps {
+        for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
+                guard !swallowsSelect else { break }
                 let model = TextModel(text)
                 selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
 
             case .replaceSelection(let replacement):
-                applyReplace(replacement)
+                if !swallowsReplace { applyReplace(replacement) }
 
             case .typeText(let typed):
                 applyReplace(typed)
@@ -224,14 +252,16 @@ private extension Sim {
             case .settle(let expectation):
                 var converged = true
                 if let expected = expectation.selection {
-                    converged = converged && expected == selection
+                    // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
+                    converged = converged && !unreadableSelection && expected == selection
                 }
                 if let expectedLength = expectation.length {
                     converged = converged && expectedLength == text.utf16.count
                 }
                 if !converged {
                     settleFailures += 1
-                    return false   // abort the remainder, like the real executor
+                    drainResidency(of: plan, after: index)
+                    return false   // the rest dies, like the real executor
                 }
 
             case .softSettle:
@@ -249,6 +279,15 @@ private extension Sim {
             }
         }
         return true
+    }
+
+    /// The twin of the real executor's surviving-commit scan.
+    mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
+        for survivor in plan.steps[(index + 1)...] {
+            if case .commit(let effect) = survivor, effect.survivesAbort {
+                state = VimReducer.reduce(state, effect, captures: captures)
+            }
+        }
     }
 
     mutating func applyReplace(_ replacement: String) {

@@ -294,26 +294,36 @@ public final class Controller {
             )
         }
         guard executed else {
-            // Abort hygiene: a plan that died mid-flight may leave its
-            // operator selection painted, and must not record memories for
-            // an edit that never happened.
-            repairStrandedSelection(on: binding)
+            // A selection we could not collapse is one the app would type over.
+            if !repairStrandedSelection(on: binding, operand: planned.operand),
+               state.field.mode.isInserting {
+                executor.commit(.setMode(before.nonVisual), state: &state)
+            }
+            // `RawMonitor` drained the payload it will never offer again.
+            if let payload = completed.insertPayload, !state.field.mode.isInserting {
+                closeInsertSession(payload)
+            }
+            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            executor.commit(.setLastInsert(payload), state: &state)
-            if let change = openChange {
-                executor.commit(.setLastChange(VimState.ChangeMemory(
-                    body: change.source + payload + "<Esc>",
-                    count: change.count,
-                    register: change.register
-                )), state: &state)
-                openChange = nil
-            }
+            closeInsertSession(payload)
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// Fold a just-ended Insert session into the dot memories.
+    private func closeInsertSession(_ payload: String) {
+        executor.commit(.setLastInsert(payload), state: &state)
+        guard let change = openChange else { return }
+        executor.commit(.setLastChange(VimState.ChangeMemory(
+            body: change.source + payload + "<Esc>",
+            count: change.count,
+            register: change.register
+        )), state: &state)
+        openChange = nil
     }
 
     /// The lowering drops `BellReason`, but it never had to survive the planner.
@@ -384,36 +394,37 @@ public final class Controller {
         tracker.reresolveCapabilities()
     }
 
-    /// Collapse whatever selection an aborted plan stranded — through the
-    /// executor, which owns all field writes.
-    private func repairStrandedSelection(on binding: FocusTracker.Binding) {
-        guard binding.capabilities.has(.writeSelection),
-              let range = AX.selectedRange(of: binding.element), range.length > 0 else { return }
+    /// Collapse a stranded selection, and report whether the field is safe to type into.
+    private func repairStrandedSelection(on binding: FocusTracker.Binding, operand: Range<Int>?) -> Bool {
+        // Unknown is not empty: a settle can fail *because* the read went dark.
+        guard let range = AX.selectedRange(of: binding.element) else { return false }
+        guard range.length > 0 else { return true }
+        // Still the operand: the app's own editor substitutes on the first keystroke.
+        if state.field.mode.isInserting, range.location..<(range.location + range.length) == operand { return true }
+        guard binding.capabilities.has(.writeSelection) else { return false }
         executor.execute(
             PhysicalPlan(.setSelection(range.location..<range.location)),
             on: binding.element,
             state: &state
         )
+        // The write that stranded this may be the one that lies, so confirm.
+        return AX.selectedRange(of: binding.element).map { $0.length == 0 } ?? false
     }
 
     /// Dot-worthiness — the same lore `Sim.recordChange` encodes: a
     /// mutating command becomes `lastChange`, unless it entered Insert, in
     /// which case the body stays open until Esc appends the typed payload.
     /// Plain insert entries open a body too: their mutation is the typing.
-    private func recordChange(for command: RawCommand, mutated: Bool) {
+    private func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
         if case .repeat = command.intent { return }
-        let enteredInsert: Bool
-        switch state.field.mode {
-        case .insert, .replace: enteredInsert = true
-        default: enteredInsert = false
-        }
-        if enteredInsert {
+        if state.field.mode.isInserting {
             if openChange == nil {
                 openChange = (command.source, command.count, command.register)
             }
             return
         }
-        guard mutated else { return }
+        // An aborted plan mutated nothing, whatever its steps intended.
+        guard !aborted, mutated else { return }
         executor.commit(.setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,

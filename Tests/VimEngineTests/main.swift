@@ -814,6 +814,24 @@ precondition(monitor.feed("<C-[>", mode: .normal) == .cancelled)
 precondition(monitor.feed("<C-[>", mode: .normal) ==
     .command(RawMonitor.Completed(command: RawCommand("<C-[>"))))
 
+// MARK: - VimEffect
+
+// Residency is the user's; every other effect claims something about the field.
+precondition(VimEffect.setMode(.normal).survivesAbort)
+precondition(VimEffect.setMode(.insert).survivesAbort)
+precondition(VimEffect.setMode(.replace).survivesAbort)
+precondition(!VimEffect.setMode(.visual(VimState.VisualContext(kind: .character, anchor: 0))).survivesAbort)
+precondition(!VimEffect.setInsertStart(4).survivesAbort)
+precondition(!VimEffect.setCursor(3..<4).survivesAbort)
+precondition(!VimEffect.setMark("a", MarkPoint(offset: 1, textLength: 5, context: "abc")).survivesAbort)
+precondition(!VimEffect.deleted(into: nil, content: .literal("x"), wise: .character).survivesAbort)
+precondition(!VimEffect.yanked(into: nil, content: .literal("x"), wise: .character).survivesAbort)
+precondition(!VimEffect.searched(VimState.SearchMemory(pattern: "x", direction: .right)).survivesAbort)
+precondition(!VimEffect.found(VimState.FindMemory(character: "x", direction: .right, beforeCharacter: false)).survivesAbort)
+precondition(!VimEffect.setLastInsert("x").survivesAbort)
+precondition(!VimEffect.setLastChange(VimState.ChangeMemory(body: "x")).survivesAbort)
+precondition(!VimEffect.setLastVisual(VisualMemory(kind: .character, range: 0..<1)).survivesAbort)
+
 // MARK: - VimReducer
 
 var reduced = VimState.initial
@@ -868,6 +886,16 @@ reduced = VimReducer.reduce(reduced, .setCursor(3..<4))
 precondition(reduced.field.cursor == 3..<4)
 reduced = VimReducer.reduce(reduced, .setMode(.insert))
 precondition(reduced.field.cursor == nil)
+
+// Only opening a session forgets where the last one began.
+reduced = VimReducer.reduce(reduced, .setInsertStart(7))
+precondition(reduced.field.insertStart == 7)
+reduced = VimReducer.reduce(reduced, .setMode(.normal))
+precondition(reduced.field.insertStart == 7)   // `gi` still needs it after Insert ends
+reduced = VimReducer.reduce(reduced, .setMode(.visual(VimState.VisualContext(kind: .character, anchor: 2))))
+precondition(reduced.field.insertStart == 7)   // and across a Visual excursion
+reduced = VimReducer.reduce(reduced, .setMode(.insert))
+precondition(reduced.field.insertStart == nil)
 
 // MARK: - Sim goldens: (text, caret, keys) → (text′, caret′, state′)
 
@@ -964,6 +992,99 @@ precondition(sim.caret == 6)
 precondition(sim.selection == 6..<6)                       // bare caret, no block
 precondition(sim.state.field.cursor == nil)
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
+
+// A field that accepts the AX write and does nothing — measured in Linear.
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("ciw")
+precondition(sim.text == "say hello world")            // nothing was deleted
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .insert)
+precondition(sim.state.field.insertStart == nil)       // the paired commit died with the plan
+precondition(sim.state.session.register("-") == nil)   // and no register claims the delete
+precondition(sim.selection == 4..<9)                   // the word is still the operand
+sim.type("bye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")              // the app's own editor finished it
+precondition(sim.caret == 6)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastInsert == "bye")
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
+
+// An aborted plan that stayed in Normal mutated nothing, so `.` must not learn it.
+sim = Sim(text: "say hello", caret: 0, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("dw")
+precondition(sim.text == "say hello")
+precondition(sim.state.session.lastChange == nil)
+
+// Esc's nudge can fail too, and the drained payload has no second chance.
+sim = Sim(text: "hi", caret: 0, profile: axProfile)
+sim.type("iZ")
+precondition(sim.state.field.mode == .insert)
+sim.swallowsSelect = true
+sim.feed("<Esc>")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastInsert == "Z")
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "iZ<Esc>"))
+
+// Visual `c` has no settle to verify its selection; the planner names it.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("viw")
+precondition(sim.selection == 4..<9)
+sim.type("c")
+precondition(sim.state.field.mode == .insert)
+precondition(sim.selection == 4..<9)                   // kept, not collapsed
+sim.type("bye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")
+
+// The other half: Visual `d` ends in Normal, so nobody types over it.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("viwd")
+precondition(sim.text == "say hello world")            // nothing deleted
+precondition(sim.state.field.mode == .normal)          // and Visual is left regardless
+precondition(sim.selection.isEmpty)                    // the stranded selection is collapsed
+precondition(sim.state.session.register("\"") == nil)
+
+// A swallowed *replace* leaves a bare caret, so entering Insert is safe.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("o")
+precondition(sim.state.field.mode == .insert)
+precondition(sim.selection.isEmpty)
+
+// A swallowed *select* strands a range no write of ours can collapse.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.perform([.setSelection(4..<9)])
+sim.swallowsSelect = true
+sim.type("o")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.selection == 4..<9)
+precondition(sim.text == "say hello world")
+
+// Answering no selection at all: residency must not ride on a failed read.
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.unreadableSelection = true
+sim.type("ciw")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.text == "say hello world")
+
+// Standing down never revives Visual, whose anchor names an unreadable selection.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.type("viw")
+precondition(sim.selection == 4..<9)
+sim.swallowsReplace = true
+sim.unreadableSelection = true
+sim.type("c")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.text == "say hello world")
 
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
@@ -1297,7 +1418,7 @@ precondition(StrikeLedger.strikesToCommit == 1)
 
 func traced(
     _ keys: String, text: String? = nil, caret: Int? = nil, profile: CapabilityProfile
-) -> (plan: PhysicalPlan, rejection: PhysicalPlanner.Rejection?) {
+) -> PhysicalPlanner.Planning {
     PhysicalPlanner.planning(
         LogicalPlanner.plan(RawCommand(keys), state: .initial),
         snapshot: FieldSnapshot(capabilities: profile, text: text, selection: caret.map { $0..<$0 })

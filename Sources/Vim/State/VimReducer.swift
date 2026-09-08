@@ -1,8 +1,9 @@
 /// The sole writer of `VimState`.
 ///
 /// The executor hands the reducer each `commit` step it *passes*, with the
-/// plan's capture slots gathered alongside; steps after a failed settle
-/// never run, so state tracks what actually happened to the field. A
+/// plan's capture slots gathered alongside; a failed step drops every commit
+/// behind it except residency (`VimEffect.survivesAbort`), so state tracks
+/// what happened to the field plus the mode the user asked for. A
 /// capture-backed register write whose slot was never filled is skipped —
 /// no content is better than invented content.
 public enum VimReducer {
@@ -18,6 +19,8 @@ public enum VimReducer {
             if case .normal = mode {} else {
                 next.field.cursor = nil   // the block never survives leaving Normal
             }
+            // `gi`'s memory outlives Visual; only opening a session forgets it.
+            if mode.isInserting { next.field.insertStart = nil }
         case .setInsertStart(let offset):
             next.field.insertStart = offset
         case .searched(let memory):
