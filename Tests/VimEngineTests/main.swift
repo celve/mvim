@@ -993,6 +993,18 @@ precondition(sim.selection == 6..<6)                       // bare caret, no blo
 precondition(sim.state.field.cursor == nil)
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
+// A field that accepts the AX write and does nothing — measured in Linear's
+// text area, where `s` read mode=normal→normal. The delete's settle fails, but
+// the mode change behind it was never the field's to veto.
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.swallowsWrites = true
+sim.type("ciw")
+precondition(sim.text == "say hello world")            // nothing was deleted
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .insert)
+precondition(sim.state.field.insertStart == nil)       // the paired commit died with the plan
+precondition(sim.state.session.register("-") == nil)   // and no register claims the delete
+
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
 // Step-level: blind plans carry .press moves the Sim can't emulate.

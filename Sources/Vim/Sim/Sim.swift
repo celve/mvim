@@ -24,6 +24,10 @@ public struct Sim {
     public private(set) var pasteboard: String?
     public var profile: CapabilityProfile
 
+    /// A host that accepts an AX write and does nothing — the Chromium
+    /// contenteditable a hard settle exists to catch.
+    public var swallowsWrites = false
+
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
     public private(set) var unsupportedSteps = 0
@@ -193,14 +197,14 @@ private extension Sim {
 
 private extension Sim {
     mutating func execute(_ plan: PhysicalPlan) -> Bool {
-        for step in plan.steps {
+        for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
                 let model = TextModel(text)
                 selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
 
             case .replaceSelection(let replacement):
-                applyReplace(replacement)
+                if !swallowsWrites { applyReplace(replacement) }
 
             case .typeText(let typed):
                 applyReplace(typed)
@@ -231,7 +235,8 @@ private extension Sim {
                 }
                 if !converged {
                     settleFailures += 1
-                    return false   // abort the remainder, like the real executor
+                    drainResidency(of: plan, after: index)
+                    return false   // the rest dies, like the real executor
                 }
 
             case .softSettle:
@@ -249,6 +254,16 @@ private extension Sim {
             }
         }
         return true
+    }
+
+    /// Acting is over, but residency was never the field's to veto — the twin
+    /// of the real executor's surviving-commit scan.
+    mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
+        for survivor in plan.steps[(index + 1)...] {
+            if case .commit(let effect) = survivor, effect.survivesAbort {
+                state = VimReducer.reduce(state, effect, captures: captures)
+            }
+        }
     }
 
     mutating func applyReplace(_ replacement: String) {
