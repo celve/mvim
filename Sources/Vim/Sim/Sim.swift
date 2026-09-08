@@ -141,14 +141,15 @@ private extension Sim {
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
+        let before = state.field.mode
 
         captures = [:]
         let executed = execute(physical)
         guard executed else {
-            // Abort hygiene, mirroring the Controller: collapse the stranded
-            // selection unless it is the operand the app is about to type over.
-            if !selection.isEmpty, !(state.field.mode.isInserting && selection == planned.operand) {
-                selection = selection.lowerBound..<selection.lowerBound
+            // Abort hygiene, mirroring the Controller: a selection we could not
+            // collapse is one the app would type over, so residency stands down.
+            if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
+                state = VimReducer.reduce(state, .setMode(before))
             }
             // The plan failed, but the session it closed is the user's — and the
             // monitor drained the payload it will never offer again.
@@ -164,6 +165,16 @@ private extension Sim {
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// The Controller's twin, and it must obey the host the same way: a field
+    /// that denies or swallows the range write cannot be collapsed at all.
+    mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
+        guard !selection.isEmpty else { return true }
+        if state.field.mode.isInserting, selection == operand { return true }
+        guard profile.has(.writeSelection), !swallowsSelect else { return false }
+        selection = selection.lowerBound..<selection.lowerBound
+        return true
     }
 
     /// Fold a just-ended Insert session into the dot memories.

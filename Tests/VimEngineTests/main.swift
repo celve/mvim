@@ -893,6 +893,8 @@ reduced = VimReducer.reduce(reduced, .setInsertStart(7))
 precondition(reduced.field.insertStart == 7)
 reduced = VimReducer.reduce(reduced, .setMode(.normal))
 precondition(reduced.field.insertStart == 7)   // `gi` still needs it after Insert ends
+reduced = VimReducer.reduce(reduced, .setMode(.visual(VimState.VisualContext(kind: .character, anchor: 2))))
+precondition(reduced.field.insertStart == 7)   // and across a Visual excursion
 reduced = VimReducer.reduce(reduced, .setMode(.insert))
 precondition(reduced.field.insertStart == nil)
 
@@ -1052,6 +1054,26 @@ precondition(sim.text == "say hello world")            // nothing deleted
 precondition(sim.state.field.mode == .normal)          // and Visual is left regardless
 precondition(sim.selection.isEmpty)                    // the stranded selection is collapsed
 precondition(sim.state.session.register("\"") == nil)
+
+// Same command, same abort, two different host lies. A swallowed *replace*
+// leaves the caret collapsed, so entering Insert is safe.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("o")
+precondition(sim.state.field.mode == .insert)
+precondition(sim.selection.isEmpty)
+
+// A swallowed *select* strands a range that is not the operand, and no write we
+// have can collapse it — so residency stands down rather than let the next
+// keystroke replace text nobody selected.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.perform([.setSelection(4..<9)])
+sim.swallowsSelect = true
+sim.type("o")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.selection == 4..<9)
+precondition(sim.text == "say hello world")
 
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.

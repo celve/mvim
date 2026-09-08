@@ -17,10 +17,12 @@ public enum VimReducer {
         case .setMode(let mode):
             next.field.mode = mode
             if case .normal = mode {} else {
-                next.field.cursor = nil        // the block never survives leaving Normal
-                // The paired `setInsertStart` sets it; an abort leaves it honestly unknown.
-                next.field.insertStart = nil
+                next.field.cursor = nil   // the block never survives leaving Normal
             }
+            // Opening a session, never merely leaving Normal: `insertStart` is
+            // `gi`'s memory and outlives Visual. The paired `setInsertStart`
+            // refills it, so an abort that never reaches it leaves it unknown.
+            if mode.isInserting { next.field.insertStart = nil }
         case .setInsertStart(let offset):
             next.field.insertStart = offset
         case .searched(let memory):
