@@ -119,9 +119,8 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
-                // Acting is over; residency was never the field's to veto. A
-                // second pass, not a `continue`: `perform` would re-post a blind
-                // keypress and burn the deadline on a trailing soft settle.
+                // A second pass, not a `continue`: `perform` would re-post a
+                // blind keypress and burn the deadline on a trailing soft settle.
                 for survivor in plan.steps[(index + 1)...] {
                     if case .commit(let effect) = survivor, effect.survivesAbort {
                         commit(effect, state: &state)

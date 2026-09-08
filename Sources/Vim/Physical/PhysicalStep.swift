@@ -1,7 +1,7 @@
 /// One concrete executable action. This is the machine code of the engine:
 /// offsets, chords, pasteboard transactions, and state commits — nothing
-/// symbolic left. The executor runs steps in order and aborts the remainder
-/// when a `settle` fails.
+/// symbolic left. The executor runs steps in order; a failed `settle` ends the
+/// run, and only the residency commits behind it still land.
 public enum PhysicalStep: Equatable, Sendable {
     /// AX: set the selected range (UTF-16 units; an empty range is the caret).
     case setSelection(Range<Int>)
@@ -31,8 +31,8 @@ public enum PhysicalStep: Equatable, Sendable {
     /// AX: read the selected text into the slot without touching anything.
     case captureSelectedText(into: CaptureSlot)
 
-    /// Wait for the field to converge on the planner's prediction; on
-    /// timeout, abort the rest of the plan and ring. Follows an **AX write** —
+    /// Wait for the field to converge on the planner's prediction; on timeout,
+    /// ring and end the run, sparing only residency. Follows an **AX write** —
     /// non-convergence means the write silently didn't take.
     case settle(Expectation)
 

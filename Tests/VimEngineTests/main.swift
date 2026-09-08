@@ -816,8 +816,7 @@ precondition(monitor.feed("<C-[>", mode: .normal) ==
 
 // MARK: - VimEffect
 
-// Residency is what the user asked for, so it outlives an aborted plan; every
-// other effect claims something about the field and must not.
+// Residency is the user's; every other effect claims something about the field.
 precondition(VimEffect.setMode(.normal).survivesAbort)
 precondition(VimEffect.setMode(.insert).survivesAbort)
 precondition(VimEffect.setMode(.replace).survivesAbort)
@@ -888,8 +887,8 @@ precondition(reduced.field.cursor == 3..<4)
 reduced = VimReducer.reduce(reduced, .setMode(.insert))
 precondition(reduced.field.cursor == nil)
 
-// Opening a session forgets where the last one began: the paired commit sets
-// it, and an aborted plan that never reaches that commit must not inherit.
+// Opening a session forgets where the last one began, so an aborted plan that
+// never reaches the paired commit inherits nothing.
 reduced = VimReducer.reduce(reduced, .setInsertStart(7))
 precondition(reduced.field.insertStart == 7)
 reduced = VimReducer.reduce(reduced, .setMode(.normal))
@@ -994,8 +993,7 @@ precondition(sim.state.field.cursor == nil)
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
 // A field that accepts the AX write and does nothing — measured in Linear's
-// text area, where `s` read mode=normal→normal. The delete's settle fails, but
-// the mode change behind it was never the field's to veto.
+// text area, where `s` read mode=normal→normal.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("ciw")
@@ -1020,8 +1018,8 @@ sim.type("dw")
 precondition(sim.text == "say hello")
 precondition(sim.state.session.lastChange == nil)
 
-// Esc's caret nudge can fail too. You still leave Insert — and the monitor has
-// already drained the payload, so this is its only chance to be recorded.
+// Esc's caret nudge can fail too, and the monitor has already drained the
+// payload, so this is its only chance to be recorded.
 sim = Sim(text: "hi", caret: 0, profile: axProfile)
 sim.type("iZ")
 precondition(sim.state.field.mode == .insert)
@@ -1045,8 +1043,8 @@ sim.type("bye")
 sim.feed("<Esc>")
 precondition(sim.text == "say bye world")
 
-// The other half of the guard: Visual `d` ends in Normal, so the selection is
-// not an operand anyone is about to type over — collapse it, as before.
+// The other half of the guard: Visual `d` ends in Normal, so nobody is about
+// to type over the selection.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
 sim.swallowsReplace = true
 sim.type("viwd")

@@ -16,6 +16,10 @@
 /// steps (blind lanes, undo) count as `unsupportedSteps`, because the Sim
 /// can only prove we emit the plans we designed, never that a blind plan
 /// works in a real app.
+///
+/// `swallowsReplace` / `swallowsSelect` make it an honest liar instead: the
+/// host answers every read and ignores the write, which is the only way to
+/// reach the abort path from a golden.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -142,8 +146,7 @@ private extension Sim {
         let executed = execute(physical)
         guard executed else {
             // Abort hygiene, mirroring the Controller: collapse the stranded
-            // selection unless it is the operand the app is about to type over,
-            // and record no memories.
+            // selection unless it is the operand the app is about to type over.
             if !selection.isEmpty, !(state.field.mode.isInserting && selection == planned.operand) {
                 selection = selection.lowerBound..<selection.lowerBound
             }

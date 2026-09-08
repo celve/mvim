@@ -294,12 +294,10 @@ public final class Controller {
             )
         }
         guard executed else {
-            // Abort hygiene: a plan that died mid-flight may leave its
-            // operator selection painted, and must not record memories for
-            // an edit that never happened.
+            // Abort hygiene: nothing below may claim the edit happened.
             repairStrandedSelection(on: binding, operand: planned.operand)
-            // The plan failed, but the session it closed is the user's — and
-            // `RawMonitor` drained the payload it will never offer again.
+            // The session it closed is the user's, though, and `RawMonitor`
+            // already drained the payload it will never offer again.
             if let payload = completed.insertPayload, !state.field.mode.isInserting {
                 closeInsertSession(payload)
             }
