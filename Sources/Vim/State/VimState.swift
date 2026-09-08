@@ -139,6 +139,14 @@ public extension VimState {
         case insert
         case replace
         case visual(VisualContext)
+
+        /// A session where keys reach the app untouched.
+        public var isInserting: Bool {
+            switch self {
+            case .insert, .replace: return true
+            case .normal, .visual: return false
+            }
+        }
     }
 
     /// The Visual-mode state macOS cannot hold: an AX selection is location

@@ -131,14 +131,16 @@ private extension Sim {
             anchor: anchor,
             cursor: cursor
         )
-        let physical = PhysicalPlanner.plan(logical, snapshot: snapshot)
+        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let physical = planned.plan
 
         captures = [:]
         let executed = execute(physical)
         guard executed else {
-            // Abort hygiene, mirroring the Controller: collapse the
-            // stranded selection, record no memories.
-            if !selection.isEmpty {
+            // Abort hygiene, mirroring the Controller: collapse the stranded
+            // selection unless it is the operand the app is about to type over,
+            // and record no memories.
+            if !selection.isEmpty, !(state.field.mode.isInserting && selection == planned.operand) {
                 selection = selection.lowerBound..<selection.lowerBound
             }
             return

@@ -30,14 +30,33 @@ public enum PhysicalPlanner {
         }
     }
 
+    /// Out-of-band for the same reason `Rejection` is: the plan stores only the program.
+    public struct Planning: Equatable, Sendable {
+        public let plan: PhysicalPlan
+        public let rejection: Rejection?
+
+        /// The range the plan meant to replace, so abort hygiene can tell an
+        /// operand it should hand to the app from a selection it must collapse.
+        /// Nil in the blind lane, which has no offsets to name one with.
+        public let operand: Range<Int>?
+
+        public init(plan: PhysicalPlan, rejection: Rejection?, operand: Range<Int>?) {
+            self.plan = plan
+            self.rejection = rejection
+            self.operand = operand
+        }
+    }
+
+    /// The plan alone — tests and any caller with no use for the rest.
     public static func plan(_ logical: LogicalPlan, snapshot: FieldSnapshot) -> PhysicalPlan {
         planning(logical, snapshot: snapshot).plan
     }
 
-    /// `plan` plus why it rejected; everything but the recorder keeps calling `plan`.
+    /// `plan` plus what only the planner knows — why it rejected, and the
+    /// operand a failed plan was aiming at.
     public static func planning(
         _ logical: LogicalPlan, snapshot: FieldSnapshot
-    ) -> (plan: PhysicalPlan, rejection: Rejection?) {
+    ) -> Planning {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
@@ -50,11 +69,11 @@ public enum PhysicalPlanner {
         }
         for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
-                return (.rejected, Rejection(index: index, step: step))
+                return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
             steps.append(contentsOf: lowered)
         }
-        return (PhysicalPlan(steps: steps), nil)
+        return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
     }
 
     private static func isBellOnly(_ logical: LogicalPlan) -> Bool {
@@ -82,6 +101,10 @@ private extension PhysicalPlanner {
         /// Non-nil when the snapshot's selection is our drawn block cursor:
         /// the gap to collapse to before the plan acts.
         var cursorCollapse: Int?
+
+        /// The range the last predicted edit was aimed at — last one wins,
+        /// since that is the edit in flight if the plan dies.
+        var operand: Range<Int>?
 
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
@@ -136,6 +159,8 @@ private extension PhysicalPlanner {
 
         /// Apply a predicted edit: text surgery, caret after the replacement.
         mutating func applyEdit(range: Range<Int>, replacement: String) {
+            // An empty range is a plain insert, which replaces nothing.
+            if !range.isEmpty { operand = range }
             text = model?.replacing(range, with: replacement)
             let caretAfter = range.lowerBound + replacement.utf16.count
             selection = caretAfter..<caretAfter

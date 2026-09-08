@@ -1004,6 +1004,35 @@ precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .insert)
 precondition(sim.state.field.insertStart == nil)       // the paired commit died with the plan
 precondition(sim.state.session.register("-") == nil)   // and no register claims the delete
+precondition(sim.selection == 4..<9)                   // the word is still the operand
+sim.type("bye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")              // the app's own editor finished it
+precondition(sim.caret == 6)
+precondition(sim.state.field.mode == .normal)
+
+// Visual `c` has no settle to verify its selection — the operand comes from the
+// planner, so the user's own selection survives the abort the same way.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsWrites = true
+sim.type("viw")
+precondition(sim.selection == 4..<9)
+sim.type("c")
+precondition(sim.state.field.mode == .insert)
+precondition(sim.selection == 4..<9)                   // kept, not collapsed
+sim.type("bye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")
+
+// The other half of the guard: Visual `d` ends in Normal, so the selection is
+// not an operand anyone is about to type over — collapse it, as before.
+sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
+sim.swallowsWrites = true
+sim.type("viwd")
+precondition(sim.text == "say hello world")            // nothing deleted
+precondition(sim.state.field.mode == .normal)          // and Visual is left regardless
+precondition(sim.selection.isEmpty)                    // the stranded selection is collapsed
+precondition(sim.state.session.register("\"") == nil)
 
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
@@ -1337,7 +1366,7 @@ precondition(StrikeLedger.strikesToCommit == 1)
 
 func traced(
     _ keys: String, text: String? = nil, caret: Int? = nil, profile: CapabilityProfile
-) -> (plan: PhysicalPlan, rejection: PhysicalPlanner.Rejection?) {
+) -> PhysicalPlanner.Planning {
     PhysicalPlanner.planning(
         LogicalPlanner.plan(RawCommand(keys), state: .initial),
         snapshot: FieldSnapshot(capabilities: profile, text: text, selection: caret.map { $0..<$0 })

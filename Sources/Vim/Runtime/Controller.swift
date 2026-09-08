@@ -297,7 +297,7 @@ public final class Controller {
             // Abort hygiene: a plan that died mid-flight may leave its
             // operator selection painted, and must not record memories for
             // an edit that never happened.
-            repairStrandedSelection(on: binding)
+            repairStrandedSelection(on: binding, operand: planned.operand)
             return
         }
 
@@ -386,9 +386,12 @@ public final class Controller {
 
     /// Collapse whatever selection an aborted plan stranded — through the
     /// executor, which owns all field writes.
-    private func repairStrandedSelection(on binding: FocusTracker.Binding) {
+    private func repairStrandedSelection(on binding: FocusTracker.Binding, operand: Range<Int>?) {
         guard binding.capabilities.has(.writeSelection),
               let range = AX.selectedRange(of: binding.element), range.length > 0 else { return }
+        // Still painted and still the operand: leave it for the app, whose own
+        // editor performs the substitute on the user's first keystroke.
+        if state.field.mode.isInserting, range.location..<(range.location + range.length) == operand { return }
         executor.execute(
             PhysicalPlan(.setSelection(range.location..<range.location)),
             on: binding.element,
