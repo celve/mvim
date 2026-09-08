@@ -36,6 +36,10 @@ public struct Sim {
     /// committed `writeSelection` demotion leaves behind.
     public var swallowsSelect = false
 
+    /// A host that answers no `AXSelectedTextRange` at all — the recorder's
+    /// `answered=0`, which `Executor.SettleFailure` keeps apart from a wrong answer.
+    public var unreadableSelection = false
+
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
     public private(set) var unsupportedSteps = 0
@@ -170,6 +174,7 @@ private extension Sim {
     /// The Controller's twin, and it must obey the host the same way: a field
     /// that denies or swallows the range write cannot be collapsed at all.
     mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
+        guard !unreadableSelection else { return false }   // unknown is not empty
         guard !selection.isEmpty else { return true }
         if state.field.mode.isInserting, selection == operand { return true }
         guard profile.has(.writeSelection), !swallowsSelect else { return false }
@@ -255,7 +260,8 @@ private extension Sim {
             case .settle(let expectation):
                 var converged = true
                 if let expected = expectation.selection {
-                    converged = converged && expected == selection
+                    // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
+                    converged = converged && !unreadableSelection && expected == selection
                 }
                 if let expectedLength = expectation.length {
                     converged = converged && expectedLength == text.utf16.count

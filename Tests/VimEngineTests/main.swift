@@ -1075,6 +1075,16 @@ precondition(sim.state.field.mode == .normal)
 precondition(sim.selection == 4..<9)
 precondition(sim.text == "say hello world")
 
+// A field that answers no selection at all — the recorder's `answered=0`. The
+// settle cannot converge and the repair cannot see what it stranded, so
+// residency stands down rather than ride on a read that failed.
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.unreadableSelection = true
+sim.type("ciw")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.text == "say hello world")
+
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
 // Step-level: blind plans carry .press moves the Sim can't emulate.

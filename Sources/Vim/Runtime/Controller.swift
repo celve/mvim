@@ -401,7 +401,10 @@ public final class Controller {
     /// executor, which owns all field writes — and report whether the field is
     /// safe to type into afterwards.
     private func repairStrandedSelection(on binding: FocusTracker.Binding, operand: Range<Int>?) -> Bool {
-        guard let range = AX.selectedRange(of: binding.element), range.length > 0 else { return true }
+        // Unknown is not empty: a settle can fail *because* the field stopped
+        // answering, and typing into a range we cannot see is the hazard itself.
+        guard let range = AX.selectedRange(of: binding.element) else { return false }
+        guard range.length > 0 else { return true }
         // Still painted and still the operand: leave it for the app, whose own
         // editor performs the substitute on the user's first keystroke.
         if state.field.mode.isInserting, range.location..<(range.location + range.length) == operand { return true }
