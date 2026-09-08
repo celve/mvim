@@ -814,6 +814,25 @@ precondition(monitor.feed("<C-[>", mode: .normal) == .cancelled)
 precondition(monitor.feed("<C-[>", mode: .normal) ==
     .command(RawMonitor.Completed(command: RawCommand("<C-[>"))))
 
+// MARK: - VimEffect
+
+// Residency is what the user asked for, so it outlives an aborted plan; every
+// other effect claims something about the field and must not.
+precondition(VimEffect.setMode(.normal).survivesAbort)
+precondition(VimEffect.setMode(.insert).survivesAbort)
+precondition(VimEffect.setMode(.replace).survivesAbort)
+precondition(!VimEffect.setMode(.visual(VimState.VisualContext(kind: .character, anchor: 0))).survivesAbort)
+precondition(!VimEffect.setInsertStart(4).survivesAbort)
+precondition(!VimEffect.setCursor(3..<4).survivesAbort)
+precondition(!VimEffect.setMark("a", MarkPoint(offset: 1, textLength: 5, context: "abc")).survivesAbort)
+precondition(!VimEffect.deleted(into: nil, content: .literal("x"), wise: .character).survivesAbort)
+precondition(!VimEffect.yanked(into: nil, content: .literal("x"), wise: .character).survivesAbort)
+precondition(!VimEffect.searched(VimState.SearchMemory(pattern: "x", direction: .right)).survivesAbort)
+precondition(!VimEffect.found(VimState.FindMemory(character: "x", direction: .right, beforeCharacter: false)).survivesAbort)
+precondition(!VimEffect.setLastInsert("x").survivesAbort)
+precondition(!VimEffect.setLastChange(VimState.ChangeMemory(body: "x")).survivesAbort)
+precondition(!VimEffect.setLastVisual(VisualMemory(kind: .character, range: 0..<1)).survivesAbort)
+
 // MARK: - VimReducer
 
 var reduced = VimState.initial
@@ -868,6 +887,15 @@ reduced = VimReducer.reduce(reduced, .setCursor(3..<4))
 precondition(reduced.field.cursor == 3..<4)
 reduced = VimReducer.reduce(reduced, .setMode(.insert))
 precondition(reduced.field.cursor == nil)
+
+// Opening a session forgets where the last one began: the paired commit sets
+// it, and an aborted plan that never reaches that commit must not inherit.
+reduced = VimReducer.reduce(reduced, .setInsertStart(7))
+precondition(reduced.field.insertStart == 7)
+reduced = VimReducer.reduce(reduced, .setMode(.normal))
+precondition(reduced.field.insertStart == 7)   // `gi` still needs it after Insert ends
+reduced = VimReducer.reduce(reduced, .setMode(.insert))
+precondition(reduced.field.insertStart == nil)
 
 // MARK: - Sim goldens: (text, caret, keys) → (text′, caret′, state′)
 
