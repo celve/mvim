@@ -24,9 +24,13 @@ public struct Sim {
     public private(set) var pasteboard: String?
     public var profile: CapabilityProfile
 
-    /// A host that accepts an AX write and does nothing — the Chromium
+    /// A host that accepts `AXSelectedText` and does nothing — the Chromium
     /// contenteditable a hard settle exists to catch.
-    public var swallowsWrites = false
+    public var swallowsReplace = false
+
+    /// The same lie about `AXSelectedTextRange`, which is the configuration a
+    /// committed `writeSelection` demotion leaves behind.
+    public var swallowsSelect = false
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
@@ -143,42 +147,48 @@ private extension Sim {
             if !selection.isEmpty, !(state.field.mode.isInserting && selection == planned.operand) {
                 selection = selection.lowerBound..<selection.lowerBound
             }
+            // The plan failed, but the session it closed is the user's — and the
+            // monitor drained the payload it will never offer again.
+            if let payload = completed.insertPayload, !state.field.mode.isInserting {
+                closeInsertSession(payload)
+            }
+            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            state = VimReducer.reduce(state, .setLastInsert(payload))
-            if let change = openChange {
-                state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
-                    body: change.source + payload + "<Esc>",
-                    count: change.count,
-                    register: change.register
-                )))
-                openChange = nil
-            }
+            closeInsertSession(payload)
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// Fold a just-ended Insert session into the dot memories.
+    mutating func closeInsertSession(_ payload: String) {
+        state = VimReducer.reduce(state, .setLastInsert(payload))
+        guard let change = openChange else { return }
+        state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
+            body: change.source + payload + "<Esc>",
+            count: change.count,
+            register: change.register
+        )))
+        openChange = nil
     }
 
     /// Dot-worthiness, the runtime lore: a mutating command becomes
     /// `lastChange` — unless it *entered* Insert, in which case the body
     /// stays open until Esc appends the typed payload. Plain insert entries
     /// (`i`, `A`) open a body too: their mutation is the typing itself.
-    mutating func recordChange(for command: RawCommand, mutated: Bool) {
+    mutating func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
         if case .repeat = command.intent { return }   // `.` must not overwrite what it replays
-        let enteredInsert: Bool
-        switch state.field.mode {
-        case .insert, .replace: enteredInsert = true
-        default: enteredInsert = false
-        }
-        if enteredInsert {
+        if state.field.mode.isInserting {
             if openChange == nil {
                 openChange = (command.source, command.count, command.register)
             }
             return
         }
-        guard mutated else { return }
+        // An aborted plan mutated nothing, whatever its steps intended.
+        guard !aborted, mutated else { return }
         state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,
@@ -202,11 +212,12 @@ private extension Sim {
         for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
+                guard !swallowsSelect else { break }
                 let model = TextModel(text)
                 selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
 
             case .replaceSelection(let replacement):
-                if !swallowsWrites { applyReplace(replacement) }
+                if !swallowsReplace { applyReplace(replacement) }
 
             case .typeText(let typed):
                 applyReplace(typed)

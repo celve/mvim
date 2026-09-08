@@ -298,22 +298,32 @@ public final class Controller {
             // operator selection painted, and must not record memories for
             // an edit that never happened.
             repairStrandedSelection(on: binding, operand: planned.operand)
+            // The plan failed, but the session it closed is the user's — and
+            // `RawMonitor` drained the payload it will never offer again.
+            if let payload = completed.insertPayload, !state.field.mode.isInserting {
+                closeInsertSession(payload)
+            }
+            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            executor.commit(.setLastInsert(payload), state: &state)
-            if let change = openChange {
-                executor.commit(.setLastChange(VimState.ChangeMemory(
-                    body: change.source + payload + "<Esc>",
-                    count: change.count,
-                    register: change.register
-                )), state: &state)
-                openChange = nil
-            }
+            closeInsertSession(payload)
         }
 
         recordChange(for: command, mutated: physical.mutatesText)
+    }
+
+    /// Fold a just-ended Insert session into the dot memories.
+    private func closeInsertSession(_ payload: String) {
+        executor.commit(.setLastInsert(payload), state: &state)
+        guard let change = openChange else { return }
+        executor.commit(.setLastChange(VimState.ChangeMemory(
+            body: change.source + payload + "<Esc>",
+            count: change.count,
+            register: change.register
+        )), state: &state)
+        openChange = nil
     }
 
     /// The lowering drops `BellReason`, but it never had to survive the planner.
@@ -403,20 +413,16 @@ public final class Controller {
     /// mutating command becomes `lastChange`, unless it entered Insert, in
     /// which case the body stays open until Esc appends the typed payload.
     /// Plain insert entries open a body too: their mutation is the typing.
-    private func recordChange(for command: RawCommand, mutated: Bool) {
+    private func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
         if case .repeat = command.intent { return }
-        let enteredInsert: Bool
-        switch state.field.mode {
-        case .insert, .replace: enteredInsert = true
-        default: enteredInsert = false
-        }
-        if enteredInsert {
+        if state.field.mode.isInserting {
             if openChange == nil {
                 openChange = (command.source, command.count, command.register)
             }
             return
         }
-        guard mutated else { return }
+        // An aborted plan mutated nothing, whatever its steps intended.
+        guard !aborted, mutated else { return }
         executor.commit(.setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,

@@ -997,7 +997,7 @@ precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps =
 // text area, where `s` read mode=normal→normal. The delete's settle fails, but
 // the mode change behind it was never the field's to veto.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
-sim.swallowsWrites = true
+sim.swallowsReplace = true
 sim.type("ciw")
 precondition(sim.text == "say hello world")            // nothing was deleted
 precondition(sim.settleFailures == 1)
@@ -1010,11 +1010,32 @@ sim.feed("<Esc>")
 precondition(sim.text == "say bye world")              // the app's own editor finished it
 precondition(sim.caret == 6)
 precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastInsert == "bye")
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
+
+// An aborted plan that stayed in Normal mutated nothing, so `.` must not learn it.
+sim = Sim(text: "say hello", caret: 0, profile: axProfile)
+sim.swallowsReplace = true
+sim.type("dw")
+precondition(sim.text == "say hello")
+precondition(sim.state.session.lastChange == nil)
+
+// Esc's caret nudge can fail too. You still leave Insert — and the monitor has
+// already drained the payload, so this is its only chance to be recorded.
+sim = Sim(text: "hi", caret: 0, profile: axProfile)
+sim.type("iZ")
+precondition(sim.state.field.mode == .insert)
+sim.swallowsSelect = true
+sim.feed("<Esc>")
+precondition(sim.settleFailures == 1)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastInsert == "Z")
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "iZ<Esc>"))
 
 // Visual `c` has no settle to verify its selection — the operand comes from the
 // planner, so the user's own selection survives the abort the same way.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
-sim.swallowsWrites = true
+sim.swallowsReplace = true
 sim.type("viw")
 precondition(sim.selection == 4..<9)
 sim.type("c")
@@ -1027,7 +1048,7 @@ precondition(sim.text == "say bye world")
 // The other half of the guard: Visual `d` ends in Normal, so the selection is
 // not an operand anyone is about to type over — collapse it, as before.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
-sim.swallowsWrites = true
+sim.swallowsReplace = true
 sim.type("viwd")
 precondition(sim.text == "say hello world")            // nothing deleted
 precondition(sim.state.field.mode == .normal)          // and Visual is left regardless
