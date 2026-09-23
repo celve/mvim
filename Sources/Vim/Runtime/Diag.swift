@@ -162,11 +162,18 @@ enum Diag {
         gate.debug("e\(epoch, privacy: .public) short-circuit same-element revalidate=0")
     }
 
-    /// A web field keyed as native, merging the page with the browser's own chrome.
-    static func originLost(_ epoch: UInt64, role: String?) {
-        gate.log("""
-            e\(epoch, privacy: .public) surface origin=nil web=1 \
-            role=\(role ?? "nil", privacy: .public)
-            """)
+    /// A web field's walk to its site: a miss keys the page as native, merging it with the browser's own chrome.
+    static func origin(_ epoch: UInt64, role: String?, walk: WebAreaWalk.Result) {
+        let found = walk.origin != nil
+        guard !found || gateLevel.isEnabled(type: .debug) else { return }
+        let line = """
+            e\(epoch) surface origin=\(walk.origin ?? "nil") web=1 \
+            role=\(role ?? "nil") \(walk.traceFields)
+            """
+        if found {
+            gate.debug("\(line, privacy: .public)")
+        } else {
+            gate.log("\(line, privacy: .public)")
+        }
     }
 }
