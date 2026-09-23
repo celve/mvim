@@ -197,12 +197,13 @@ why:
 e12 surface origin=nil web=1 role=AXTextArea stop=orphan@9 axerror=-25204 ms=151
 ```
 
-`stop=` is where the walk ended and `@` the element it reached, 0 being the field itself:
+`stop=` is where the walk ended and `@` the element it stopped at, 0 being the field itself:
 `noURL` (the page exposed no `AXURL`), `hostless` (its URL names no site; `scheme=` says which,
 such as `file`), `window` or `application` (no page above the field at all), `orphan` (a parent
-that would not read; `axerror=` is the `AXError`, `-25204` a timeout), `hopCap` (64 elements
-without reaching a page), `budget` (the walk ran past half a second). A walk that found its site
-logs `stop=site@N` at `.debug`.
+that would not read; `axerror=` is the `AXError`, `-25204` a timeout), `hopCap` (the element cap
+reached without a page), `budget` (the walk's time budget ran out). For those last two, `@` is
+the first element the walk did not read. A walk that found its site logs `stop=site@N` at
+`.debug`.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,

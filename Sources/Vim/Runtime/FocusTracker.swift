@@ -180,9 +180,12 @@ public final class FocusTracker {
             return
         }
         let identity = Self.appIdentity(for: bound.pid)
-        // Same element, same document: a found origin stands, so a republish cannot move the field off its site.
-        let (surface, walk) = Self.surface(
-            for: bound.element, gate: gate, bundleID: identity.bundleID, origin: bound.surface.origin
+        // The origin is kept, never re-walked: the answer being applied was written at this identity's rung.
+        let surface = Surface(
+            bundleID: identity.bundleID,
+            origin: bound.surface.origin,
+            role: gate.role,
+            identifier: gate.identifier
         )
         let resolved = FieldProber.resolve(bound.element, surface: surface, appVersion: identity.version)
         publish(Binding(
@@ -202,7 +205,6 @@ public final class FocusTracker {
             appVersion: identity.version,
             capabilityReport: resolved.report
         ))
-        if let walk { Diag.origin(epoch, role: gate.role, walk: walk) }
     }
 
     /// Adopt a freshly-focused element **only** if it is the same document
@@ -337,17 +339,17 @@ public final class FocusTracker {
     /// chrome apart from the page it is showing. Both report `AXTextField`, so
     /// role alone cannot separate them.
     /// Costs one bounded parent walk, at publish time only — never per
-    /// keystroke; `retarget` inherits rather than repeating it, and so does a
-    /// republish of a field whose origin is known. Native fields skip the walk:
-    /// `isWebElement` is false, so a plain text field pays nothing beyond the
-    /// gate it already ran. The walk comes back for the recorder, nil when none ran.
+    /// keystroke, and `retarget` and a republish inherit rather than repeating
+    /// it. Native fields skip the walk: `isWebElement` is false, so a plain text
+    /// field pays nothing beyond the gate it already ran. The walk comes back
+    /// for the recorder, nil when none ran.
     private static func surface(
-        for element: AXUIElement, gate: FieldProber.FieldGate, bundleID: String?, origin known: String? = nil
+        for element: AXUIElement, gate: FieldProber.FieldGate, bundleID: String?
     ) -> (surface: Surface, walk: WebAreaWalk.Result?) {
-        let walk = gate.isWebElement && known == nil ? AX.enclosingWebArea(of: element) : nil
+        let walk = gate.isWebElement ? AX.enclosingWebArea(of: element) : nil
         let surface = Surface(
             bundleID: bundleID,
-            origin: known ?? walk?.origin,
+            origin: walk?.origin,
             role: gate.role,
             identifier: gate.identifier
         )

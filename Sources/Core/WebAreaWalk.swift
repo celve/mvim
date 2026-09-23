@@ -46,7 +46,7 @@ public enum WebAreaWalk {
 
     public struct Result: Equatable, Sendable {
         public let stop: Stop
-        /// The element the walk stopped at; 0 is the field itself.
+        /// The element the walk stopped at, 0 being the field; for `hopCap` and `budget`, the first it did not read.
         public let hops: Int
         public let milliseconds: Int
 
