@@ -23,6 +23,9 @@ public struct RawMonitor: Equatable, Sendable {
     /// `insertPayload` handed over at Esc.
     private var insertLog: String = ""
 
+    /// False once the session did something the log cannot express.
+    private var insertLogIsLossless = true
+
     public init() {}
 
     /// Buffering-relevant residencies only — a local projection, because
@@ -51,14 +54,16 @@ public struct RawMonitor: Equatable, Sendable {
     public struct Completed: Equatable, Sendable {
         public let command: RawCommand
 
-        /// Text typed during the Insert session this command ends, delivered
-        /// exactly once, at exit. The runtime folds it into `lastInsert` and
-        /// the dot body.
+        /// Text typed in the session this command ends; nil when it ends none.
         public let insertPayload: String?
 
-        public init(command: RawCommand, insertPayload: String? = nil) {
+        /// False when the payload misses part of the session, so `.` must not replay it.
+        public let insertPayloadIsLossless: Bool
+
+        public init(command: RawCommand, insertPayload: String? = nil, insertPayloadIsLossless: Bool = true) {
             self.command = command
             self.insertPayload = insertPayload
+            self.insertPayloadIsLossless = insertPayloadIsLossless
         }
     }
 
@@ -77,6 +82,7 @@ public struct RawMonitor: Equatable, Sendable {
     public mutating func reset() {
         pendingKeys = ""
         insertLog = ""
+        insertLogIsLossless = true
     }
 
     /// A key went to the app instead of vim: whatever command was half-typed
@@ -86,6 +92,11 @@ public struct RawMonitor: Equatable, Sendable {
     public mutating func cancelPending() {
         pendingKeys = ""
     }
+
+    /// A chord or click changed the field behind the log's back mid-Insert.
+    public mutating func markInsertLogLossy() {
+        insertLogIsLossless = false
+    }
 }
 
 // MARK: - Insert mode
@@ -93,24 +104,33 @@ public struct RawMonitor: Equatable, Sendable {
 private extension RawMonitor {
     mutating func feedInsert(_ token: String) -> Verdict {
         if isEscape(token) {
-            let payload = insertLog
-            insertLog = ""
-            return .command(Completed(
+            let completed = Completed(
                 command: RawCommand("<Esc>"),
-                insertPayload: payload.isEmpty ? nil : payload
-            ))
+                insertPayload: insertLog,
+                insertPayloadIsLossless: insertLogIsLossless
+            )
+            insertLog = ""
+            insertLogIsLossless = true
+            return .command(completed)
         }
-        if let typed = typedText(of: token) {
+        if isBackspace(token) {
+            // Past the typed text, it erased what the session never typed.
+            if insertLog.isEmpty {
+                insertLogIsLossless = false
+            } else {
+                insertLog.removeLast()
+            }
+        } else if let typed = typedText(of: token) {
             insertLog += typed
+        } else {
+            insertLogIsLossless = false
         }
         return .passthrough
     }
 
-    /// What a token contributes to the typed log: plain characters and
-    /// whitespace. Notation tokens (arrows, chords) pass through without
-    /// logging — vim would split the insert session there; v1 just skips
-    /// them.
+    /// A token's text in the log: Return is `"\n"`, other notation is nil.
     func typedText(of token: String) -> String? {
+        if token == "<CR>" || token == "\r" { return "\n" }
         guard !isNotation(token) else { return nil }
         guard let scalar = token.unicodeScalars.first else { return nil }
         if scalar.value < 0x20, token != "\n", token != "\r", token != "\t" {

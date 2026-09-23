@@ -58,9 +58,8 @@ public final class Controller {
     /// The recorder's command counter; its other half, the epoch, is on the tracker.
     private var seq: UInt64 = 0
 
-    /// A mutating command that entered Insert leaves its dot body open until
-    /// the session's Esc delivers the typed payload.
-    private var openChange: (source: String, count: Int?, register: Register?)?
+    /// The command that opened the current Insert session, recorded at its Esc.
+    private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
     public init() {
         tracker.onRebind = { [weak self] binding, transition in
@@ -75,6 +74,7 @@ public final class Controller {
     /// A click in a forced app moved the caret invisibly — Normal-mode
     /// offsets are fiction now. Back to the entry policy.
     private func pointerActed() {
+        if state.field.mode.isInserting { monitor.markInsertLogLossy() }
         guard let binding, binding.isForced, state.field.mode != .insert else { return }
         monitor.reset()
         state.field = VimState.Field(mode: .insert)
@@ -114,6 +114,7 @@ public final class Controller {
             // the command against a position the user never aimed at (`d`,
             // ⌥←, `w` would delete a word somewhere else entirely).
             monitor.cancelPending()
+            if state.field.mode.isInserting { monitor.markInsertLogLossy() }
             return false
         }
 
@@ -301,29 +302,38 @@ public final class Controller {
             }
             // `RawMonitor` drained the payload it will never offer again.
             if let payload = completed.insertPayload, !state.field.mode.isInserting {
-                closeInsertSession(payload)
+                closeInsertSession(payload, lossless: completed.insertPayloadIsLossless)
             }
-            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
+            recordChange(for: command, from: before, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            closeInsertSession(payload)
+            closeInsertSession(payload, lossless: completed.insertPayloadIsLossless)
         }
 
-        recordChange(for: command, mutated: physical.mutatesText)
+        recordChange(for: command, from: before, mutated: physical.mutatesText)
     }
 
     /// Fold a just-ended Insert session into the dot memories.
-    private func closeInsertSession(_ payload: String) {
-        executor.commit(.setLastInsert(payload), state: &state)
+    private func closeInsertSession(_ payload: String, lossless: Bool) {
+        if !payload.isEmpty {
+            executor.commit(.setLastInsert(payload), state: &state)
+        }
         guard let change = openChange else { return }
-        executor.commit(.setLastChange(VimState.ChangeMemory(
-            body: change.source + payload + "<Esc>",
-            count: change.count,
-            register: change.register
-        )), state: &state)
         openChange = nil
+        guard lossless else {
+            executor.commit(.setLastChange(.unreplayable), state: &state)
+            return
+        }
+        // An empty session is still a change if its entry mutated (`ciw`, `o`).
+        guard change.mutated || !payload.isEmpty else { return }
+        executor.commit(.setLastChange(VimState.ChangeMemory(
+            body: change.source,
+            count: change.count,
+            register: change.register,
+            insert: payload
+        )), state: &state)
     }
 
     /// The lowering drops `BellReason`, but it never had to survive the planner.
@@ -411,20 +421,27 @@ public final class Controller {
         return AX.selectedRange(of: binding.element).map { $0.length == 0 } ?? false
     }
 
-    /// Dot-worthiness — the same lore `Sim.recordChange` encodes: a
-    /// mutating command becomes `lastChange`, unless it entered Insert, in
-    /// which case the body stays open until Esc appends the typed payload.
-    /// Plain insert entries open a body too: their mutation is the typing.
-    private func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
+    /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.
+    private func recordChange(
+        for command: RawCommand, from before: VimState.Mode, mutated: Bool, aborted: Bool = false
+    ) {
         if case .repeat = command.intent { return }
-        if state.field.mode.isInserting {
-            if openChange == nil {
-                openChange = (command.source, command.count, command.register)
+        // An aborted plan mutated nothing, whatever its steps intended.
+        let changed = mutated && !aborted
+        if case .visual = before {
+            // Visual keys name a selection `.` cannot rebuild.
+            if changed || state.field.mode.isInserting {
+                executor.commit(.setLastChange(.unreplayable), state: &state)
             }
             return
         }
-        // An aborted plan mutated nothing, whatever its steps intended.
-        guard !aborted, mutated else { return }
+        if state.field.mode.isInserting {
+            if openChange == nil {
+                openChange = (command.source, command.count, command.register, changed)
+            }
+            return
+        }
+        guard changed else { return }
         executor.commit(.setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,

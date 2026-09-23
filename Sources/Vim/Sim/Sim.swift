@@ -42,9 +42,8 @@ public struct Sim {
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
 
-    /// A mutating command that entered Insert leaves its dot body open until
-    /// the session's Esc delivers the typed payload.
-    private var openChange: (source: String, count: Int?, register: Register?)?
+    /// The command that opened the current Insert session, recorded at its Esc.
+    private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
     public init(
         text: String,
@@ -151,17 +150,17 @@ private extension Sim {
             }
             // The monitor drained the payload it will never offer again.
             if let payload = completed.insertPayload, !state.field.mode.isInserting {
-                closeInsertSession(payload)
+                closeInsertSession(payload, lossless: completed.insertPayloadIsLossless)
             }
-            recordChange(for: command, mutated: physical.mutatesText, aborted: true)
+            recordChange(for: command, from: before, mutated: physical.mutatesText, aborted: true)
             return
         }
 
         if let payload = completed.insertPayload {
-            closeInsertSession(payload)
+            closeInsertSession(payload, lossless: completed.insertPayloadIsLossless)
         }
 
-        recordChange(for: command, mutated: physical.mutatesText)
+        recordChange(for: command, from: before, mutated: physical.mutatesText)
     }
 
     /// The Controller's twin, and it must obey the host the same way.
@@ -175,31 +174,47 @@ private extension Sim {
     }
 
     /// Fold a just-ended Insert session into the dot memories.
-    mutating func closeInsertSession(_ payload: String) {
-        state = VimReducer.reduce(state, .setLastInsert(payload))
+    mutating func closeInsertSession(_ payload: String, lossless: Bool) {
+        if !payload.isEmpty {
+            state = VimReducer.reduce(state, .setLastInsert(payload))
+        }
         guard let change = openChange else { return }
-        state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
-            body: change.source + payload + "<Esc>",
-            count: change.count,
-            register: change.register
-        )))
         openChange = nil
+        guard lossless else {
+            state = VimReducer.reduce(state, .setLastChange(.unreplayable))
+            return
+        }
+        // An empty session is still a change if its entry mutated (`ciw`, `o`).
+        guard change.mutated || !payload.isEmpty else { return }
+        state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
+            body: change.source,
+            count: change.count,
+            register: change.register,
+            insert: payload
+        )))
     }
 
-    /// Dot-worthiness, the runtime lore: a mutating command becomes
-    /// `lastChange` — unless it *entered* Insert, in which case the body
-    /// stays open until Esc appends the typed payload. Plain insert entries
-    /// (`i`, `A`) open a body too: their mutation is the typing itself.
-    mutating func recordChange(for command: RawCommand, mutated: Bool, aborted: Bool = false) {
+    /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.
+    mutating func recordChange(
+        for command: RawCommand, from before: VimState.Mode, mutated: Bool, aborted: Bool = false
+    ) {
         if case .repeat = command.intent { return }   // `.` must not overwrite what it replays
-        if state.field.mode.isInserting {
-            if openChange == nil {
-                openChange = (command.source, command.count, command.register)
+        // An aborted plan mutated nothing, whatever its steps intended.
+        let changed = mutated && !aborted
+        if case .visual = before {
+            // Visual keys name a selection `.` cannot rebuild.
+            if changed || state.field.mode.isInserting {
+                state = VimReducer.reduce(state, .setLastChange(.unreplayable))
             }
             return
         }
-        // An aborted plan mutated nothing, whatever its steps intended.
-        guard !aborted, mutated else { return }
+        if state.field.mode.isInserting {
+            if openChange == nil {
+                openChange = (command.source, command.count, command.register, changed)
+            }
+            return
+        }
+        guard changed else { return }
         state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
             body: command.source,
             count: command.count,
@@ -210,6 +225,17 @@ private extension Sim {
     /// Insert-mode passthrough typing lands in the fake field the way the
     /// real app would apply it.
     mutating func applyTyping(_ token: String) {
+        if token == "<BS>" {
+            if selection.isEmpty {
+                selection = TextModel(text).advance(selection.lowerBound, byGraphemes: -1)..<selection.upperBound
+            }
+            applyReplace("")
+            return
+        }
+        if token == "<CR>" {
+            applyReplace("\n")
+            return
+        }
         guard token.count == 1, let scalar = token.unicodeScalars.first else { return }
         if scalar.value < 0x20, token != "\n", token != "\r", token != "\t" { return }
         applyReplace(token == "\r" ? "\n" : token)
