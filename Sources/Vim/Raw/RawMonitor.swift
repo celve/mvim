@@ -23,7 +23,7 @@ public struct RawMonitor: Equatable, Sendable {
     /// `insertPayload` handed over at Esc.
     private var insertLog: String = ""
 
-    /// Cleared by anything the session did to the field that the log cannot express.
+    /// False once the session did something the log cannot express.
     private var insertLogIsLossless = true
 
     public init() {}
@@ -54,13 +54,10 @@ public struct RawMonitor: Equatable, Sendable {
     public struct Completed: Equatable, Sendable {
         public let command: RawCommand
 
-        /// Text typed during the Insert session this command ends, delivered
-        /// exactly once, at exit — `""` when nothing was typed, nil when the
-        /// command ends no session. The runtime folds it into `lastInsert` and
-        /// the dot body.
+        /// Text typed in the session this command ends; nil when it ends none.
         public let insertPayload: String?
 
-        /// False when the payload no longer accounts for the session — `.` must not replay it.
+        /// False when the payload misses part of the session, so `.` must not replay it.
         public let insertPayloadIsLossless: Bool
 
         public init(command: RawCommand, insertPayload: String? = nil, insertPayloadIsLossless: Bool = true) {
@@ -96,8 +93,7 @@ public struct RawMonitor: Equatable, Sendable {
         pendingKeys = ""
     }
 
-    /// Mid-Insert, the field changed behind the log's back — a chord went to
-    /// the app, or a click moved the caret — so the session cannot be replayed.
+    /// A chord or click changed the field behind the log's back mid-Insert.
     public mutating func markInsertLogLossy() {
         insertLogIsLossless = false
     }
@@ -118,7 +114,7 @@ private extension RawMonitor {
             return .command(completed)
         }
         if isBackspace(token) {
-            // With nothing typed left to erase, it erased text the session never typed.
+            // Past the typed text, it erased what the session never typed.
             if insertLog.isEmpty {
                 insertLogIsLossless = false
             } else {
@@ -132,10 +128,7 @@ private extension RawMonitor {
         return .passthrough
     }
 
-    /// What a token contributes to the typed log: plain characters,
-    /// whitespace, and Return as the line break it types. Other notation
-    /// tokens (arrows, chords) pass through without logging — vim would
-    /// split the insert session there; v1 gives up on replaying it.
+    /// A token's text in the log: Return is `"\n"`, other notation is nil.
     func typedText(of token: String) -> String? {
         if token == "<CR>" || token == "\r" { return "\n" }
         guard !isNotation(token) else { return nil }

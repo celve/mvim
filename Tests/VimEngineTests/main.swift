@@ -217,7 +217,7 @@ precondition(plan(".", state: dotted).steps == [
     .renderCursor
 ])
 
-// A command that rings on replay opens no session, so it types nothing.
+// A replay that rings types nothing.
 dotted.session.lastChange = VimState.ChangeMemory(body: "c;", insert: "bye")
 precondition(plan(".", state: dotted).steps == [.bell(.noPriorFind)])
 
@@ -827,8 +827,7 @@ precondition(monitor.feed("n", mode: .normal) == .pending)
 precondition(monitor.feed("<BS>", mode: .normal) == .pending)
 precondition(monitor.feed("<BS>", mode: .normal) == .cancelled)
 
-// Insert: passthrough with a typed log, handed over exactly once at Esc —
-// lossy once an arrow moved the caret the log assumes.
+// Insert: passthrough with a typed log, handed over once at Esc; an arrow makes it lossy.
 precondition(monitor.feed("h", mode: .insert) == .passthrough)
 precondition(monitor.feed("i", mode: .insert) == .passthrough)
 precondition(monitor.feed("<Left>", mode: .insert) == .passthrough)
@@ -844,7 +843,7 @@ for token in ["h", "e", "l", "o", "<BS>", "l", "o", "<CR>", "x"] {
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "hello\nx")))
 
-// Backspace with nothing typed left erased text the session never typed.
+// Backspace past the typed text is lossy.
 precondition(monitor.feed("a", mode: .insert) == .passthrough)
 precondition(monitor.feed("<BS>", mode: .insert) == .passthrough)
 precondition(monitor.feed("<BS>", mode: .insert) == .passthrough)
@@ -1026,7 +1025,7 @@ precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
-/// Types `change`, ends its session with ⌃[, runs `then`, and returns the Sim.
+/// Types `change`, ends it with ⌃[, then types `then`.
 func replayed(_ text: String, caret: Int = 0, _ change: String, then keys: String) -> Sim {
     var replay = Sim(text: text, caret: caret, profile: axProfile)
     replay.type(change)
@@ -1072,8 +1071,7 @@ lost.type("w.")
 precondition(lost.text == beforeDot)
 precondition(lost.bells == 1)
 
-// A session that typed nothing closes its body: `ciw` is still a change, `i` is not,
-// and the next session records its own command — not `ciw` stranded from before.
+// An empty session closes its body: `ciw` records, `i` does not, nothing strands.
 var empty = Sim(text: "say hello world", caret: 6, profile: axProfile)
 empty.type("ciw")
 empty.feed("<C-[>")
@@ -1089,8 +1087,7 @@ precondition(empty.state.session.lastChange == VimState.ChangeMemory(body: "A", 
 precondition(empty.state.session.lastInsert == "!")
 precondition(replayed("a", "o", then: ".").text == "a\n\n")
 
-// Visual keys name a selection `.` cannot rebuild: it rings rather than replaying
-// `s` as a one-character substitute, or `u` as undo.
+// Visual changes ring on `.` instead of replaying as Normal `s`, or `u` (undo).
 var visualChange = Sim(text: "say hello world", caret: 4, profile: axProfile)
 visualChange.type("viwsbye")
 visualChange.feed("<C-[>")

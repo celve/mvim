@@ -44,7 +44,7 @@ public extension VimState {
         /// Drives `;` and `,`.
         public var lastFind: FindMemory?
 
-        /// The change `.` replays — `.unreplayable` when the last one cannot be.
+        /// The change `.` replays; `.unreplayable` when it cannot.
         public var lastChange: ChangeMemory?
 
         /// Text typed during the last completed Insert session; synthesizes
@@ -199,17 +199,13 @@ public extension VimState {
         }
     }
 
-    /// What `.` replays, kept in the shape `.` overrides it: `3.` replaces
-    /// the count wholesale and `"x.` the register, so both stay separate
-    /// from the body. The body is the command's keys as typed, and re-enters
-    /// the engine through the ordinary Raw → Logical → Physical pipeline.
+    /// What `.` replays; count and register stay apart so `3.` and `"x.` can override them.
     struct ChangeMemory: Equatable, Sendable {
         public let body: String
         public let count: Int?
         public let register: Register?
 
-        /// What the Insert session the body opened typed, nil when it opened none — kept
-        /// apart because a reparse cannot find the split (`c<` completes inside `c<Left>`).
+        /// Typed in the Insert session the body opened; nil when it opened none.
         public let insert: String?
 
         public init(body: String, count: Int? = nil, register: Register? = nil, insert: String? = nil) {
@@ -219,7 +215,7 @@ public extension VimState {
             self.insert = insert
         }
 
-        /// A change `.` cannot rebuild from keys; its empty body rings `unsupported(".")`.
+        /// A change `.` cannot rebuild; its empty body rings `unsupported(".")`.
         public static let unreplayable = ChangeMemory(body: "")
     }
 }

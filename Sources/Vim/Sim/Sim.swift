@@ -42,8 +42,7 @@ public struct Sim {
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
 
-    /// A mutating command that entered Insert leaves its dot body open until
-    /// the session's Esc delivers the typed payload.
+    /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
     public init(
@@ -185,7 +184,7 @@ private extension Sim {
             state = VimReducer.reduce(state, .setLastChange(.unreplayable))
             return
         }
-        // A session that typed nothing is still a change when its entry was (`ciw`, `o`).
+        // An empty session is still a change if its entry mutated (`ciw`, `o`).
         guard change.mutated || !payload.isEmpty else { return }
         state = VimReducer.reduce(state, .setLastChange(VimState.ChangeMemory(
             body: change.source,
@@ -195,10 +194,7 @@ private extension Sim {
         )))
     }
 
-    /// Dot-worthiness, the runtime lore: a mutating command becomes
-    /// `lastChange` — unless it *entered* Insert, in which case the body
-    /// stays open until Esc appends the typed payload. Plain insert entries
-    /// (`i`, `A`) open a body too: their mutation is the typing itself.
+    /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.
     mutating func recordChange(
         for command: RawCommand, from before: VimState.Mode, mutated: Bool, aborted: Bool = false
     ) {
@@ -206,7 +202,7 @@ private extension Sim {
         // An aborted plan mutated nothing, whatever its steps intended.
         let changed = mutated && !aborted
         if case .visual = before {
-            // Visual keys act on a selection `.` cannot rebuild; replayed in Normal they edit something else.
+            // Visual keys name a selection `.` cannot rebuild.
             if changed || state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setLastChange(.unreplayable))
             }

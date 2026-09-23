@@ -58,8 +58,7 @@ public final class Controller {
     /// The recorder's command counter; its other half, the epoch, is on the tracker.
     private var seq: UInt64 = 0
 
-    /// A mutating command that entered Insert leaves its dot body open until
-    /// the session's Esc delivers the typed payload.
+    /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
     public init() {
@@ -327,7 +326,7 @@ public final class Controller {
             executor.commit(.setLastChange(.unreplayable), state: &state)
             return
         }
-        // A session that typed nothing is still a change when its entry was (`ciw`, `o`).
+        // An empty session is still a change if its entry mutated (`ciw`, `o`).
         guard change.mutated || !payload.isEmpty else { return }
         executor.commit(.setLastChange(VimState.ChangeMemory(
             body: change.source,
@@ -422,10 +421,7 @@ public final class Controller {
         return AX.selectedRange(of: binding.element).map { $0.length == 0 } ?? false
     }
 
-    /// Dot-worthiness — the same lore `Sim.recordChange` encodes: a
-    /// mutating command becomes `lastChange`, unless it entered Insert, in
-    /// which case the body stays open until Esc appends the typed payload.
-    /// Plain insert entries open a body too: their mutation is the typing.
+    /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.
     private func recordChange(
         for command: RawCommand, from before: VimState.Mode, mutated: Bool, aborted: Bool = false
     ) {
@@ -433,7 +429,7 @@ public final class Controller {
         // An aborted plan mutated nothing, whatever its steps intended.
         let changed = mutated && !aborted
         if case .visual = before {
-            // Visual keys act on a selection `.` cannot rebuild; replayed in Normal they edit something else.
+            // Visual keys name a selection `.` cannot rebuild.
             if changed || state.field.mode.isInserting {
                 executor.commit(.setLastChange(.unreplayable), state: &state)
             }

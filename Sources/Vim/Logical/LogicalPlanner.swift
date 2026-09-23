@@ -400,7 +400,7 @@ private extension LogicalPlanner {
             source: change.body,
             state: state
         )
-        // A command that rings here opens no session, so it must not type either.
+        // A command that rings opens no session, so nothing is typed.
         guard let typed = change.insert, endsInserting(command) else { return command }
         let typing: [LogicalStep] = typed.isEmpty ? [] : [.insertText(typed)]
         return LogicalPlan(steps: command.steps + typing + insertExit)
@@ -560,8 +560,7 @@ private extension LogicalPlanner {
         return .empty
     }
 
-    /// Esc out of Insert, shared with `.`'s replay of a session: vim nudges
-    /// the caret one left on exit (clamped at line start — physical arithmetic).
+    /// Leaving Insert, shared with `.`: the caret steps one left, clamped at line start.
     static let insertExit: [LogicalStep] = [.moveCaret(.motion(.character(.left), count: 1)), .setMode(.normal)]
 }
 
