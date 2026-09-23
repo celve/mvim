@@ -1521,6 +1521,66 @@ for (rung, capabilities) in CapabilitySeeds.denied {
     precondition(reachable, "no surface can ever produce seed rung \(rung)")
 }
 
+// MARK: - The web-area walk
+
+// Fake AX tree: element n's parent is n + 1 unless overridden.
+func walked(_ tree: [Int: WebAreaWalk.Reading<Int>]) -> WebAreaWalk.Result {
+    WebAreaWalk.walk(from: 0, clock: { 0 }) { node in
+        tree[node] ?? WebAreaWalk.Reading(role: "AXGroup", parent: node + 1)
+    }
+}
+func page(_ scheme: String?, _ host: String?, at depth: Int) -> [Int: WebAreaWalk.Reading<Int>] {
+    [depth: WebAreaWalk.Reading(
+        role: "AXWebArea", address: WebAreaWalk.Address(scheme: scheme, host: host), parent: depth + 1
+    )]
+}
+
+// The old 16-hop cap keyed this editor at the app rung.
+let deepEditor = walked(page("https", "WWW.Linear.app", at: 40))
+precondition(deepEditor.origin == "linear.app")
+precondition(deepEditor.stop == .webArea(WebAreaWalk.Address(scheme: "https", host: "WWW.Linear.app")))
+precondition(deepEditor.hops == 40)
+precondition(deepEditor.traceFields == "stop=site@40 ms=0")
+precondition(walked(page("https", "linear.app", at: 3)).origin == "linear.app")
+precondition(walked(page("https", "linear.app", at: WebAreaWalk.maxHops - 1)).origin == "linear.app")
+
+let pastCap = walked(page("https", "linear.app", at: WebAreaWalk.maxHops))
+precondition(pastCap.origin == nil && pastCap.stop == .hopCap)
+precondition(pastCap.traceFields == "stop=hopCap@64 ms=0")
+
+let localPage = walked(page("file", nil, at: 4))
+precondition(localPage.origin == nil)
+precondition(localPage.traceFields == "stop=hostless@4 scheme=file ms=0")
+precondition(walked(page("about", nil, at: 2)).traceFields == "stop=hostless@2 scheme=about ms=0")
+precondition(walked(page("https", "", at: 2)).origin == nil)
+
+let noURL = walked([4: WebAreaWalk.Reading(role: "AXWebArea", parent: 5)])
+precondition(noURL.origin == nil && noURL.traceFields == "stop=noURL@4 ms=0")
+precondition(walked([5: WebAreaWalk.Reading(role: "AXWindow", parent: 6)]).traceFields == "stop=window@5 ms=0")
+precondition(walked([1: WebAreaWalk.Reading(role: "AXApplication", parent: nil)]).traceFields
+    == "stop=application@1 ms=0")
+
+let timedOut = walked([2: WebAreaWalk.Reading(role: "AXGroup", parent: nil, parentError: -25204)])
+precondition(timedOut.stop == .orphan(axError: -25204) && timedOut.origin == nil)
+precondition(timedOut.traceFields == "stop=orphan@2 axerror=-25204 ms=0")
+precondition(walked([0: WebAreaWalk.Reading(role: "AXTextArea", parent: nil)]).traceFields
+    == "stop=orphan@0 axerror=nil ms=0")
+
+var walkClock = 0.0
+var walkReads = 0
+let stalled = WebAreaWalk.walk(from: 0, clock: { walkClock += 0.3; return walkClock }) { node -> WebAreaWalk.Reading<Int> in
+    walkReads += 1
+    return WebAreaWalk.Reading(role: "AXGroup", parent: node + 1)
+}
+precondition(stalled.stop == .budget && walkReads == 2)
+precondition(stalled.traceFields == "stop=budget@2 ms=900")
+walkReads = 0
+let spent = WebAreaWalk.walk(from: 0, clock: { walkClock += 1; return walkClock }) { node -> WebAreaWalk.Reading<Int> in
+    walkReads += 1
+    return WebAreaWalk.Reading(role: "AXGroup", parent: node + 1)
+}
+precondition(spent.stop == .budget && spent.hops == 1 && walkReads == 1, "the field itself is always read")
+
 // MARK: - The learner's commit rule
 
 // The learner writes at the ROLE learnRung, never the identifier rung: a key per

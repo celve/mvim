@@ -213,6 +213,23 @@ aborted line can read `ok=0` and `mode=normal→insert` together. Before that, t
 sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
+A web field finds its site by walking up to the page that contains it. When the walk names no
+site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
+why:
+
+```
+e12 surface origin=nil web=1 role=AXTextArea stop=orphan@9 axerror=-25204 ms=151
+```
+
+`stop=` is where the walk ended and `@` the element it stopped at, 0 being the field itself:
+`noURL` (the page exposed no `AXURL`), `hostless` (its URL names no site; `scheme=` says which,
+such as `file`), `window` or `application` (no page above the field at all), `orphan` (no
+parent to follow; `axerror=` is the read's `AXError`, `-25204` when the app did not answer in
+time or at all, `nil` when it answered with no parent), `hopCap` (the element cap reached
+without a page), `budget` (the walk's time budget ran out). For those last two, `@` is
+the first element the walk did not read. A walk that found its site logs `stop=site@N` at
+`.debug`.
+
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,
 no register, no digit; otherwise it shows the command's shape and a length. (`ciw` is

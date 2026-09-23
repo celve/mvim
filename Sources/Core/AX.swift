@@ -191,10 +191,16 @@ public enum AX {
             return (slot as! AXUIElement)
         }
 
-        /// `AXURL` answers an `NSURL`, not a `String` — `string(_:)` is an
-        /// unguarded `as? String` and would silently return nil for it.
-        public func url(_ index: Int) -> String? {
-            (slot(index) as? NSURL)?.absoluteString
+        /// `AXURL` answers an `NSURL`, which `string(_:)` would read as nil.
+        public func url(_ index: Int) -> URL? {
+            (slot(index) as? NSURL) as URL?
+        }
+
+        /// Why a slot is empty; nil for one that read.
+        public func error(_ index: Int) -> AXError? {
+            guard let slot = slot(index), CFGetTypeID(slot) == AXValueGetTypeID() else { return nil }
+            var error = AXError.success
+            return AXValueGetValue((slot as! AXValue), .axError, &error) ? error : nil
         }
 
         private func slot(_ index: Int) -> AnyObject? {
@@ -220,63 +226,30 @@ public enum AX {
         }
         return AttributeBatch(slots: names.map { name -> AnyObject in
             var ref: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(element, name as CFString, &ref) == .success,
-                  let value = ref else { return NSNull() }
-            return value
+            var error = AXUIElementCopyAttributeValue(element, name as CFString, &ref)
+            // Keep the batch's error marker, so `error(_:)` works on this path too.
+            guard error == .success else {
+                return AXValueCreate(.axError, &error).map { $0 as AnyObject } ?? NSNull()
+            }
+            return ref ?? NSNull()
         })
     }
 
-    /// The URL of the web area enclosing `element`, or nil when there is none
-    /// — i.e. when the field is native chrome rather than page content.
-    ///
-    /// The one question `AXRole` cannot answer: a browser's own search box and
-    /// an `<input>` in the page it is showing are both `AXTextField`, and only
-    /// their ancestry tells them apart.
-    ///
-    /// **Round trips are the whole design constraint here.** Every AX read is
-    /// a synchronous Mach call bounded by `setGlobalMessagingTimeout`, so an
-    /// unbounded walk is a hang on the tap thread. Three bounds:
-    ///
-    /// - one batched read per hop (role, parent, URL together), so finding the
-    ///   web area costs no extra call to then read its URL;
-    /// - termination on `AXWindow` / `AXApplication`, which a native field
-    ///   reaches in a few hops — nothing above a window can be a web area;
-    /// - a hard `maxHops` backstop for hosts that answer neither.
-    ///
-    /// The caller gates this on `GateAttributes.isWebElement`, so a native
-    /// field never walks. The cap is a logical-depth backstop, not a time
-    /// budget: the real bound is the per-hop messaging timeout, and a hop that
-    /// times out returns no parent and stops the walk. It is set well above
-    /// observed depth — Dia sat a GitHub `<input>` seven hops under its web
-    /// area — because a field nested in a modal or a sub-frame goes deeper, and
-    /// overshooting the cap silently costs the site scoping.
-    public static func enclosingWebURL(of element: AXUIElement, maxHops: Int = 16) -> String? {
-        var current = element
-        for _ in 0..<maxHops {
-            // Exactly one round trip per level: role and URL answer "is this
-            // the web area, and what is it showing?", parent carries the walk.
-            // The focused element itself is a text field, never a web area, so
-            // the first iteration's role check costs nothing it would not have
-            // paid anyway to reach the parent.
+    /// Walks up from `element` to the page that names its site, one batched read per hop.
+    public static func enclosingWebArea(of element: AXUIElement) -> WebAreaWalk.Result {
+        WebAreaWalk.walk(from: element, clock: { ProcessInfo.processInfo.systemUptime }) { current in
             let reads = attributes([
                 kAXRoleAttribute,    // 0
                 "AXURL",             // 1
                 kAXParentAttribute,  // 2
             ], of: current)
-            switch reads.string(0) {
-            case "AXWebArea":
-                return reads.url(1)
-            // Nothing above a window is web content; stop before paying for the
-            // app element and the system-wide root.
-            case "AXWindow", "AXApplication":
-                return nil
-            default:
-                break
-            }
-            guard let parent = reads.element(2) else { return nil }
-            current = parent
+            return WebAreaWalk.Reading(
+                role: reads.string(0),
+                address: reads.url(1).map { WebAreaWalk.Address(scheme: $0.scheme, host: $0.host) },
+                parent: reads.element(2),
+                parentError: reads.error(2)?.rawValue
+            )
         }
-        return nil
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)

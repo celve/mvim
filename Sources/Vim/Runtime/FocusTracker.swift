@@ -180,7 +180,13 @@ public final class FocusTracker {
             return
         }
         let identity = Self.appIdentity(for: bound.pid)
-        let surface = Self.surface(for: bound.element, gate: gate, bundleID: identity.bundleID)
+        // Carry the bound origin: the answer applied here was written at its rung.
+        let surface = Surface(
+            bundleID: identity.bundleID,
+            origin: bound.surface.origin,
+            role: gate.role,
+            identifier: gate.identifier
+        )
         let resolved = FieldProber.resolve(bound.element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: bound.element,
@@ -300,7 +306,7 @@ public final class FocusTracker {
         let isOverlay = pid != frontPid
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
-        let surface = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
+        let (surface, walk) = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
         let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
         publish(Binding(
             element: element,
@@ -315,9 +321,7 @@ public final class FocusTracker {
             capabilityReport: resolved.report
         ))
         // After the publish, so it carries its own binding's epoch, not the outgoing one.
-        if gate.isWebElement, surface.origin == nil {
-            Diag.originLost(epoch, role: gate.role)
-        }
+        if let walk { Diag.origin(epoch, role: gate.role, walk: walk) }
     }
 
     /// Value-typed, so the keydown negative cache allocates nothing.
@@ -330,34 +334,18 @@ public final class FocusTracker {
         lastDenial = verdict
     }
 
-    /// What capability config is keyed by: the app, the field's role, and —
-    /// for web content — the origin and identifier that tell a browser's own
-    /// chrome apart from the page it is showing. Both report `AXTextField`, so
-    /// role alone cannot separate them.
-    /// Costs one bounded parent walk, at publish time only — never per
-    /// keystroke, and `retarget` inherits rather than repeating it. Native
-    /// fields skip the walk: `isWebElement` is false, so a plain text field
-    /// pays nothing beyond the gate it already ran.
+    /// The key capability config resolves on; only a fresh web bind pays the walk.
     private static func surface(
         for element: AXUIElement, gate: FieldProber.FieldGate, bundleID: String?
-    ) -> Surface {
-        let origin = gate.isWebElement
-            ? Surface.normalizedHost(host(ofURL: AX.enclosingWebURL(of: element)))
-            : nil
-        return Surface(
+    ) -> (surface: Surface, walk: WebAreaWalk.Result?) {
+        let walk = gate.isWebElement ? AX.enclosingWebArea(of: element) : nil
+        let surface = Surface(
             bundleID: bundleID,
-            origin: origin,
+            origin: walk?.origin,
             role: gate.role,
             identifier: gate.identifier
         )
-    }
-
-    /// Host of an absolute URL string, without dragging `URLComponents` into
-    /// the hot path. nil for anything that does not name one (`file://`,
-    /// `about:blank`) — those are not sites and must not become rungs.
-    private static func host(ofURL string: String?) -> String? {
-        guard let string, let url = URL(string: string) else { return nil }
-        return url.host
+        return (surface, walk)
     }
 
     /// Resolved only at real publish sites — the same-element short-circuit
