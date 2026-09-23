@@ -192,6 +192,38 @@ precondition(plan(".", state: planning).steps == [
 precondition(plan("3.", state: planning).steps.first ==
     .select(.span(to: .motion(.character(.right), count: 3), inclusive: false)))
 
+var dotted = VimState.initial
+dotted.session.lastChange = VimState.ChangeMemory(body: "ciw", insert: "bye")
+precondition(plan(".", state: dotted).steps == [
+    .select(.textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), count: 1)),
+    .deleteSelection(into: nil),
+    .setMode(.insert),
+    .insertText("bye"),
+    .moveCaret(.motion(.character(.left), count: 1)),
+    .setMode(.normal),
+    .renderCursor
+])
+precondition(plan("3.", state: dotted).steps.first ==
+    .select(.textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), count: 3)))
+precondition(plan(".", state: dotted).steps.filter { $0 == .insertText("bye") }.count == 1)
+
+dotted.session.lastChange = VimState.ChangeMemory(body: "o", insert: "")
+precondition(plan(".", state: dotted).steps == [
+    .moveCaret(.motion(.lineEnd, count: 1)),
+    .insertText("\n"),
+    .setMode(.insert),
+    .moveCaret(.motion(.character(.left), count: 1)),
+    .setMode(.normal),
+    .renderCursor
+])
+
+// A command that rings on replay opens no session, so it types nothing.
+dotted.session.lastChange = VimState.ChangeMemory(body: "c;", insert: "bye")
+precondition(plan(".", state: dotted).steps == [.bell(.noPriorFind)])
+
+dotted.session.lastChange = .unreplayable
+precondition(plan(".", state: dotted).steps == [.bell(.unsupported("."))])
+
 // Visual mode: motions extend, bare operators act on the selection,
 // text objects keep their spelling, Esc collapses to the head.
 var visual = VimState.initial
@@ -795,14 +827,43 @@ precondition(monitor.feed("n", mode: .normal) == .pending)
 precondition(monitor.feed("<BS>", mode: .normal) == .pending)
 precondition(monitor.feed("<BS>", mode: .normal) == .cancelled)
 
-// Insert: passthrough with a typed log, handed over exactly once at Esc.
+// Insert: passthrough with a typed log, handed over exactly once at Esc —
+// lossy once an arrow moved the caret the log assumes.
 precondition(monitor.feed("h", mode: .insert) == .passthrough)
 precondition(monitor.feed("i", mode: .insert) == .passthrough)
 precondition(monitor.feed("<Left>", mode: .insert) == .passthrough)
+precondition(monitor.feed("<Esc>", mode: .insert) == .command(RawMonitor.Completed(
+    command: RawCommand("<Esc>"), insertPayload: "hi", insertPayloadIsLossless: false
+)))
 precondition(monitor.feed("<Esc>", mode: .insert) ==
-    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "hi")))
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "")))
+
+for token in ["h", "e", "l", "o", "<BS>", "l", "o", "<CR>", "x"] {
+    precondition(monitor.feed(token, mode: .insert) == .passthrough)
+}
 precondition(monitor.feed("<Esc>", mode: .insert) ==
-    .command(RawMonitor.Completed(command: RawCommand("<Esc>"))))
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "hello\nx")))
+
+// Backspace with nothing typed left erased text the session never typed.
+precondition(monitor.feed("a", mode: .insert) == .passthrough)
+precondition(monitor.feed("<BS>", mode: .insert) == .passthrough)
+precondition(monitor.feed("<BS>", mode: .insert) == .passthrough)
+precondition(monitor.feed("<Esc>", mode: .insert) == .command(RawMonitor.Completed(
+    command: RawCommand("<Esc>"), insertPayload: "", insertPayloadIsLossless: false
+)))
+
+precondition(monitor.feed("a", mode: .insert) == .passthrough)
+monitor.markInsertLogLossy()
+precondition(monitor.feed("<Esc>", mode: .insert) == .command(RawMonitor.Completed(
+    command: RawCommand("<Esc>"), insertPayload: "a", insertPayloadIsLossless: false
+)))
+precondition(monitor.feed("b", mode: .insert) == .passthrough)
+precondition(monitor.feed("<Esc>", mode: .insert) ==
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "b")))
+monitor.markInsertLogLossy()
+monitor.reset()
+precondition(monitor.feed("<Esc>", mode: .insert) ==
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "")))
 
 // <C-[> is the runtime's engage key (physical Esc never reaches the
 // monitor): it must complete insert, cancel pending, and dispatch alone.
@@ -938,7 +999,7 @@ precondition(sim.state.field.cursor == 6..<7)              // redrawn on insert 
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "bye")
 precondition(sim.state.session.register(".") == .content(RegisterContent(text: "bye", wise: .character)))
-precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
 
 // Insert entry via A opens a dot body even though entry itself mutated nothing.
@@ -947,13 +1008,120 @@ sim.type("A!")
 sim.feed("<Esc>")
 precondition(sim.text == "hi!")
 precondition(sim.caret == 2)
-precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "A!<Esc>"))
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "A", insert: "!"))
 
 // Dot replays the last change and must not overwrite it.
 sim = Sim(text: "aabb", caret: 0, profile: axProfile)
 sim.type("x.")
 precondition(sim.text == "bb")
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "x"))
+
+sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
+sim.type("ciwbye")
+sim.feed("<Esc>")
+sim.type("w.")
+precondition(sim.text == "say bye bye")
+precondition(sim.selection == 10..<11)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
+precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
+
+/// Types `change`, ends its session with ⌃[, runs `then`, and returns the Sim.
+func replayed(_ text: String, caret: Int = 0, _ change: String, then keys: String) -> Sim {
+    var replay = Sim(text: text, caret: caret, profile: axProfile)
+    replay.type(change)
+    replay.feed("<C-[>")
+    replay.type(keys)
+    precondition(replay.settleFailures == 0 && replay.bells == 0 && replay.unsupportedSteps == 0)
+    return replay
+}
+precondition(replayed("one two three", "cwX", then: "w.").text == "X X three")
+precondition(replayed("a\nb", "ccX", then: "j.").text == "X\nX")
+precondition(replayed("abc", "sX", then: "l.").text == "XXc")
+precondition(replayed("one\ntwo", "A!", then: "j.").text == "one!\ntwo!")
+let reopened = replayed("a", "ofoo", then: ".")
+precondition(reopened.text == "a\nfoo\nfoo")
+precondition(reopened.selection == 8..<9)
+
+var typo = Sim(text: "say hello world", caret: 6, profile: axProfile)
+typo.type("ciwhelo")
+typo.feed("<BS>")
+typo.type("lo")
+typo.feed("<C-[>")
+precondition(typo.text == "say hello world")
+precondition(typo.state.session.lastInsert == "hello")
+typo.type("w.")
+precondition(typo.text == "say hello hello")
+var lines = Sim(text: "a", profile: axProfile)
+lines.type("otwo")
+lines.feed("<CR>")
+lines.type("three")
+lines.feed("<C-[>")
+lines.type(".")
+precondition(lines.text == "a\ntwo\nthree\ntwo\nthree")
+precondition(lines.state.session.lastChange == VimState.ChangeMemory(body: "o", insert: "two\nthree"))
+
+var lost = Sim(text: "say hello world", caret: 6, profile: axProfile)
+lost.type("ciwfoo")
+lost.feed("<Left>")
+lost.type("bar")
+lost.feed("<C-[>")
+precondition(lost.state.session.lastChange == .unreplayable)
+let beforeDot = lost.text
+lost.type("w.")
+precondition(lost.text == beforeDot)
+precondition(lost.bells == 1)
+
+// A session that typed nothing closes its body: `ciw` is still a change, `i` is not,
+// and the next session records its own command — not `ciw` stranded from before.
+var empty = Sim(text: "say hello world", caret: 6, profile: axProfile)
+empty.type("ciw")
+empty.feed("<C-[>")
+precondition(empty.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: ""))
+empty.type("w.")
+precondition(empty.text == "say  ")
+empty.type("A!")
+empty.feed("<C-[>")
+precondition(empty.state.session.lastChange == VimState.ChangeMemory(body: "A", insert: "!"))
+empty.type("i")
+empty.feed("<C-[>")
+precondition(empty.state.session.lastChange == VimState.ChangeMemory(body: "A", insert: "!"))
+precondition(empty.state.session.lastInsert == "!")
+precondition(replayed("a", "o", then: ".").text == "a\n\n")
+
+// Visual keys name a selection `.` cannot rebuild: it rings rather than replaying
+// `s` as a one-character substitute, or `u` as undo.
+var visualChange = Sim(text: "say hello world", caret: 4, profile: axProfile)
+visualChange.type("viwsbye")
+visualChange.feed("<C-[>")
+precondition(visualChange.text == "say bye world")
+precondition(visualChange.state.session.lastChange == .unreplayable)
+visualChange.type("w.")
+precondition(visualChange.text == "say bye world")
+precondition(visualChange.bells == 1)
+var visualCase = Sim(text: "AAA BBB", caret: 0, profile: axProfile)
+visualCase.type("viwu")
+precondition(visualCase.text == "aaa BBB")
+visualCase.type("w.")
+precondition(visualCase.text == "aaa BBB")
+precondition(visualCase.bells == 1 && visualCase.unsupportedSteps == 0)
+
+var refused = replayed("say hello world", caret: 6, "ciwbye", then: "w")
+refused.swallowsReplace = true
+refused.type(".")
+precondition(refused.settleFailures == 1)
+precondition(refused.text == "say bye world")
+precondition(refused.state.field.mode == .normal)
+precondition(refused.selection.isEmpty)
+
+var dotState = VimState.initial
+dotState.session.lastChange = VimState.ChangeMemory(body: "ciw", insert: "bye")
+let dotB = physical(".", text: "say hello world", caret: 6, profile: readProfile, state: dotState)
+precondition(dotB.traceShape == "P2P5!P?CCCT?P!CC")
+precondition(dotB.steps.contains(.typeText("bye")))
+let dotC = physical(".", profile: blindProfile, state: dotState)
+precondition(dotC.traceShape == "PPXCCCTPCC")
+precondition(dotC.steps.contains(.typeText("bye")))
 
 // Find commits its memory; `;` repeats from it.
 sim = Sim(text: "abcabc", caret: 0, profile: axProfile)
@@ -1009,7 +1177,7 @@ precondition(sim.text == "say bye world")              // the app's own editor f
 precondition(sim.caret == 6)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "bye")
-precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciwbye<Esc>"))
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
 
 // An aborted plan that stayed in Normal mutated nothing, so `.` must not learn it.
 sim = Sim(text: "say hello", caret: 0, profile: axProfile)
@@ -1027,7 +1195,7 @@ sim.feed("<Esc>")
 precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastInsert == "Z")
-precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "iZ<Esc>"))
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "i", insert: "Z"))
 
 // Visual `c` has no settle to verify its selection; the planner names it.
 sim = Sim(text: "say hello world", caret: 4, profile: axProfile)
@@ -1167,7 +1335,7 @@ carriedChange.feed("<C-[>")
 carriedChange.type("ciwfoo")
 carriedChange.refocus(.sameDocument, text: "bar")
 carriedChange.feed("<Esc>")
-precondition(carriedChange.state.session.lastChange?.body == "ciwfoo<Esc>",
+precondition(carriedChange.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "foo"),
              "sameDocument must not half-clear the dot body")
 
 // An opaque selection is press-built and lives in the queued channel, so the

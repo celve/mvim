@@ -23,6 +23,9 @@ public struct RawMonitor: Equatable, Sendable {
     /// `insertPayload` handed over at Esc.
     private var insertLog: String = ""
 
+    /// Cleared by anything the session did to the field that the log cannot express.
+    private var insertLogIsLossless = true
+
     public init() {}
 
     /// Buffering-relevant residencies only — a local projection, because
@@ -52,13 +55,18 @@ public struct RawMonitor: Equatable, Sendable {
         public let command: RawCommand
 
         /// Text typed during the Insert session this command ends, delivered
-        /// exactly once, at exit. The runtime folds it into `lastInsert` and
+        /// exactly once, at exit — `""` when nothing was typed, nil when the
+        /// command ends no session. The runtime folds it into `lastInsert` and
         /// the dot body.
         public let insertPayload: String?
 
-        public init(command: RawCommand, insertPayload: String? = nil) {
+        /// False when the payload no longer accounts for the session — `.` must not replay it.
+        public let insertPayloadIsLossless: Bool
+
+        public init(command: RawCommand, insertPayload: String? = nil, insertPayloadIsLossless: Bool = true) {
             self.command = command
             self.insertPayload = insertPayload
+            self.insertPayloadIsLossless = insertPayloadIsLossless
         }
     }
 
@@ -77,6 +85,7 @@ public struct RawMonitor: Equatable, Sendable {
     public mutating func reset() {
         pendingKeys = ""
         insertLog = ""
+        insertLogIsLossless = true
     }
 
     /// A key went to the app instead of vim: whatever command was half-typed
@@ -86,6 +95,12 @@ public struct RawMonitor: Equatable, Sendable {
     public mutating func cancelPending() {
         pendingKeys = ""
     }
+
+    /// Mid-Insert, the field changed behind the log's back — a chord went to
+    /// the app, or a click moved the caret — so the session cannot be replayed.
+    public mutating func markInsertLogLossy() {
+        insertLogIsLossless = false
+    }
 }
 
 // MARK: - Insert mode
@@ -93,24 +108,36 @@ public struct RawMonitor: Equatable, Sendable {
 private extension RawMonitor {
     mutating func feedInsert(_ token: String) -> Verdict {
         if isEscape(token) {
-            let payload = insertLog
-            insertLog = ""
-            return .command(Completed(
+            let completed = Completed(
                 command: RawCommand("<Esc>"),
-                insertPayload: payload.isEmpty ? nil : payload
-            ))
+                insertPayload: insertLog,
+                insertPayloadIsLossless: insertLogIsLossless
+            )
+            insertLog = ""
+            insertLogIsLossless = true
+            return .command(completed)
         }
-        if let typed = typedText(of: token) {
+        if isBackspace(token) {
+            // With nothing typed left to erase, it erased text the session never typed.
+            if insertLog.isEmpty {
+                insertLogIsLossless = false
+            } else {
+                insertLog.removeLast()
+            }
+        } else if let typed = typedText(of: token) {
             insertLog += typed
+        } else {
+            insertLogIsLossless = false
         }
         return .passthrough
     }
 
-    /// What a token contributes to the typed log: plain characters and
-    /// whitespace. Notation tokens (arrows, chords) pass through without
-    /// logging — vim would split the insert session there; v1 just skips
-    /// them.
+    /// What a token contributes to the typed log: plain characters,
+    /// whitespace, and Return as the line break it types. Other notation
+    /// tokens (arrows, chords) pass through without logging — vim would
+    /// split the insert session there; v1 gives up on replaying it.
     func typedText(of token: String) -> String? {
+        if token == "<CR>" || token == "\r" { return "\n" }
         guard !isNotation(token) else { return nil }
         guard let scalar = token.unicodeScalars.first else { return nil }
         if scalar.value < 0x20, token != "\n", token != "\r", token != "\t" {

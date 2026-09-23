@@ -391,17 +391,26 @@ private extension LogicalPlanner {
     static func planDot(count: Int?, register: Register?, state: VimState) -> LogicalPlan {
         guard let change = state.session.lastChange else { return .bell(.noPriorChange) }
         let replay = RawCommand(change.body)
-        // Bodies carrying an Insert payload ("ciwhello<Esc>") do not parse
-        // as one command; they arrive with the interceptor's replay work.
         guard replay.isComplete else { return .bell(.unsupported(".")) }
         if case .repeat = replay.intent { return .bell(.unsupported(".")) }
-        return planNormal(
+        let command = planNormal(
             intent: replay.intent,
             count: count ?? change.count ?? replay.count,
             register: register ?? change.register ?? replay.register,
             source: change.body,
             state: state
         )
+        // A command that rings here opens no session, so it must not type either.
+        guard let typed = change.insert, endsInserting(command) else { return command }
+        let typing: [LogicalStep] = typed.isEmpty ? [] : [.insertText(typed)]
+        return LogicalPlan(steps: command.steps + typing + insertExit)
+    }
+
+    static func endsInserting(_ plan: LogicalPlan) -> Bool {
+        for step in plan.steps.reversed() {
+            if case .setMode(let target) = step { return target == .insert || target == .replace }
+        }
+        return false
     }
 }
 
@@ -546,12 +555,14 @@ private extension LogicalPlanner {
     /// effects and arrive with the physical layer.
     static func planInsertOrReplace(_ command: RawCommand) -> LogicalPlan {
         if case .modeChange(.normal) = command.intent {
-            // Vim nudges the caret one left on exit (clamped at line start —
-            // physical arithmetic).
-            return LogicalPlan(.moveCaret(.motion(.character(.left), count: 1)), .setMode(.normal))
+            return LogicalPlan(steps: insertExit)
         }
         return .empty
     }
+
+    /// Esc out of Insert, shared with `.`'s replay of a session: vim nudges
+    /// the caret one left on exit (clamped at line start — physical arithmetic).
+    static let insertExit: [LogicalStep] = [.moveCaret(.motion(.character(.left), count: 1)), .setMode(.normal)]
 }
 
 // MARK: - State resolution
