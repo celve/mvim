@@ -120,21 +120,23 @@ on it, so nothing carries across by itself — there is no migration code:
    install a consuming event tap and fight over every keystroke. Then delete the old `Norm.app` —
    `.release/Norm.app` survives `make clean`. An item left behind can be removed under System
    Settings → General → Login Items.
-2. **Grant mvim Accessibility and Input Monitoring**, then relaunch it. Norm's rows in System
-   Settings → Privacy & Security (and the combined Loom app's, if still there) are orphans —
-   remove them manually.
-3. **Settings** — per-app Auto / Off / Force, capability overrides, learned priors — stay in the
-   `com.loom.Norm` domain, which is left in place. Carry them across while mvim is not running,
-   or re-enter them from the menu:
+2. **Before launching mvim, carry your settings across** — per-app Auto / Off / Force,
+   capability overrides, learned priors. They stay in the `com.loom.Norm` domain, which is left
+   in place; skip this to start fresh and re-enter them from the menu:
 
    ```sh
    defaults export com.loom.Norm - | defaults import com.loom.mvim -
    ```
 
    The import merges: a key both domains hold takes Norm's value, and every other key is kept.
+3. **Launch mvim, grant it Accessibility and Input Monitoring**, then relaunch it. Norm's rows in
+   System Settings → Privacy & Security (and the combined Loom app's, if still there) are
+   orphans — remove them manually.
 
 Diagnostics move with the identifier: logs from before the rename stay under subsystem
-`com.loom.Norm`, and the text-recording flag is now `mvimRecordText`.
+`com.loom.Norm`, and the text-recording flag is now `mvimRecordText`. A `sudo log config` you
+set for `com.loom.Norm` stays in force on that subsystem — reset it there and re-apply it to
+`com.loom.mvim` (see [Diagnostics](#diagnostics)).
 
 ## Start at login
 
@@ -206,7 +208,7 @@ learner anything.
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
 aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
-sat behind the settle and a lying field decided which mode Norm was in — `mode=normal→normal`
+sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
