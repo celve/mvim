@@ -199,9 +199,10 @@ e12 surface origin=nil web=1 role=AXTextArea stop=orphan@9 axerror=-25204 ms=151
 
 `stop=` is where the walk ended and `@` the element it stopped at, 0 being the field itself:
 `noURL` (the page exposed no `AXURL`), `hostless` (its URL names no site; `scheme=` says which,
-such as `file`), `window` or `application` (no page above the field at all), `orphan` (a parent
-that would not read; `axerror=` is the `AXError`, `-25204` a timeout), `hopCap` (the element cap
-reached without a page), `budget` (the walk's time budget ran out). For those last two, `@` is
+such as `file`), `window` or `application` (no page above the field at all), `orphan` (no
+parent to follow; `axerror=` is the read's `AXError`, `-25204` when the app did not answer in
+time or at all, `nil` when it answered with no parent), `hopCap` (the element cap reached
+without a page), `budget` (the walk's time budget ran out). For those last two, `@` is
 the first element the walk did not read. A walk that found its site logs `stop=site@N` at
 `.debug`.
 
