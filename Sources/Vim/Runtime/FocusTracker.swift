@@ -180,7 +180,7 @@ public final class FocusTracker {
             return
         }
         let identity = Self.appIdentity(for: bound.pid)
-        // The origin is kept, never re-walked: the answer being applied was written at this identity's rung.
+        // Carry the bound origin: the answer applied here was written at its rung.
         let surface = Surface(
             bundleID: identity.bundleID,
             origin: bound.surface.origin,
@@ -334,15 +334,7 @@ public final class FocusTracker {
         lastDenial = verdict
     }
 
-    /// What capability config is keyed by: the app, the field's role, and —
-    /// for web content — the origin and identifier that tell a browser's own
-    /// chrome apart from the page it is showing. Both report `AXTextField`, so
-    /// role alone cannot separate them.
-    /// Costs one bounded parent walk, at publish time only — never per
-    /// keystroke, and `retarget` and a republish inherit rather than repeating
-    /// it. Native fields skip the walk: `isWebElement` is false, so a plain text
-    /// field pays nothing beyond the gate it already ran. The walk comes back
-    /// for the recorder, nil when none ran.
+    /// The key capability config resolves on; only a fresh web bind pays the walk.
     private static func surface(
         for element: AXUIElement, gate: FieldProber.FieldGate, bundleID: String?
     ) -> (surface: Surface, walk: WebAreaWalk.Result?) {

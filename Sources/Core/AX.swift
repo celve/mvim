@@ -191,8 +191,7 @@ public enum AX {
             return (slot as! AXUIElement)
         }
 
-        /// `AXURL` answers an `NSURL`, not a `String` — `string(_:)` is an
-        /// unguarded `as? String` and would silently return nil for it.
+        /// `AXURL` answers an `NSURL`, which `string(_:)` would read as nil.
         public func url(_ index: Int) -> URL? {
             (slot(index) as? NSURL) as URL?
         }
@@ -228,7 +227,7 @@ public enum AX {
         return AttributeBatch(slots: names.map { name -> AnyObject in
             var ref: CFTypeRef?
             var error = AXUIElementCopyAttributeValue(element, name as CFString, &ref)
-            // The error marker a batch slot carries, so `error(_:)` answers on both paths.
+            // Keep the batch's error marker, so `error(_:)` works on this path too.
             guard error == .success else {
                 return AXValueCreate(.axError, &error).map { $0 as AnyObject } ?? NSNull()
             }
@@ -236,9 +235,7 @@ public enum AX {
         })
     }
 
-    /// The walk from `element` up to the web area that names its site, which `AXRole` cannot:
-    /// a browser's search box and an `<input>` in its page are both `AXTextField`.
-    /// One batched read per hop; the caller gates it on `GateAttributes.isWebElement`.
+    /// Walks up from `element` to the page that names its site, one batched read per hop.
     public static func enclosingWebArea(of element: AXUIElement) -> WebAreaWalk.Result {
         WebAreaWalk.walk(from: element, clock: { ProcessInfo.processInfo.systemUptime }) { current in
             let reads = attributes([

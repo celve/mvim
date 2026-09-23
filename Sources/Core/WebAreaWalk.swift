@@ -1,13 +1,12 @@
-/// The parent walk from a web field to the web area that names its site, with the AX read
-/// and the clock injected so where it stops — which decides the field's identity — is under `make test`.
+/// Walks a web field's ancestors up to the page that names its site; pure, so `make test` covers it.
 public enum WebAreaWalk {
-    /// Deep enough for editors nested in app layouts; a field past the cap keys at the app rung.
+    /// Deep enough for editors nested in app layouts.
     public static let maxHops = 64
 
-    /// Seconds; a healthy app answers a hop in well under a millisecond, so only a stalled one spends this.
+    /// Seconds; only a stalled app spends it.
     public static let budget = 0.5
 
-    /// A URL cut down to the only parts allowed out of the AX layer.
+    /// A URL cut to the parts allowed out of the AX layer.
     public struct Address: Equatable, Sendable {
         public var scheme: String?
         public var host: String?
@@ -18,7 +17,7 @@ public enum WebAreaWalk {
         }
     }
 
-    /// One hop's batched read of one element.
+    /// One hop's batched read.
     public struct Reading<Node> {
         public var role: String?
         public var address: Address?
@@ -35,7 +34,7 @@ public enum WebAreaWalk {
     }
 
     public enum Stop: Equatable, Sendable {
-        /// Nil when the web area exposed no URL.
+        /// Nil when the page exposed no URL.
         case webArea(Address?)
         case window
         case application
@@ -46,7 +45,7 @@ public enum WebAreaWalk {
 
     public struct Result: Equatable, Sendable {
         public let stop: Stop
-        /// The element the walk stopped at, 0 being the field; for `hopCap` and `budget`, the first it did not read.
+        /// The element it stopped at (0 is the field); for `hopCap` and `budget`, the first unread.
         public let hops: Int
         public let milliseconds: Int
 
@@ -90,7 +89,7 @@ public enum WebAreaWalk {
 // MARK: - Recorder
 
 extension WebAreaWalk.Result {
-    /// Why the walk ended where it did; a URL's scheme is the most of the page it carries.
+    /// Why the walk stopped; it carries a URL's scheme at most, never the page.
     public var traceFields: String {
         var fields = "stop=\(reason)@\(hops)"
         switch stop {

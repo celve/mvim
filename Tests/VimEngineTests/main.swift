@@ -1358,7 +1358,7 @@ for (rung, capabilities) in CapabilitySeeds.denied {
 
 // MARK: - The web-area walk
 
-// A fake AX tree: element n's parent is n + 1, an anonymous group, unless overridden.
+// Fake AX tree: element n's parent is n + 1 unless overridden.
 func walked(_ tree: [Int: WebAreaWalk.Reading<Int>]) -> WebAreaWalk.Result {
     WebAreaWalk.walk(from: 0, clock: { 0 }) { node in
         tree[node] ?? WebAreaWalk.Reading(role: "AXGroup", parent: node + 1)
@@ -1370,7 +1370,7 @@ func page(_ scheme: String?, _ host: String?, at depth: Int) -> [Int: WebAreaWal
     )]
 }
 
-// An editor 40 elements under its page used to stop at hop 16 and key at the app rung.
+// The old 16-hop cap keyed this editor at the app rung.
 let deepEditor = walked(page("https", "WWW.Linear.app", at: 40))
 precondition(deepEditor.origin == "linear.app")
 precondition(deepEditor.stop == .webArea(WebAreaWalk.Address(scheme: "https", host: "WWW.Linear.app")))

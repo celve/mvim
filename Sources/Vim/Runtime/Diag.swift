@@ -162,7 +162,7 @@ enum Diag {
         gate.debug("e\(epoch, privacy: .public) short-circuit same-element revalidate=0")
     }
 
-    /// A web field's walk to its site: a miss keys the page as native, merging it with the browser's own chrome.
+    /// A web field's walk to its site; a miss keys the page with the app's own chrome.
     static func origin(_ epoch: UInt64, role: String?, walk: WebAreaWalk.Result) {
         let found = walk.origin != nil
         guard !found || gateLevel.isEnabled(type: .debug) else { return }
