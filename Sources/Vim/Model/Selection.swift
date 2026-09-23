@@ -18,7 +18,7 @@ public struct VisualMemory: Equatable, Hashable, Sendable {
     }
 }
 
-/// A remembered position in text Norm does not own. The host can rewrite
+/// A remembered position in text mvim does not own. The host can rewrite
 /// the field at any time, so a mark carries a cheap witness of the text it
 /// was set in; a failed witness means "mark invalid" — an error, never a
 /// jump to a wrong offset.

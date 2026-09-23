@@ -28,7 +28,7 @@ import Foundation
 /// Disposable cache, never config — decode failure or schema drift degrades to an
 /// empty store, i.e. claims trusted as before. That is why it is a separate store
 /// from `CapabilityConfig`: the user's decisions must never ride on the
-/// disposability of a machine's guess. `defaults delete com.loom.Norm
+/// disposability of a machine's guess. `defaults delete com.loom.mvim
 /// learnedCapabilityPriors` is the flush. LoomCore cannot see the engine's
 /// `Capability` type, so the store speaks its raw strings; the runtime converts.
 public enum LearnedPriors {

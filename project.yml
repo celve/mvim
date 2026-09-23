@@ -1,4 +1,4 @@
-name: Norm
+name: mvim
 
 options:
   bundleIdPrefix: com.loom
@@ -21,7 +21,7 @@ settings:
     DEVELOPMENT_TEAM: "8TDYAWS6VC"
 
 targets:
-  # Shared foundation (Norm's copy, split from loom): the input tap + key model,
+  # Shared foundation (mvim's copy, split from loom): the input tap + key model,
   # text I/O (AX/Clipboard/Synth), support utilities, and the neutral Prefs store.
   # Deliberately carries NO Keychain — this app keeps no secrets.
   LoomCore:
@@ -50,7 +50,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
 
   # The menu-bar app: composition root + settings UI. Embeds the two frameworks.
-  Norm:
+  mvim:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
@@ -62,25 +62,27 @@ targets:
       - target: LoomVim
     settings:
       base:
-        PRODUCT_NAME: Norm
-        PRODUCT_BUNDLE_IDENTIFIER: com.loom.Norm
+        PRODUCT_NAME: mvim
+        # Renamed from com.loom.Norm: the identifier keys the defaults domain, the TCC
+        # grants and the login item, and nothing migrates them (README, Upgrading from Norm).
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.mvim
         GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_ENTITLEMENTS: Norm.entitlements
+        CODE_SIGN_ENTITLEMENTS: mvim.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Run as a menu bar agent: no Dock icon, no main window.
         INFOPLIST_KEY_LSUIElement: YES
-        # No NSMicrophoneUsageDescription — deliberate. Norm contains no
+        # No NSMicrophoneUsageDescription — deliberate. mvim contains no
         # microphone, network, or keychain code; keep the Info.plist honest.
-        INFOPLIST_KEY_CFBundleDisplayName: Norm
+        INFOPLIST_KEY_CFBundleDisplayName: mvim
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Loom. All rights reserved."
 
 schemes:
-  Norm:
+  mvim:
     build:
       targets:
-        Norm: all
+        mvim: all
     run:
       config: Debug
     archive:

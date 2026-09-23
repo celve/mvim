@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Canonical modifier set — decoupled from the CGEvent bit layout so
-/// persisted preferences stay stable. Norm's copy carries no NSEvent or
+/// persisted preferences stay stable. mvim's copy carries no NSEvent or
 /// Carbon conversions (no recorder, no Carbon hotkeys).
 public struct Mods: OptionSet, Hashable, Codable, Sendable {
     public let rawValue: Int

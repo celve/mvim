@@ -3,11 +3,11 @@ import LoomCore
 import LoomVim
 import SwiftUI
 
-/// Norm's composition root: a menu-bar agent (LSUIElement) whose only UI is
+/// mvim's composition root: a menu-bar agent (LSUIElement) whose only UI is
 /// the status menu. The tap feeds the `Controller`; everything else is
 /// permission plumbing.
 @main
-struct NormApp: App {
+struct MvimApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -68,16 +68,16 @@ struct NormApp: App {
             Button("Open Accessibility Settings") { model.openPrivacyPane("Privacy_Accessibility") }
             Button("Open Input Monitoring Settings") { model.openPrivacyPane("Privacy_ListenEvent") }
             Divider()
-            // Checked answers "will Norm start at login?" — a revoked item is not.
+            // Checked answers "will mvim start at login?" — a revoked item is not.
             Toggle("Start at Login", isOn: Binding(
                 get: { model.loginItem == .on },
                 set: { model.setLaunchAtLogin($0) }
             ))
             if model.loginItem == .blocked {
-                Button("Approve Norm in Login Items Settings") { model.openLoginItemsSettings() }
+                Button("Approve mvim in Login Items Settings") { model.openLoginItemsSettings() }
             }
             Divider()
-            Button("Quit Norm") { NSApplication.shared.terminate(nil) }
+            Button("Quit mvim") { NSApplication.shared.terminate(nil) }
         } label: {
             Image(systemName: model.mode.symbolName)
         }
@@ -214,8 +214,8 @@ final class AppModel: ObservableObject {
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
         loginItem = LoginItem.state
-        // Norm is LSUIElement, so opening the menu keeps the target app
-        // frontmost; if frontmost somehow IS Norm, keep the last snapshot.
+        // mvim is LSUIElement, so opening the menu keeps the target app
+        // frontmost; if frontmost somehow IS mvim, keep the last snapshot.
         if let app = NSWorkspace.shared.frontmostApplication,
            app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
            let bundleID = app.bundleIdentifier {

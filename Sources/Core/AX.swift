@@ -2,7 +2,7 @@ import ApplicationServices
 import AppKit
 import CoreGraphics
 
-/// Thin, honest wrappers over the macOS Accessibility API — Norm's copy of
+/// Thin, honest wrappers over the macOS Accessibility API — mvim's copy of
 /// the shared Loom substrate, trimmed to the vim probe/read/write surface.
 public enum AX {
     @discardableResult
