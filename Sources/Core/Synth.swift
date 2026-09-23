@@ -4,7 +4,7 @@ import CoreGraphics
 /// Tags mvim's own synthesized CGEvents (via `kCGEventSourceUserData`) so the
 /// consuming tap can bypass them — otherwise the engine would feed itself.
 ///
-/// **The magic is a cross-app ABI.** Sotto tags its synthesized events with
+/// **The magic is a cross-app ABI.** Vibe tags its synthesized events with
 /// the same value and both apps bypass tagged events before any handler runs;
 /// never change it in one app without the other (see README).
 public enum SynthTag {

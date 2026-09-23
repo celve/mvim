@@ -111,7 +111,7 @@ private func inputHubCallback(proxy: CGEventTapProxy, type: CGEventType,
     }
     // Bypass tagged synthesized events. mvim's own no longer traverse this
     // tap (Synth posts below the session stage — the settle-deadlock
-    // lesson), but Sotto's do, and the shared magic is a cross-app ABI:
+    // lesson), but Vibe's do, and the shared magic is a cross-app ABI:
     // otherwise Normal mode would consume a dictation transcript as
     // commands.
     if SynthTag.isSelf(event) { return Unmanaged.passUnretained(event) }

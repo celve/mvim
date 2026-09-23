@@ -4,7 +4,7 @@ System-wide **Vim mode** for macOS — a native SwiftUI **menu bar** app. mvim l
 editing (Normal / Insert / Visual, operators, motions, registers, `/` search) over every
 text field on the system.
 
-mvim is one half of the former **Loom** app — the other half is **Sotto**, the
+mvim is one half of the former **Loom** app — the other half is **Vibe**, the
 voice-dictation app. It was split out of `celve/loom` @ `1a2fcfe`. The Xcode project is
 generated from [`project.yml`](project.yml) via
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) and built with `xcodebuild`.
@@ -232,21 +232,21 @@ defaults delete com.loom.mvim mvimRecordText
 it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
 does not stop an mvim that is already running.
 
-## Running alongside Sotto
+## Running alongside Vibe
 
 - **`SynthTag.magic` is a cross-app ABI.** Both apps tag their synthesized CGEvents with the
   same magic (`0x4C4F_4F4D`, in each repo's `Sources/Core/Synth.swift`) and bypass tagged
-  events before any handler runs. mvim's consuming tap must bypass Sotto's synthesized
+  events before any handler runs. mvim's consuming tap must bypass Vibe's synthesized
   typing — otherwise vim Normal mode would consume a transcript as commands. **Never change
   the magic in one app without the other.**
-- **Bare-modifier-tap triggers in Sotto can false-fire around vim.** Both apps install
+- **Bare-modifier-tap triggers in Vibe can false-fire around vim.** Both apps install
   head-insert event taps; their relative order depends on launch order. When mvim consumes a
-  key-down (Normal mode), Sotto's tap never observes it — e.g. vim consuming `⌃[` makes the
-  surrounding `⌃` press look like a clean bare tap. Prefer Sotto's default `⌃⌥D` combo (a
+  key-down (Normal mode), Vibe's tap never observes it — e.g. vim consuming `⌃[` makes the
+  surrounding `⌃` press look like a clean bare tap. Prefer Vibe's default `⌃⌥D` combo (a
   Carbon hotkey — no tap at all), an `Fn`/🌐 tap, or a double-tap. This is a documented
   limitation; the apps deliberately share no IPC.
 - Clipboard transactions are serialized per-process only. A simultaneous mvim register paste
-  and Sotto insertion fallback could interleave in principle; humanly this does not occur.
+  and Vibe insertion fallback could interleave in principle; humanly this does not occur.
 
 ## Signing
 
