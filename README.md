@@ -122,7 +122,8 @@ on it, so nothing carries across by itself — there is no migration code:
    Settings → General → Login Items.
 2. **Before launching mvim, carry your settings across** — per-app Auto / Off / Force,
    capability overrides, learned priors. They stay in the `com.loom.Norm` domain, which is left
-   in place; skip this to start fresh and re-enter them from the menu:
+   in place; skip this to start fresh, re-entering policies and overrides from the menu while the
+   priors are learned again:
 
    ```sh
    defaults export com.loom.Norm - | defaults import com.loom.mvim -
@@ -135,8 +136,9 @@ on it, so nothing carries across by itself — there is no migration code:
 
 Diagnostics move with the identifier: logs from before the rename stay under subsystem
 `com.loom.Norm`, and the text-recording flag is now `mvimRecordText`. A `sudo log config` you
-set for `com.loom.Norm` stays in force on that subsystem — reset it there and re-apply it to
-`com.loom.mvim` (see [Diagnostics](#diagnostics)).
+set for `com.loom.Norm` stays in force on that subsystem: clear it with
+`sudo log config --reset --subsystem com.loom.Norm`, then re-apply it to `com.loom.mvim` (see
+[Diagnostics](#diagnostics)).
 
 ## Start at login
 
