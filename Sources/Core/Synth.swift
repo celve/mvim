@@ -1,7 +1,7 @@
 import AppKit
 import CoreGraphics
 
-/// Tags Norm's own synthesized CGEvents (via `kCGEventSourceUserData`) so the
+/// Tags mvim's own synthesized CGEvents (via `kCGEventSourceUserData`) so the
 /// consuming tap can bypass them — otherwise the engine would feed itself.
 ///
 /// **The magic is a cross-app ABI.** Sotto tags its synthesized events with
@@ -14,13 +14,13 @@ public enum SynthTag {
 }
 
 /// Synthesized-input primitives — the blind lane's actuator and the clipboard
-/// paste fallback. Events go to the frontmost app (Norm is an accessory
+/// paste fallback. Events go to the frontmost app (mvim is an accessory
 /// agent). Requires Accessibility permission. Every event is tagged.
 public enum Synth {
-    /// Below every session-level tap — including Norm's own. The executor
+    /// Below every session-level tap — including mvim's own. The executor
     /// settles *inside* the tap callback (main run loop held), so an event
     /// posted at `.cgSessionEventTap` parks at the window server awaiting
-    /// Norm's own verdict — which Norm cannot render until the settle that
+    /// mvim's own verdict — which mvim cannot render until the settle that
     /// is waiting for that very event gives up. Posting at the annotated
     /// stage delivers while the engine verifies; the tag stays as the
     /// cross-app ABI and defense-in-depth.

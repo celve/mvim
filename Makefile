@@ -1,5 +1,5 @@
-PROJECT := Norm
-SCHEME  := Norm
+PROJECT := mvim
+SCHEME  := mvim
 CONFIG  := Debug
 DERIVED := build
 RELEASE := .release

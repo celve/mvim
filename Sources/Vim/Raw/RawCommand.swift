@@ -397,7 +397,7 @@ extension RawCommand.FoldAction {
 extension RawCommand.IncompleteCommand {
     var carriesOperand: Bool {
         switch self {
-        // What is held is the prefix Norm recognised, not the operand still to come.
+        // What is held is the prefix mvim recognised, not the operand still to come.
         case .command, .register, .operatorTarget, .characterArgument, .macroRegister,
              .markName, .namespace:
             return false

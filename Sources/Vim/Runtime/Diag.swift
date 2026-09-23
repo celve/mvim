@@ -14,7 +14,7 @@ enum Diag {
     private static let cmdLevel = OSLog(subsystem: Log.subsystem, category: "cmd")
     private static let gateLevel = OSLog(subsystem: Log.subsystem, category: "gate")
 
-    static let recordsTextKey = "normRecordText"
+    static let recordsTextKey = "mvimRecordText"
 
     /// Records field content; read once per process, so both edges need a relaunch.
     static let recordsText = UserDefaults.standard.bool(forKey: recordsTextKey)
@@ -41,8 +41,8 @@ enum Diag {
         self.bind.log("\(line, privacy: .public)")
         if recordsText {
             self.bind.log("""
-                TEXT RECORDING ON — to stop: defaults delete com.loom.Norm \
-                \(recordsTextKey, privacy: .public), then RELAUNCH Norm (read once per process)
+                TEXT RECORDING ON — to stop: defaults delete com.loom.mvim \
+                \(recordsTextKey, privacy: .public), then RELAUNCH mvim (read once per process)
                 """)
         }
     }
