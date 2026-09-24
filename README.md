@@ -201,7 +201,6 @@ Reading a `cmd` line, `steps=` is the ordered, payload-free plan, one character 
 W setSelection   R replaceSelection   P press (P3 = three times)   T typeText
 X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSelectedText
 ! settle         ? softSettle         C commit                     B bell
-{…|…} branch: the rest of the plan per reading of the field
 ```
 
 Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
@@ -224,11 +223,6 @@ it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which i
 aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
 sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
-
-`world=N` and `ambiguous=1` appear only for a plan that branches on how the field reads its
-caret: the settles matched reading N rather than `AXValue`'s own (a `settle` line lists each
-reading it accepts as `or wN sel=…`), or, with `abort@N`, more than one reading still fit at a
-branch and the run stopped there rather than guess.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says

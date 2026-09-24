@@ -39,17 +39,8 @@ public final class Executor {
         /// Recorder only — the learner reads the two fields above.
         public internal(set) var abortedAt: Int?
 
-        /// The step `abortedAt` names, which a branch may have spliced in.
-        public internal(set) var abortedStep: PhysicalStep?
-
         /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
         public internal(set) var settleFailures: [SettleFailure] = []
-
-        /// The lowest reading of the field the settles matched, when it was not `AXValue`'s own.
-        public internal(set) var world: Int?
-
-        /// The run stopped at a branch that more than one reading of the field still fit.
-        public internal(set) var ambiguous = false
 
         public init() {}
     }
@@ -73,9 +64,6 @@ public final class Executor {
 
     /// From the write a following settle verifies; cleared where attribution is.
     private var lastWriteError: Int32?
-
-    /// The worlds every settle of this run has matched; nil is all of them.
-    private var consistent: Set<Int>?
 
     /// The selection the last settle read, which says whether a native key did anything.
     private var lastObserved: Range<Int>?
@@ -112,26 +100,9 @@ public final class Executor {
         captures = [:]
         lastRun = RunEvidence()
         lastWriteError = nil
-        consistent = nil
         lastObserved = nil
         var attribution: Capability?
-        var queue = plan.steps
-        var index = 0
-        while index < queue.count {
-            let step = queue[index]
-            if case .branch(let branches) = step {
-                guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
-                    NSSound.beep()
-                    lastRun.abortedAt = index
-                    lastRun.abortedStep = step
-                    lastRun.ambiguous = true
-                    lastRun.world = Self.reported(consistent)
-                    commitSurvivors(queue[index...], state: &state)
-                    return false
-                }
-                queue.replaceSubrange(index...index, with: chosen.steps)
-                continue
-            }
+        for (index, step) in plan.steps.enumerated() {
             let passed = perform(step, at: index, on: element, state: &state)
             switch step {
             case .setSelection:
@@ -154,36 +125,16 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
-                lastRun.abortedStep = step
-                lastRun.world = Self.reported(consistent)
                 // A second pass, not a `continue`: `perform` would re-post a blind keypress.
-                commitSurvivors(queue[(index + 1)...], state: &state)
+                for survivor in plan.steps[(index + 1)...] {
+                    if case .commit(let effect) = survivor, effect.survivesAbort {
+                        commit(effect, state: &state)
+                    }
+                }
                 return false
             }
-            index += 1
         }
-        lastRun.world = Self.reported(consistent)
         return true
-    }
-
-    private static func reported(_ worlds: Set<Int>?) -> Int? {
-        guard let worlds, !worlds.contains(0) else { return nil }
-        return worlds.min()
-    }
-
-    private func commitSurvivors(_ steps: ArraySlice<PhysicalStep>, state: inout VimState) {
-        for survivor in steps {
-            switch survivor {
-            case .commit(let effect) where effect.survivesAbort:
-                commit(effect, state: &state)
-            case .branch(let branches):
-                // Residency is the same in every branch; where none can be chosen, any will do.
-                let survivor = Branch.chosen(from: branches, consistent: consistent) ?? branches.first
-                commitSurvivors(ArraySlice(survivor?.steps ?? []), state: &state)
-            default:
-                break
-            }
-        }
     }
 
     /// Runtime-authored effects (insert payloads, dot bodies) enter through
@@ -265,7 +216,7 @@ public final class Executor {
 
         case .settle(let expectation):
             let outcome = settle(expectation, on: element)
-            narrow(to: outcome)
+            lastObserved = outcome.observedSelection
             if record(outcome, expectation, at: index, hard: true) {
                 return true
             }
@@ -276,7 +227,7 @@ public final class Executor {
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
             let outcome = settle(expectation, on: element)
-            narrow(to: outcome)
+            lastObserved = outcome.observedSelection
             _ = record(outcome, expectation, at: index, hard: false)
             return true
 
@@ -287,28 +238,18 @@ public final class Executor {
         case .bell:
             NSSound.beep()
             return true
-
-        case .branch:
-            return true   // `execute` splices the chosen continuation in before this is reached
         }
     }
 
     /// The observed values ride every exit, so a timeout costs no extra round trip.
     private struct SettleOutcome {
         let converged: Bool
-        /// The worlds the answer matched, among those still consistent; nil when nothing was predicted.
-        var worlds: Set<Int>? = nil
         let observedSelection: Range<Int>?
         let observedLength: Int?
         let observedSelectedText: String?
         let answered: Bool
         let polls: Int
         let milliseconds: Int
-    }
-
-    private func narrow(to outcome: SettleOutcome) {
-        lastObserved = outcome.observedSelection
-        if outcome.converged, let worlds = outcome.worlds { consistent = worlds }
     }
 
     /// Bounded convergence poll against the planner's prediction.
@@ -324,11 +265,11 @@ public final class Executor {
         var selectionSlot: Int?
         var lengthSlot: Int?
         var textSlot: Int?
-        if expectation.readsSelection {
+        if expectation.landing != nil {
             selectionSlot = names.count
             names.append(kAXSelectedTextRangeAttribute)
         }
-        if expectation.readsLength {
+        if expectation.length != nil {
             lengthSlot = names.count
             names.append(kAXNumberOfCharactersAttribute)
         }
@@ -364,18 +305,17 @@ public final class Executor {
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
                 && (textSlot == nil || text != nil)
-            let matched = expectation.worlds(matching: selection, length: length, selectedText: text)
-            let worlds = consistent.map(matched.intersection) ?? matched
             func outcome(_ converged: Bool) -> SettleOutcome {
                 SettleOutcome(
                     converged: converged,
-                    worlds: worlds,
                     observedSelection: selection, observedLength: length, observedSelectedText: text,
                     answered: answered, polls: polls,
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            if !worlds.isEmpty { return outcome(true) }
+            if expectation.matches(selection: selection, length: length, selectedText: text) {
+                return outcome(true)
+            }
             guard Date() < deadline else { return outcome(false) }
             Thread.sleep(forTimeInterval: 0.01)
         }

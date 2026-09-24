@@ -72,13 +72,8 @@ public struct Sim {
     /// Keys the failed settles blamed, in order.
     public private(set) var blamed: [Capability] = []
 
-    /// The lowest world the last run's settles matched, when it was not `AXValue`'s own.
-    public private(set) var world: Int?
-
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
-    /// Runs stopped at a branch that more than one reading of the field still fit.
-    public private(set) var ambiguities = 0
     public private(set) var unsupportedSteps = 0
 
     private var monitor = RawMonitor()
@@ -188,10 +183,11 @@ private extension Sim {
         let before = state.field.mode
 
         captures = [:]
-        abortedStep = execute(physical)
-        guard abortedStep == nil else {
+        let abortedAt = execute(physical)
+        abortedStep = abortedAt.map { physical.steps[$0] }
+        guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
-            if abortedStep?.checksSelectedText == true {
+            if planned.abortedAtTextCheck(abortedAt) {
                 if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
                 if state.field.mode.isInserting {
                     state = VimReducer.reduce(state, .setMode(before.nonVisual))
@@ -296,24 +292,10 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    /// The step that ended the run, nil when every step ran.
-    mutating func execute(_ plan: PhysicalPlan) -> PhysicalStep? {
-        var queue = plan.steps
-        // The worlds every settle so far has matched; nil is all of them.
-        var consistent: Set<Int>?
-        defer { world = consistent.flatMap { $0.contains(0) ? nil : $0.min() } }
-        var index = 0
-        while index < queue.count {
-            switch queue[index] {
-            case .branch(let branches):
-                guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
-                    ambiguities += 1
-                    drainResidency(of: queue[index...], consistent: consistent)
-                    return queue[index]
-                }
-                queue.replaceSubrange(index...index, with: chosen.steps)
-                continue
-
+    /// The index of the step that ended the run, nil when every step ran.
+    mutating func execute(_ plan: PhysicalPlan) -> Int? {
+        for (index, step) in plan.steps.enumerated() {
+            switch step {
             case .setSelection(let range):
                 guard !swallowsSelect else { break }
                 let model = TextModel(text)
@@ -350,26 +332,19 @@ private extension Sim {
             case .settle(let expectation):
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
-                let matched = expectation.worlds(
-                    matching: observed, length: text.utf16.count, selectedText: readSelectedText
-                )
-                let live = consistent.map(matched.intersection) ?? matched
-                if live.isEmpty {
+                if !expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText) {
                     settleFailures += 1
                     if let key = expectation.blamed(observed: observed) { blamed.append(key) }
-                    drainResidency(of: queue[(index + 1)...], consistent: consistent)
-                    return queue[index]   // the rest dies, like the real executor
+                    drainResidency(of: plan, after: index)
+                    return index   // the rest dies, like the real executor
                 }
-                consistent = live
 
-            case .softSettle(let expectation):
-                // Best-effort barrier: never aborts, and narrows the worlds only when one matched.
-                let observed = unreadableSelection ? nil : readSelection
-                let matched = expectation.worlds(
-                    matching: observed, length: text.utf16.count, selectedText: readSelectedText
-                )
-                let live = consistent.map(matched.intersection) ?? matched
-                if !live.isEmpty { consistent = live }
+            case .softSettle:
+                // Best-effort barrier: never aborts. In this synchronous host
+                // there is nothing async to wait for, and the blind step it
+                // follows may be an unsupported no-op, so the field need not match
+                // the prediction — which is exactly why a soft settle must proceed.
+                break
 
             case .commit(let effect):
                 state = VimReducer.reduce(state, effect, captures: captures)
@@ -377,7 +352,6 @@ private extension Sim {
             case .bell:
                 bells += 1
             }
-            index += 1
         }
         return nil
     }
@@ -402,16 +376,10 @@ private extension Sim {
     }
 
     /// The twin of the real executor's surviving-commit scan.
-    mutating func drainResidency(of steps: ArraySlice<PhysicalStep>, consistent: Set<Int>?) {
-        for survivor in steps {
-            switch survivor {
-            case .commit(let effect) where effect.survivesAbort:
+    mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
+        for survivor in plan.steps[(index + 1)...] {
+            if case .commit(let effect) = survivor, effect.survivesAbort {
                 state = VimReducer.reduce(state, effect, captures: captures)
-            case .branch(let branches):
-                let chosen = Branch.chosen(from: branches, consistent: consistent) ?? branches.first
-                drainResidency(of: ArraySlice(chosen?.steps ?? []), consistent: consistent)
-            default:
-                break
             }
         }
     }

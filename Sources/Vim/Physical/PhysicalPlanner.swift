@@ -43,6 +43,13 @@ public enum PhysicalPlanner {
             self.rejection = rejection
             self.operand = operand
         }
+
+        /// Whether the run died checking the selected text: other text is selected, however its offsets read.
+        public func abortedAtTextCheck(_ index: Int?) -> Bool {
+            guard let index, plan.steps.indices.contains(index),
+                  case .settle(let expectation) = plan.steps[index] else { return false }
+            return expectation.selectedText != nil
+        }
     }
 
     /// The plan alone — tests and any caller with no use for the rest.

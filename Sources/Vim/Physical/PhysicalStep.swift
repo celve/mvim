@@ -47,9 +47,6 @@ public enum PhysicalStep: Equatable, Sendable {
     /// Hand an effect to the reducer (capture slots resolved to literals).
     case commit(VimEffect)
 
-    /// The rest of the plan per reading of the field; the executor runs the one branch the settles leave standing.
-    case branch([Branch])
-
     /// Signal invalidity; changes nothing. A plan that cannot be realized
     /// in this field is exactly `[.bell]`.
     case bell
@@ -67,48 +64,6 @@ public extension PhysicalStep {
             return chord.mutatesText
         case .setSelection, .clipboardCopy, .captureSelectedText, .settle, .softSettle, .commit, .bell:
             return false
-        case .branch(let branches):
-            return branches.contains { $0.steps.contains(where: \.mutatesText) }
-        }
-    }
-
-    /// A run that died here has other text selected than the plan meant, however its offsets read.
-    var checksSelectedText: Bool {
-        guard case .settle(let expectation) = self else { return false }
-        return expectation.selectedText != nil
-    }
-}
-
-/// The continuation of the worlds whose keys agree from here; world 0 reads `AXValue` offsets.
-public struct Branch: Equatable, Sendable {
-    public let worlds: Set<Int>
-    public let steps: [PhysicalStep]
-
-    public init(worlds: Set<Int>, steps: [PhysicalStep]) {
-        self.worlds = worlds
-        self.steps = steps
-    }
-
-    /// The one branch the field's answers leave standing; nil when they fit worlds in several, since a guess
-    /// between courses of action is exactly what the settles exist to avoid.
-    public static func chosen(from branches: [Branch], consistent: Set<Int>?) -> Branch? {
-        let standing = branches.filter { branch in consistent.map { !branch.worlds.isDisjoint(with: $0) } ?? true }
-        guard let first = standing.first else { return nil }
-        guard standing.count > 1 else { return first }
-        // Tied readings may differ only in where `gi` resumes, which then goes unrecorded.
-        let unrecorded = first.steps.map(\.unrecorded)
-        guard standing.allSatisfy({ $0.steps.map(\.unrecorded) == unrecorded }) else { return nil }
-        return Branch(worlds: first.worlds, steps: unrecorded)
-    }
-}
-
-extension PhysicalStep {
-    var unrecorded: PhysicalStep {
-        switch self {
-        case .commit(.setInsertStart): return .commit(.setInsertStart(nil))
-        case .branch(let branches):
-            return .branch(branches.map { Branch(worlds: $0.worlds, steps: $0.steps.map(\.unrecorded)) })
-        default: return self
         }
     }
 }
@@ -202,10 +157,6 @@ public enum Landing: Equatable, Sendable {
     case exact(Range<Int>)
     case caretAfter(Int, strict: Bool)
     case caretBefore(Int, strict: Bool)
-    /// A non-empty selection with one end at the offset, reaching forward or backward from it.
-    case extending(from: Int, forward: Bool)
-    /// A non-empty selection that contains the character after the offset.
-    case covering(Int)
 
     public func matches(_ observed: Range<Int>) -> Bool {
         switch self {
@@ -215,10 +166,6 @@ public enum Landing: Equatable, Sendable {
             return observed.isEmpty && (strict ? observed.lowerBound > offset : observed.lowerBound >= offset)
         case .caretBefore(let offset, let strict):
             return observed.isEmpty && (strict ? observed.lowerBound < offset : observed.lowerBound <= offset)
-        case .extending(let offset, let forward):
-            return !observed.isEmpty && (forward ? observed.lowerBound == offset : observed.upperBound == offset)
-        case .covering(let offset):
-            return observed.lowerBound <= offset && offset < observed.upperBound
         }
     }
 }
@@ -232,26 +179,8 @@ public struct Expectation: Equatable, Sendable {
     /// `AXSelectedText`: offsets alone pass a selection Chromium read shifted (LIN-1533), its text does not.
     public let selectedText: String?
 
-    /// The world `landing` and `length` predict.
-    public var world = 0
-
-    /// The same settle as other worlds read it.
-    public var alternatives: [Alternative]
-
     /// The native key this settle checks.
     public var blame: Blame?
-
-    public struct Alternative: Equatable, Sendable {
-        public let world: Int
-        public let selection: Range<Int>?
-        public let length: Int?
-
-        public init(world: Int, selection: Range<Int>?, length: Int?) {
-            self.world = world
-            self.selection = selection
-            self.length = length
-        }
-    }
 
     /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
     /// nothing), or when a key that only ever leaves a caret left a selection.
@@ -271,13 +200,9 @@ public struct Expectation: Equatable, Sendable {
         self.init(landing: selection.map(Landing.exact), length: length, selectedText: selectedText)
     }
 
-    public init(
-        landing: Landing?, length: Int? = nil, alternatives: [Alternative] = [], blame: Blame? = nil,
-        selectedText: String? = nil
-    ) {
+    public init(landing: Landing?, length: Int? = nil, blame: Blame? = nil, selectedText: String? = nil) {
         self.landing = landing
         self.length = length
-        self.alternatives = alternatives
         self.blame = blame
         self.selectedText = selectedText
     }
@@ -287,28 +212,16 @@ public struct Expectation: Equatable, Sendable {
         return range
     }
 
-    var readsSelection: Bool { landing != nil || alternatives.contains { $0.selection != nil } }
-    var readsLength: Bool { length != nil || alternatives.contains { $0.length != nil } }
-
     /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
     public func matches(
         selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String? = nil
     ) -> Bool {
-        !worlds(matching: observed, length: observedLength, selectedText: observedText).isEmpty
-    }
-
-    /// Every world reads the same `selectedText`: it is the field's text, not an offset.
-    public func worlds(
-        matching observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String? = nil
-    ) -> Set<Int> {
-        if let selectedText, observedText != selectedText { return [] }
-        var worlds: Set<Int> = []
-        if Self.meets(landing, length, observed, observedLength) { worlds.insert(world) }
-        for alternative in alternatives
-        where Self.meets(alternative.selection.map(Landing.exact), alternative.length, observed, observedLength) {
-            worlds.insert(alternative.world)
+        if let landing {
+            guard let observed, landing.matches(observed) else { return false }
         }
-        return worlds
+        if let length, observedLength != length { return false }
+        if let selectedText, observedText != selectedText { return false }
+        return true
     }
 
     /// The key a non-converged settle blames, given the last selection it read.
@@ -317,35 +230,17 @@ public struct Expectation: Equatable, Sendable {
               blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty) else { return nil }
         return blame.capability
     }
-
-    private static func meets(
-        _ landing: Landing?, _ length: Int?, _ observed: Range<Int>?, _ observedLength: Int?
-    ) -> Bool {
-        if let landing {
-            guard let observed, landing.matches(observed) else { return false }
-        }
-        if let length, observedLength != length { return false }
-        return true
-    }
 }
 
 // MARK: - Recorder
 
 extension Expectation {
-    /// `sel=4..9 len=15`, then `text=(5)` — a length, never the text — and `or w1 sel=3..8 len=15` per
-    /// alternative. Also renders an observation.
+    /// `sel=4..9 len=15`, then `text=(5)` — a length, never the text. Also renders an observation, which is the
+    /// same shape.
     var traceFields: String {
-        var line = (world == 0 ? "" : "w\(world) ") + Self.fields(landing.map(\.traceName) ?? "nil", length)
-        line += selectedText.map { " text=(\($0.utf16.count))" } ?? ""
-        for alternative in alternatives {
-            let selection = alternative.selection.map { Landing.exact($0).traceName } ?? "nil"
-            line += " or w\(alternative.world) " + Self.fields(selection, alternative.length)
-        }
-        return line
-    }
-
-    private static func fields(_ selection: String, _ length: Int?) -> String {
-        "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        let selection = landing.map(\.traceName) ?? "nil"
+        let text = selectedText.map { " text=(\($0.utf16.count))" } ?? ""
+        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")" + text
     }
 }
 
@@ -355,8 +250,6 @@ extension Landing {
         case .exact(let range): return "\(range.lowerBound)..\(range.upperBound)"
         case .caretAfter(let offset, let strict): return (strict ? ">" : ">=") + "\(offset)"
         case .caretBefore(let offset, let strict): return (strict ? "<" : "<=") + "\(offset)"
-        case .extending(let offset, let forward): return forward ? "\(offset)->" : "<-\(offset)"
-        case .covering(let offset): return "~\(offset)"
         }
     }
 }
@@ -377,8 +270,6 @@ extension PhysicalStep {
         case .softSettle: return "?"
         case .commit: return "C"
         case .bell: return "B"
-        case .branch(let branches):
-            return "{" + branches.map { $0.steps.map(\.traceCode).joined() }.joined(separator: "|") + "}"
         }
     }
 }

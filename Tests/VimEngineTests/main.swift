@@ -871,7 +871,8 @@ for keys in ["yiw", "yy", "w", "p", "P", "o", "O", "A", "i", "u"] {
 
 let checkedCiw = traced("ciw", text: "say hello world", caret: 6, profile: readProfile)
 precondition(checkedCiw.plan.traceShape == "P2P5!!P?CCC")
-precondition(!checkedCiw.plan.steps[2].checksSelectedText && checkedCiw.plan.steps[3].checksSelectedText)
+precondition(!checkedCiw.abortedAtTextCheck(nil) && !checkedCiw.abortedAtTextCheck(2))
+precondition(checkedCiw.abortedAtTextCheck(3))
 
 // MARK: - KeyNotation
 
@@ -2110,7 +2111,6 @@ func chords(_ plan: PhysicalPlan) -> [Chord] {
     plan.steps.flatMap { step -> [Chord] in
         switch step {
         case .press(let chord, let count): return Array(repeating: chord, count: count)
-        case .branch(let branches): return branches.flatMap { chords(PhysicalPlan(steps: $0.steps)) }
         default: return []
         }
     }
@@ -2327,29 +2327,9 @@ let caretKey = Expectation(landing: .exact(4..<4), blame: .init(capability: .lin
 precondition(caretKey.blamed(observed: 0..<7) == .lineStartKey)
 precondition(caretKey.blamed(observed: 2..<2) == nil)
 
-// World-tagged readings, branches and relational landings, for plans that branch on how the field reads.
-let dual = Expectation(landing: .exact(4..<4), length: 7, alternatives: [.init(world: 2, selection: 3..<3, length: 7)])
-precondition(dual.worlds(matching: 4..<4, length: 7) == [0])
-precondition(dual.worlds(matching: 3..<3, length: 7) == [2])
-precondition(dual.worlds(matching: 3..<3, length: 6).isEmpty)
-precondition(dual.traceFields == "sel=4..4 len=7 or w2 sel=3..3 len=7")
-let branches = [Branch(worlds: [0, 1], steps: [.bell]), Branch(worlds: [2], steps: [])]
-precondition(Branch.chosen(from: branches, consistent: [2])?.worlds == [2])
-precondition(Branch.chosen(from: branches, consistent: [0, 1])?.worlds == [0, 1])
-precondition(Branch.chosen(from: branches, consistent: [1, 2]) == nil)
-precondition(Branch.chosen(from: branches, consistent: nil) == nil)
-precondition(Branch.chosen(from: branches, consistent: [3]) == nil)
-let resumes = [Branch(worlds: [0], steps: [.commit(.setMode(.insert)), .commit(.setInsertStart(1))]),
-               Branch(worlds: [1], steps: [.commit(.setMode(.insert)), .commit(.setInsertStart(4))])]
-precondition(Branch.chosen(from: resumes, consistent: [1])?.steps.last == .commit(.setInsertStart(4)))
-precondition(Branch.chosen(from: resumes, consistent: [0, 1])?.steps.last == .commit(.setInsertStart(nil)))
-precondition(PhysicalPlan(steps: [.press(.left, count: 1), .branch(branches)]).traceShape == "P{B|}")
-precondition(PhysicalPlan(steps: [.branch([Branch(worlds: [1], steps: [.typeText("x")])])]).mutatesText)
+// Relational landings, for keys whose landing the app decides.
 precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))
 precondition(Landing.caretBefore(4, strict: false).matches(4..<4) && !Landing.caretBefore(4, strict: false).matches(2..<3))
-precondition(Landing.extending(from: 4, forward: true).matches(4..<9) && !Landing.extending(from: 4, forward: true).matches(4..<4))
-precondition(Landing.extending(from: 4, forward: false).matches(1..<4))
-precondition(Landing.covering(4).matches(3..<5) && !Landing.covering(4).matches(4..<4))
 precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "sel=>2 len=nil")
 
 let breaks = TextModel("ab\n\ncd")
