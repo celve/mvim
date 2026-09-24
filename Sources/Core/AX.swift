@@ -319,12 +319,15 @@ public enum AX {
         }
 
         /// `editable: false` skips the editability read, for an end already inside the next paragraph's text.
+        /// Nil when any read fails, which must not pass for text.
         public func opening(upper isUpper: Bool, editable: Bool) -> Opening? {
-            guard let leaf = AX.leaf(at: isUpper ? upper : lower, in: element) else { return nil }
-            if AX.role(of: leaf) == "AXListMarker" {
+            guard let leaf = AX.leaf(at: isUpper ? upper : lower, in: element),
+                  let role = AX.role(of: leaf) else { return nil }
+            if role == "AXListMarker" {
                 return AX.textLength(of: leaf, in: element).map { .listMarker(length: $0) }
             }
-            return !editable || AX.rangeSettable(leaf) ? .text : .uneditable
+            guard editable else { return .text }
+            return AX.rangeSettability(of: leaf).map { $0 ? .text : .uneditable }
         }
     }
 
@@ -362,9 +365,8 @@ public enum AX {
         guard var node = node(at: marker, in: field),
               var offset = parameterized("AXIndexForTextMarker", marker, of: field) as? Int else { return nil }
         for _ in 0..<16 {
-            guard let children = copyAttribute(node, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty else {
-                return node
-            }
+            guard let children = children(of: node) else { return nil }
+            guard !children.isEmpty else { return node }
             guard let start = textStart(of: node, in: field) else { return nil }
             // Children run in text order, so the last one starting at or before the offset is a binary search away.
             var low = 0
@@ -387,6 +389,16 @@ public enum AX {
             offset -= holder.start
         }
         return nil
+    }
+
+    /// Nil when the read fails, so a container is never mistaken for a leaf.
+    private static func children(of node: AXUIElement) -> [AXUIElement]? {
+        var ref: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &ref) {
+        case .success: return ref as? [AXUIElement]
+        case .noValue, .attributeUnsupported: return []
+        default: return nil
+        }
     }
 
     private static func textStart(of node: AXUIElement, in field: AXUIElement) -> AXTextMarker? {
@@ -454,6 +466,16 @@ public enum AX {
         var settable: DarwinBoolean = false
         let error = AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable)
         return error == .success && settable.boolValue
+    }
+
+    /// `rangeSettable` with a failed read as nil rather than false.
+    public static func rangeSettability(of element: AXUIElement) -> Bool? {
+        var settable: DarwinBoolean = false
+        switch AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable) {
+        case .success: return settable.boolValue
+        case .noValue, .attributeUnsupported: return false
+        default: return nil
+        }
     }
 
     // MARK: - Writes

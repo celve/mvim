@@ -826,7 +826,7 @@ precondition(paras.valueRange(2..<2) { $0 == .lower ? .start(skipping: 0) : .end
 let listItems = ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!
 precondition(listItems.valueRange(4..<4) { _ in .start(skipping: 2) } == 7..<7, "a caret between items sits past the next marker")
 precondition(listItems.valueRange(0..<0) { _ in .start(skipping: 2) } == 2..<2, "and so does one before the first item")
-precondition(listItems.valueRange(0..<0) { _ in nil } == 0..<0)
+precondition(listItems.valueRange(0..<0) { _ in nil } == nil, "a field's start nothing resolves is unknown too")
 precondition(listItems.valueRange(0..<4) { $0 == .lower ? .start(skipping: 2) : .end } == 2..<4)
 
 precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))

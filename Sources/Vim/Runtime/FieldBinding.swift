@@ -205,8 +205,9 @@ public enum Snapshotter {
     }
 
     /// Chromium's contenteditables expose children and read in text content; its `<textarea>` and `<input>` do neither.
+    /// A failed count takes the marker read, which is right for both and fails closed.
     static func hasParagraphs(_ element: AXUIElement) -> Bool {
-        (AX.childCount(of: element) ?? 0) > 0
+        AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
     /// The selection in `AXValue` offsets, nil when it cannot be placed there, and the breaks it was placed by.
