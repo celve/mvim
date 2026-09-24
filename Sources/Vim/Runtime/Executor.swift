@@ -58,6 +58,7 @@ public final class Executor {
         public let expectation: Expectation
         public let observedSelection: Range<Int>?
         public let observedLength: Int?
+        public let observedSelectedText: String?
         public let answered: Bool
         public let polls: Int
         public let milliseconds: Int
@@ -93,6 +94,7 @@ public final class Executor {
             expectation: expectation,
             observedSelection: outcome.observedSelection,
             observedLength: outcome.observedLength,
+            observedSelectedText: outcome.observedSelectedText,
             answered: outcome.answered,
             polls: outcome.polls,
             milliseconds: outcome.milliseconds,
@@ -293,6 +295,7 @@ public final class Executor {
         var worlds: Set<Int>? = nil
         let observedSelection: Range<Int>?
         let observedLength: Int?
+        let observedSelectedText: String?
         let answered: Bool
         let polls: Int
         let milliseconds: Int
@@ -315,6 +318,7 @@ public final class Executor {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
+        var textSlot: Int?
         if expectation.readsSelection {
             selectionSlot = names.count
             names.append(kAXSelectedTextRangeAttribute)
@@ -323,11 +327,15 @@ public final class Executor {
             lengthSlot = names.count
             names.append(kAXNumberOfCharactersAttribute)
         }
+        if expectation.selectedText != nil {
+            textSlot = names.count
+            names.append(kAXSelectedTextAttribute)
+        }
         // An expectation that predicts nothing is already met — and must not
         // spend a round trip discovering that.
         guard !names.isEmpty else {
             return SettleOutcome(
-                converged: true, observedSelection: nil, observedLength: nil,
+                converged: true, observedSelection: nil, observedLength: nil, observedSelectedText: nil,
                 answered: true, polls: 0, milliseconds: 0
             )
         }
@@ -346,16 +354,18 @@ public final class Executor {
             if let slot = lengthSlot {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
+            let text = textSlot.flatMap { reads.string($0) }
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
-            let matched = expectation.worlds(matching: selection, length: length)
+                && (textSlot == nil || text != nil)
+            let matched = expectation.worlds(matching: selection, length: length, selectedText: text)
             let worlds = consistent.map(matched.intersection) ?? matched
             func outcome(_ converged: Bool) -> SettleOutcome {
                 SettleOutcome(
                     converged: converged,
                     worlds: worlds,
-                    observedSelection: selection, observedLength: length,
+                    observedSelection: selection, observedLength: length, observedSelectedText: text,
                     answered: answered, polls: polls,
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )

@@ -223,6 +223,9 @@ public struct Expectation: Equatable, Sendable {
     public let landing: Landing?
     public let length: Int?
 
+    /// `AXSelectedText`: offsets alone pass a selection Chromium read shifted (LIN-1533), its text does not.
+    public let selectedText: String?
+
     /// The world `landing` and `length` predict.
     public var world = 0
 
@@ -258,15 +261,19 @@ public struct Expectation: Equatable, Sendable {
         }
     }
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil) {
-        self.init(landing: selection.map(Landing.exact), length: length)
+    public init(selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil) {
+        self.init(landing: selection.map(Landing.exact), length: length, selectedText: selectedText)
     }
 
-    public init(landing: Landing?, length: Int? = nil, alternatives: [Alternative] = [], blame: Blame? = nil) {
+    public init(
+        landing: Landing?, length: Int? = nil, alternatives: [Alternative] = [], blame: Blame? = nil,
+        selectedText: String? = nil
+    ) {
         self.landing = landing
         self.length = length
         self.alternatives = alternatives
         self.blame = blame
+        self.selectedText = selectedText
     }
 
     public var selection: Range<Int>? {
@@ -278,11 +285,17 @@ public struct Expectation: Equatable, Sendable {
     var readsLength: Bool { length != nil || alternatives.contains { $0.length != nil } }
 
     /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
-    public func matches(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
-        !worlds(matching: observed, length: observedLength).isEmpty
+    public func matches(
+        selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String? = nil
+    ) -> Bool {
+        !worlds(matching: observed, length: observedLength, selectedText: observedText).isEmpty
     }
 
-    public func worlds(matching observed: Range<Int>?, length observedLength: Int?) -> Set<Int> {
+    /// Every world reads the same `selectedText`: it is the field's text, not an offset.
+    public func worlds(
+        matching observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String? = nil
+    ) -> Set<Int> {
+        if let selectedText, observedText != selectedText { return [] }
         var worlds: Set<Int> = []
         if Self.meets(landing, length, observed, observedLength) { worlds.insert(world) }
         for alternative in alternatives
@@ -313,9 +326,11 @@ public struct Expectation: Equatable, Sendable {
 // MARK: - Recorder
 
 extension Expectation {
-    /// `sel=4..9 len=15`, then `or w1 sel=3..8 len=15` per alternative. Also renders an observation.
+    /// `sel=4..9 len=15`, then `text=(5)` — a length, never the text — and `or w1 sel=3..8 len=15` per
+    /// alternative. Also renders an observation.
     var traceFields: String {
         var line = (world == 0 ? "" : "w\(world) ") + Self.fields(landing.map(\.traceName) ?? "nil", length)
+        line += selectedText.map { " text=(\($0.utf16.count))" } ?? ""
         for alternative in alternatives {
             let selection = alternative.selection.map { Landing.exact($0).traceName } ?? "nil"
             line += " or w\(alternative.world) " + Self.fields(selection, alternative.length)

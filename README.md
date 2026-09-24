@@ -211,6 +211,14 @@ the learner anything. A `!` after a native key names that key, and a failure bla
 that read could mean was already where the key goes, or when a caret key left a selection. A
 landing somewhere else aborts without learning.
 
+When keys made the selection an edit is about to delete or type over, the edit first checks
+the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
+waits for `AXSelectedText` to equal the text the plan selected from `AXValue`. Chromium's
+rich-text fields misread the caret, so the keys can select other text while every offset reads
+back as planned. A failed check presses ← to drop that selection and leaves mvim in Normal
+mode. Its `settle` line adds `text=(N)`, a length and never the text, on both sides; a `FAIL`
+whose `sel` and `len` agree failed on the text.
+
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
 aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
@@ -288,7 +296,7 @@ or `j`/`k` stays on its line, so that settle still checks the caret the command 
 key that did nothing is not blamed where a caret the read could mean had nowhere to go: at the
 line's start or end, past a list marker ("• "), or, for a key that leaves a caret, at a line
 start, which is how Chromium reads a caret between elements of that block. In such a field a
-delete or yank within one line takes its register from the text the field selected.
+yank within one line takes its register from the text the field selected.
 
 ## Running alongside Vibe
 

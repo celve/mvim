@@ -12,11 +12,13 @@
 /// It executes lane-A/B AX and clipboard steps exactly — including the
 /// modeled pasteboard, written by `clipboardCut`/`clipboardCopy` and read
 /// by `clipboardInsert(nil)`, which makes the clipboard=unnamed contract
-/// pure-testable. `press` steps count as `unsupportedSteps` unless
-/// `emulatesKeys` runs them through `KeyModel`, which proves the plans
-/// agree with Cocoa's bindings as modeled, never that an app honors them.
+/// pure-testable. Of Cocoa's keys it emulates, through `KeyModel`, the
+/// ones lane B counts with, and every one the model knows under
+/// `emulatesKeys`; any other `press` (the blind lane's chords, undo) counts
+/// as `unsupportedSteps`, because the Sim can only prove we emit the plans
+/// we designed, never that a blind plan works in a real app.
 ///
-/// Its three faults are the only way a golden reaches the abort path at all.
+/// Its faults are the only way a golden reaches the abort path at all.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -34,11 +36,26 @@ public struct Sim {
     /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
     public var unreadableSelection = false
 
-    /// Presses run through `KeyModel` instead of counting as unsupported.
-    public var emulatesKeys = false
+    /// Makes the field a Chromium contenteditable: `AXSelectedTextRange` starts at `reads` of the selection's
+    /// start and is as long as `AXSelectedText`, the true selected text less its paragraph breaks (LIN-1533).
+    public var reads: ((_ offset: Int, _ text: String) -> Int)?
 
-    /// Reports the selection as Chromium does in rich text: every `\n` before an offset left out (LIN-1533).
-    public var readsOmitBreaks = false
+    public var readSelection: Range<Int> {
+        guard let reads else { return selection }
+        let start = reads(selection.lowerBound, text)
+        return start..<start + readSelectedText.utf16.count
+    }
+
+    public var readSelectedText: String {
+        let selected = TextModel(text).substring(selection)
+        return reads == nil ? selected : selected.filter { $0 != "\n" }
+    }
+
+    /// Where the last command's run ended early, if it did.
+    public private(set) var abortedStep: PhysicalStep?
+
+    /// Every key `KeyModel` knows runs, not only the ones lane B counts with.
+    public var emulatesKeys = false
 
     /// Graphemes per visual row for ↓ ↑ ⌘← ⌘→; nil puts each line on one row.
     public var wrapWidth: Int?
@@ -115,7 +132,7 @@ public struct Sim {
     @discardableResult
     public mutating func perform(_ steps: [PhysicalStep]) -> Bool {
         captures = [:]
-        return execute(PhysicalPlan(steps: steps))
+        return execute(PhysicalPlan(steps: steps)) == nil
     }
 
     /// `Controller.rebind`'s pure twin: focus moved, and the transition says
@@ -152,13 +169,13 @@ private extension Sim {
         }
         // Same cursor match-stamp as the runtime's Snapshotter.
         var cursor: Range<Int>?
-        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == selection {
+        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == readSelection {
             cursor = drawn
         }
         let snapshot = FieldSnapshot(
             capabilities: profile,
             text: text,
-            selection: observedSelection,
+            selection: readSelection,
             anchor: anchor,
             cursor: cursor
         )
@@ -167,10 +184,15 @@ private extension Sim {
         let before = state.field.mode
 
         captures = [:]
-        let executed = execute(physical)
-        guard executed else {
+        abortedStep = execute(physical)
+        guard abortedStep == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
-            if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
+            if case .settle(let expectation)? = abortedStep, expectation.selectedText != nil {
+                if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
+                if state.field.mode.isInserting {
+                    state = VimReducer.reduce(state, .setMode(before.nonVisual))
+                }
+            } else if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
             // The monitor drained the payload it will never offer again.
@@ -191,8 +213,8 @@ private extension Sim {
     /// The Controller's twin, and it must obey the host the same way.
     mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
         guard !unreadableSelection else { return false }   // unknown is not empty
-        guard !selection.isEmpty else { return true }
-        if state.field.mode.isInserting, selection == operand { return true }
+        guard !readSelection.isEmpty else { return true }
+        if state.field.mode.isInserting, readSelection == operand { return true }
         guard profile.has(.writeSelection), !swallowsSelect else { return false }
         selection = selection.lowerBound..<selection.lowerBound
         return true
@@ -270,13 +292,8 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    var observedSelection: Range<Int> {
-        guard readsOmitBreaks else { return selection }
-        let model = TextModel(text)
-        return model.breaksOmitted(selection.lowerBound)..<model.breaksOmitted(selection.upperBound)
-    }
-
-    mutating func execute(_ plan: PhysicalPlan) -> Bool {
+    /// The step that ended the run, nil when every step ran.
+    mutating func execute(_ plan: PhysicalPlan) -> PhysicalStep? {
         var queue = plan.steps
         // The worlds every settle so far has matched; nil is all of them.
         var consistent: Set<Int>?
@@ -288,7 +305,7 @@ private extension Sim {
                 guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
                     ambiguities += 1
                     drainResidency(of: queue[index...], consistent: consistent)
-                    return false
+                    return queue[index]
                 }
                 queue.replaceSubrange(index...index, with: chosen.steps)
                 continue
@@ -306,24 +323,11 @@ private extension Sim {
                 applyReplace(typed)
 
             case .press(let chord, let count):
-                guard emulatesKeys else {
-                    unsupportedSteps += 1
-                    break
-                }
                 for _ in 0..<count where !ignoredChords.contains(chord) {
-                    var keys = KeyModel(
-                        text: text,
-                        anchor: backward ? selection.upperBound : selection.lowerBound,
-                        focus: backward ? selection.lowerBound : selection.upperBound,
-                        wrap: wrapWidth
-                    )
-                    guard keys.press(reboundChords[chord] ?? chord) else {
+                    guard emulatesKeys || Self.countedKeys.contains(chord), press(reboundChords[chord] ?? chord) else {
                         unsupportedSteps += 1
                         break
                     }
-                    text = keys.text
-                    selection = keys.selection
-                    backward = keys.focus < keys.anchor
                 }
 
             case .clipboardCut:
@@ -337,27 +341,29 @@ private extension Sim {
                 applyReplace(content ?? pasteboard ?? "")
 
             case .captureSelectedText(let slot):
-                // Chromium's `AXSelectedText` leaves paragraph breaks out, as its offsets do (LIN-1565).
-                let selected = TextModel(text).substring(selection)
-                captures[slot] = readsOmitBreaks ? String(selected.filter { $0 != "\n" }) : selected
+                captures[slot] = readSelectedText
 
             case .settle(let expectation):
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
-                let observed = unreadableSelection ? nil : observedSelection
-                let matched = expectation.worlds(matching: observed, length: text.utf16.count)
+                let observed = unreadableSelection ? nil : readSelection
+                let matched = expectation.worlds(
+                    matching: observed, length: text.utf16.count, selectedText: readSelectedText
+                )
                 let live = consistent.map(matched.intersection) ?? matched
                 if live.isEmpty {
                     settleFailures += 1
                     if let key = expectation.blamed(observed: observed) { blamed.append(key) }
                     drainResidency(of: queue[(index + 1)...], consistent: consistent)
-                    return false   // the rest dies, like the real executor
+                    return queue[index]   // the rest dies, like the real executor
                 }
                 consistent = live
 
             case .softSettle(let expectation):
                 // Best-effort barrier: never aborts, and narrows the worlds only when one matched.
-                let observed = unreadableSelection ? nil : observedSelection
-                let matched = expectation.worlds(matching: observed, length: text.utf16.count)
+                let observed = unreadableSelection ? nil : readSelection
+                let matched = expectation.worlds(
+                    matching: observed, length: text.utf16.count, selectedText: readSelectedText
+                )
                 let live = consistent.map(matched.intersection) ?? matched
                 if !live.isEmpty { consistent = live }
 
@@ -369,6 +375,25 @@ private extension Sim {
             }
             index += 1
         }
+        return nil
+    }
+
+    /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
+    static let countedKeys: Set<Chord> = [.left, .right, .up, .down, .lineStart, .selectRight, .deleteBack]
+
+    /// One key as `KeyModel` has Cocoa's bindings do it, which is how LIN-1533 measured Chromium's arrows; false for
+    /// a key the model does not know.
+    mutating func press(_ chord: Chord) -> Bool {
+        var keys = KeyModel(
+            text: text,
+            anchor: backward ? selection.upperBound : selection.lowerBound,
+            focus: backward ? selection.lowerBound : selection.upperBound,
+            wrap: wrapWidth
+        )
+        guard keys.press(chord) else { return false }
+        text = keys.text
+        selection = keys.selection
+        backward = keys.focus < keys.anchor
         return true
     }
 

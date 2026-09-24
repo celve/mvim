@@ -43,6 +43,13 @@ public enum PhysicalPlanner {
             self.rejection = rejection
             self.operand = operand
         }
+
+        /// Whether the run died checking the selected text: other text is selected, however its offsets read.
+        public func abortedAtTextCheck(_ index: Int?) -> Bool {
+            guard let index, plan.steps.indices.contains(index),
+                  case .settle(let expectation) = plan.steps[index] else { return false }
+            return expectation.selectedText != nil
+        }
     }
 
     /// The plan alone — tests and any caller with no use for the rest.
@@ -185,13 +192,22 @@ private extension PhysicalPlanner {
     /// did), so it proceeds instead of aborting the mode change behind it.
     static func settle(
         _ context: Context, profile: CapabilityProfile, hard: Bool = true,
-        blame: Expectation.Blame? = nil
+        blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
         let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
-        var expectation = Expectation(selection: selection, length: length)
+        var expectation = Expectation(selection: selection, length: length, selectedText: selectedText)
         expectation.blame = blame
         return [hard ? .settle(expectation) : .softSettle(expectation)]
+    }
+
+    /// Before an edit replaces a selection keys made: Chromium's misread caret puts
+    /// them on other text while every offset reads back as planned (LIN-1533).
+    static func checkSelectedText(
+        _ text: String, context: Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        guard !text.isEmpty, !profile.has(.writeSelection), profile.has(.readSelectedText) else { return [] }
+        return settle(context, profile: profile, selectedText: text)
     }
 }
 
@@ -594,8 +610,8 @@ private extension PhysicalPlanner {
         return (2...5).contains(prefix.count) && prefix.hasSuffix(" ") && !prefix.dropLast().contains(" ")
     }
 
-    /// In a field that claims the native keys, a register takes the text the field selected, which holds where a
-    /// misread caret shifts the model's — only within a line, since Chromium's leaves paragraph breaks out (LIN-1565).
+    /// In a field that claims the native keys, a yank within a line takes the text the field selected, which holds
+    /// where a misread caret shifts the model's; Chromium's leaves paragraph breaks out, and deletes check it instead.
     static func registersFromField(_ content: String, _ profile: CapabilityProfile) -> Bool {
         !profile.has(.writeSelection) && profile.has(.readSelectedText)
             && Capability.nativeKeys.contains(where: profile.has) && !content.contains("\n")
@@ -816,20 +832,14 @@ private extension PhysicalPlanner {
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
             let content = model.substring(selection)
-            var steps: [PhysicalStep] = []
-            var payload = TextPayload.literal(content)
-            if !blackhole, registersFromField(content, profile) {
-                let slot = context.takeSlot()
-                steps.append(.captureSelectedText(into: slot))
-                payload = .captured(slot)
-            }
+            var steps = checkSelectedText(content, context: context, profile: profile)
             steps.append(profile.has(.insertText) ? .replaceSelection("") : .press(.deleteBack, count: 1))
             context.applyEdit(range: selection, replacement: "")
             // Blind (press) delete: soft — a mismatch must not abort the
             // `setMode(.insert)` that follows a `ciw`/`s`/`cc`.
             steps += settle(context, profile: profile, hard: profile.has(.insertText))
             if !blackhole {
-                steps.append(.commit(.deleted(into: register, content: payload, wise: wise)))
+                steps.append(.commit(.deleted(into: register, content: .literal(content), wise: wise)))
             }
             return steps
         }
@@ -884,11 +894,12 @@ private extension PhysicalPlanner {
         let action: PhysicalStep = profile.has(.insertText)
             ? .replaceSelection(replacement)
             : .typeText(replacement)
-        if let selection = context.selection, context.text != nil {
+        if let selection = context.selection, let model = context.model {
+            let check = checkSelectedText(model.substring(selection), context: context, profile: profile)
             context.applyEdit(range: selection, replacement: replacement)
             // Blind (typeText) over-type: soft, so a mismatch does not abort
             // the `setMode(.insert)` behind an `o`/`O`/`i`.
-            return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
         }
         context.invalidate()
         return [action]
@@ -934,10 +945,11 @@ private extension PhysicalPlanner {
         let action: PhysicalStep = profile.has(.insertText)
             ? .replaceSelection(transformed)
             : .typeText(transformed)
+        let check = checkSelectedText(original, context: context, profile: profile)
         context.applyEdit(range: selection, replacement: transformed)
         // Blind (typeText) transform: soft. The poll still lets the following
         // `collapseSelection` land its caret on a settled field.
-        return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+        return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
     }
 
     static let indentUnit = "    "
@@ -987,9 +999,11 @@ private extension PhysicalPlanner {
         }
         context.selection = range
         // Settled, so the AX replacement cannot overtake the selecting keys.
-        if !settled, !profile.has(.writeSelection), profile.has(.insertText) {
-            steps += settle(context, profile: profile)
+        var barrier = checkSelectedText(model.substring(range), context: context, profile: profile)
+        if barrier.isEmpty, !settled, !profile.has(.writeSelection), profile.has(.insertText) {
+            barrier = settle(context, profile: profile)
         }
+        steps += barrier
         steps.append(profile.has(.insertText) ? .replaceSelection(joined) : .typeText(joined))
         context.applyEdit(range: range, replacement: joined)
         // Settle follows the edit; blind (typeText) join is soft.

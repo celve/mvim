@@ -108,7 +108,10 @@ enum Diag {
     private static func settleFailed(_ tag: String, _ failure: Executor.SettleFailure) {
         var line = "\(tag) \(failure.hard ? "FAIL" : "soft")@\(failure.index)"
         line += " want \(failure.expectation.traceFields)"
-        let observed = Expectation(selection: failure.observedSelection, length: failure.observedLength)
+        let observed = Expectation(
+            selection: failure.observedSelection, length: failure.observedLength,
+            selectedText: failure.observedSelectedText
+        )
         line += " got \(observed.traceFields)"
         // A field that answered something else, versus one that would not answer.
         line += " answered=\(failure.answered ? 1 : 0)"
