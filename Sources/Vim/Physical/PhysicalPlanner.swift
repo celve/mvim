@@ -345,7 +345,8 @@ private extension Expectation {
         if let blame, let theirs = other.blame {
             merged.blame = Blame(
                 capability: blame.capability,
-                unmoved: blame.unmoved + theirs.unmoved.filter { !blame.unmoved.contains($0) }
+                unmoved: blame.unmoved + theirs.unmoved.filter { !blame.unmoved.contains($0) },
+                leavesCaret: blame.leavesCaret
             )
         }
         return merged
@@ -710,7 +711,12 @@ private extension PhysicalPlanner {
         let before = context.selection.flatMap(context.reading)
         context.selection = landing
         context.selectionOpaque = false
-        let blame = atom.flatMap { atom in before.map { Expectation.Blame(capability: atom, unmoved: [$0]) } }
+        let blame = atom.flatMap { atom in
+            before.map {
+                Expectation.Blame(capability: atom, unmoved: [$0],
+                                  leavesCaret: chords.allSatisfy { !$0.modifiers.contains(.shift) })
+            }
+        }
         var steps: [PhysicalStep] = []
         for chord in chords {
             if case .press(chord, let count)? = steps.last {

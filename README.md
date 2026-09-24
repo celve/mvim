@@ -207,8 +207,8 @@ X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSele
 Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
 a blind keypress, which can never name the capability it failed, so it rings without teaching
 the learner anything. A `!` after a native key names that key, and a failure blames it
-(`fail=lineStartKey`) only when the field still reads as it did before the key: the key did
-nothing. A landing somewhere else aborts without learning.
+(`fail=lineStartKey`) only when the field still reads as it did before the key, or a caret key
+left a selection. A landing somewhere else aborts without learning.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
@@ -272,8 +272,11 @@ delete first and join lines at a line end.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
-and caret mvim can read. A key that does nothing is learned off for that surface, like a write
-that lies, and mvim counts arrows there again; switch it back on from the menu.
+and caret mvim can read. A key that does nothing, or a caret key that leaves a selection (as
+a select-all binding would), is learned off for that surface like a write that lies, and mvim
+counts arrows there again; switch it back on from the menu. A key that lands somewhere else
+aborts the command without learning, because Chromium's reads can put a correct landing there;
+turn such a key off for the surface from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
 paragraph breaks before it (LIN-1533), so its offsets drift from `AXValue`'s past the first

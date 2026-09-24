@@ -1949,7 +1949,7 @@ precondition(Array(keyedDD.steps[0...5]) == [
     .settle(Expectation(
         landing: .exact(4..<4), length: 13,
         alternatives: [.init(world: 1, selection: 3..<3, length: 13)],
-        blame: .init(capability: .lineStartKey, unmoved: [5..<5])
+        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true)
     )),
     .press(Chord.paragraphEnd.shifted, count: 1),
     .settle(Expectation(
@@ -2082,11 +2082,20 @@ for (ignored, blamed) in [(Chord.paragraphStart, Capability.lineStartKey), (Chor
     sim.type("dd")
     precondition(sim.blamed == [blamed] && sim.text == "one\ntwo")
 }
+sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
+sim.emulatesKeys = true
+sim.reboundChords = [.paragraphStart: .selectAll]
+sim.type("dd")
+precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
 let blameful = Expectation(landing: .exact(4..<4), length: 7, blame: .init(capability: .lineStartKey, unmoved: [5..<5]))
 precondition(blameful.blamed(observed: 5..<5) == .lineStartKey)
 precondition(blameful.blamed(observed: 2..<2) == nil)
+precondition(blameful.blamed(observed: 0..<7) == nil)
 precondition(blameful.blamed(observed: nil) == nil)
 precondition(Expectation(selection: 4..<4).blamed(observed: 5..<5) == nil)
+let caretKey = Expectation(landing: .exact(4..<4), blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true))
+precondition(caretKey.blamed(observed: 0..<7) == .lineStartKey)
+precondition(caretKey.blamed(observed: 2..<2) == nil)
 
 // World-tagged readings, branches and relational landings.
 let dual = Expectation(landing: .exact(4..<4), length: 7, alternatives: [.init(world: 2, selection: 3..<3, length: 7)])

@@ -35,6 +35,10 @@ struct KeyModel {
             moved = 0
         case .documentEnd:
             moved = model.length
+        case .selectAll where !shift:
+            anchor = 0
+            focus = model.length
+            return true
         case .lineStart:
             moved = row(of: shift ? focus : selection.lowerBound, in: model).start
         case .lineEnd:

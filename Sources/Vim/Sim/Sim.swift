@@ -46,6 +46,9 @@ public struct Sim {
     /// Keys this field ignores, as an app that rebinds them would.
     public var ignoredChords: Set<Chord> = []
 
+    /// Keys this field treats as others, as an app that rebinds ⌃A to select-all would.
+    public var reboundChords: [Chord: Chord] = [:]
+
     /// Keys the failed settles blamed, in order.
     public private(set) var blamed: [Capability] = []
 
@@ -308,7 +311,7 @@ private extension Sim {
                         focus: backward ? selection.lowerBound : selection.upperBound,
                         wrap: wrapWidth
                     )
-                    guard keys.press(chord) else {
+                    guard keys.press(reboundChords[chord] ?? chord) else {
                         unsupportedSteps += 1
                         break
                     }

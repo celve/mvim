@@ -166,6 +166,7 @@ public extension Chord {
     static let selectLeft = Chord(.arrowLeft, [.shift])
     static let paragraphStart = Chord(.character("a"), [.control])
     static let paragraphEnd = Chord(.character("e"), [.control])
+    static let selectAll = Chord(.character("a"), [.command])
     static let deleteBack = Chord(.delete)
     static let undo = Chord(.character("z"), [.command])
     static let redo = Chord(.character("z"), [.command, .shift])
@@ -226,14 +227,17 @@ public struct Expectation: Equatable, Sendable {
         }
     }
 
-    /// A failed settle demotes `capability` only when the field still reads as one of `unmoved`: the key did nothing.
+    /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
+    /// nothing), or when a key that only ever leaves a caret left a selection.
     public struct Blame: Equatable, Sendable {
         public let capability: Capability
         public let unmoved: [Range<Int>]
+        public let leavesCaret: Bool
 
-        public init(capability: Capability, unmoved: [Range<Int>]) {
+        public init(capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false) {
             self.capability = capability
             self.unmoved = unmoved
+            self.leavesCaret = leavesCaret
         }
     }
 
@@ -273,7 +277,8 @@ public struct Expectation: Equatable, Sendable {
 
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
-        guard let blame, let observed, blame.unmoved.contains(observed) else { return nil }
+        guard let blame, let observed,
+              blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty) else { return nil }
         return blame.capability
     }
 
