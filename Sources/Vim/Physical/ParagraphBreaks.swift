@@ -84,15 +84,16 @@ public extension ParagraphBreaks {
 
     /// A field selection in `AXValue` offsets; nil when a paragraph boundary stays unresolved.
     ///
-    /// `side` is asked only at a boundary.
+    /// `side` is asked only at a boundary and at the field's start, where a list's first marker can follow the caret.
     func valueRange(_ field: Range<Int>, side: (End) -> Side?) -> Range<Int>? {
         func resolve(_ fieldOffset: Int, _ end: End) -> Int? {
             let candidates = valueOffsets(fieldOffset)
-            guard candidates.count > 1 else { return candidates.lowerBound }
+            let boundary = candidates.count > 1
+            guard boundary || candidates.lowerBound == 0 else { return candidates.lowerBound }
             switch side(end) {
             case .end?: return candidates.lowerBound
             case .start(let skipping)?: return candidates.upperBound + skipping
-            case nil: return nil
+            case nil: return boundary ? nil : candidates.lowerBound
             }
         }
         guard let lower = resolve(field.lowerBound, .lower),
