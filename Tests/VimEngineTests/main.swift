@@ -871,10 +871,8 @@ for keys in ["yiw", "yy", "w", "p", "P", "o", "O", "A", "i", "u"] {
 
 let checkedCiw = traced("ciw", text: "say hello world", caret: 6, profile: readProfile)
 precondition(checkedCiw.plan.traceShape == "P2P5!!P?CCC")
-precondition(checkedCiw.operand == 4..<9)
-precondition(checkedCiw.operand(abortedAt: nil) == 4..<9)
-precondition(checkedCiw.operand(abortedAt: 2) == 4..<9)
-precondition(checkedCiw.operand(abortedAt: 3) == nil)
+precondition(!checkedCiw.abortedAtTextCheck(nil) && !checkedCiw.abortedAtTextCheck(2))
+precondition(checkedCiw.abortedAtTextCheck(3))
 
 // MARK: - KeyNotation
 
@@ -1513,6 +1511,10 @@ precondition(sim.text == "say  world" && sim.settleFailures == 0)
 func omitsBreaks(_ offset: Int, _ text: String) -> Int {
     offset - TextModel(text).newlineCount(in: 0..<offset)
 }
+func checkedText(_ step: PhysicalStep?) -> String? {
+    guard case .settle(let expectation)? = step else { return nil }
+    return expectation.selectedText
+}
 let paragraphs = "alpha beta gamma\ndelta epsilon zeta\neta theta iota"
 
 var misread = Sim(text: paragraphs, caret: 7, profile: readProfile)
@@ -1526,9 +1528,9 @@ precondition(misread.state.field.mode == .normal && misread.settleFailures == 0)
 misread = Sim(text: paragraphs, caret: 24, profile: readProfile)
 misread.reads = omitsBreaks
 misread.type("ciw")
-precondition(misread.text == paragraphs)
-precondition(misread.settleFailures == 1)
-precondition(misread.selection == 24..<31 && misread.readSelection == 23..<30)
+precondition(misread.text == paragraphs && misread.settleFailures == 1)
+precondition(checkedText(misread.abortedStep) == "epsilon", "the offsets settle passes and the text check rings")
+precondition(misread.selection == 24..<24, "a failed check collapses what the keys selected")
 precondition(misread.state.field.mode == .normal, "the operand's offsets must not keep Insert over other text")
 precondition(misread.state.session.register("-") == nil && misread.state.session.lastChange == nil)
 
@@ -1547,13 +1549,28 @@ for keys in ["x", "3x", "X", "dw", "de", "diw", "D", "C", "s", "S", "cc", "dd", 
     precondition(!misread.state.field.mode.isInserting, keys)
 }
 
-// Rule 2: a caret at an element boundary reads as its paragraph's start.
-for keys in ["ciw", "x", "dw", "dd", "~"] {
+// Rule 2: a caret at an element boundary reads as its paragraph's start, in read offsets (as measured).
+let fromBlockStart: [(keys: String, check: String?)] = [("ciw", "\n"), ("dw", "\n"), ("x", nil), ("dd", nil), ("~", nil)]
+for edit in fromBlockStart {
     misread = Sim(text: paragraphs, caret: 24, profile: readProfile)
     misread.reads = { offset, text in offset == 24 ? 16 : omitsBreaks(offset, text) }
-    misread.type(keys)
-    precondition(misread.text == paragraphs, "\(keys) must not edit from a caret read as its block's start")
+    misread.type(edit.keys)
+    precondition(misread.text == paragraphs, "\(edit.keys) must not edit from a caret read as its block's start")
+    precondition(checkedText(misread.abortedStep) == edit.check, edit.keys)
 }
+
+// Chromium's AXSelectedText leaves paragraph breaks out, so no edit across one passes, in paragraph 1 too.
+misread = Sim(text: paragraphs, caret: 7, profile: readProfile)
+misread.reads = omitsBreaks
+misread.type("J")
+precondition(misread.text == paragraphs && checkedText(misread.abortedStep) != nil)
+var acrossBreak = VimState.initial
+acrossBreak.field.mode = .visual(VimState.VisualContext(kind: .character, anchor: 10))
+misread = Sim(text: paragraphs, caret: 10, state: acrossBreak, profile: readProfile)
+misread.reads = omitsBreaks
+misread.perform([.setSelection(10..<20)])
+misread.type("d")
+precondition(misread.text == paragraphs && checkedText(misread.abortedStep) == " gamma\nde")
 
 // MARK: - Focus transitions
 

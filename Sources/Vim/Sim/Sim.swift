@@ -35,14 +35,23 @@ public struct Sim {
     /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
     public var unreadableSelection = false
 
-    /// What `AXSelectedTextRange` answers for a true offset; `AXSelectedText` stays true. Chromium's
-    /// contenteditables drop the paragraph breaks before it, or read it as its block's start (LIN-1533).
-    public var reads: (_ offset: Int, _ text: String) -> Int = { offset, _ in offset }
+    /// Makes the field a Chromium contenteditable: `AXSelectedTextRange` starts at `reads` of the selection's
+    /// start and is as long as `AXSelectedText`, the true selected text less its paragraph breaks (LIN-1533).
+    public var reads: ((_ offset: Int, _ text: String) -> Int)?
 
     public var readSelection: Range<Int> {
-        let lower = reads(selection.lowerBound, text)
-        return lower..<max(lower, reads(selection.upperBound, text))
+        guard let reads else { return selection }
+        let start = reads(selection.lowerBound, text)
+        return start..<start + readSelectedText.utf16.count
     }
+
+    public var readSelectedText: String {
+        let selected = TextModel(text).substring(selection)
+        return reads == nil ? selected : selected.filter { $0 != "\n" }
+    }
+
+    /// Where the last command's run ended early, if it did.
+    public private(set) var abortedStep: PhysicalStep?
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
@@ -152,10 +161,15 @@ private extension Sim {
 
         captures = [:]
         let abortedAt = execute(physical)
+        abortedStep = abortedAt.map { physical.steps[$0] }
         guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
-            if !repairStrandedSelection(operand: planned.operand(abortedAt: abortedAt)),
-               state.field.mode.isInserting {
+            if planned.abortedAtTextCheck(abortedAt) {
+                if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
+                if state.field.mode.isInserting {
+                    state = VimReducer.reduce(state, .setMode(before.nonVisual))
+                }
+            } else if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
             // The monitor drained the payload it will never offer again.
@@ -289,14 +303,14 @@ private extension Sim {
                 applyReplace(content ?? pasteboard ?? "")
 
             case .captureSelectedText(let slot):
-                captures[slot] = TextModel(text).substring(selection)
+                captures[slot] = readSelectedText
 
             case .settle(let expectation):
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let converged = expectation.matches(
                     selection: unreadableSelection ? nil : readSelection,
                     length: text.utf16.count,
-                    selectedText: TextModel(text).substring(selection)
+                    selectedText: readSelectedText
                 )
                 if !converged {
                     settleFailures += 1

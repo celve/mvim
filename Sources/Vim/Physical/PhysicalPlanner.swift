@@ -44,12 +44,11 @@ public enum PhysicalPlanner {
             self.operand = operand
         }
 
-        /// `operand`, unless the run died checking the selected text: offsets that read as the operand prove nothing then.
-        public func operand(abortedAt index: Int?) -> Range<Int>? {
+        /// Whether the run died checking the selected text: other text is selected, however its offsets read.
+        public func abortedAtTextCheck(_ index: Int?) -> Bool {
             guard let index, plan.steps.indices.contains(index),
-                  case .settle(let expectation) = plan.steps[index],
-                  expectation.selectedText != nil else { return operand }
-            return nil
+                  case .settle(let expectation) = plan.steps[index] else { return false }
+            return expectation.selectedText != nil
         }
     }
 

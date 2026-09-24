@@ -211,8 +211,9 @@ When keys made the selection an edit is about to delete or type over, the edit f
 the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
 waits for `AXSelectedText` to equal the text the plan selected from `AXValue`. Chromium's
 rich-text fields misread the caret, so the keys can select other text while every offset reads
-back as planned. The check's `settle` line adds `text=(N)`, a length and never the text, on
-both sides; a `FAIL` whose `sel` and `len` agree failed on the text.
+back as planned. A failed check presses ← to drop that selection and leaves mvim in Normal
+mode. Its `settle` line adds `text=(N)`, a length and never the text, on both sides; a `FAIL`
+whose `sel` and `len` agree failed on the text.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
