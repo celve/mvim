@@ -665,8 +665,7 @@ precondition(PhysicalPlanner.plan(
 
 // MARK: - Lane B from a selection
 
-// Linear in Dia (`e14287.c993`) left Insert over a selection at 0 with `steps=!CC` and kept `0..8`:
-// lane B counts from a caret, so ← collapses the range first — its start, from either end.
+// Dia kept `0..8` here (`e14287.c993`): lane B must collapse a selection before counting.
 precondition(physical("<Esc>", text: "abcdefgh", selection: 0..<8, profile: readProfile, state: inserting).steps == [
     .press(.left, count: 1),
     .settle(Expectation(selection: 0..<0, length: 8)),
@@ -737,7 +736,7 @@ precondition(physical("ciw", text: "say hello world", selection: 5..<15, profile
     .commit(.setInsertStart(4)),
 ])
 
-// An AX write can overtake queued keys, so `insertText` without `writeSelection` settles between; ⌘V cannot.
+// Keys settle before an AX write, never before ⌘V.
 let insertOnlyProfile = CapabilityProfile(available: [
     .readText, .readLength, .readCaret, .readSelectedText, .insertText, .wholeDocument,
 ])
@@ -772,7 +771,7 @@ precondition(physical("p", text: "say hello\nworld", selection: 5..<9, profile: 
     .commit(.setCursor(nil)),
 ])
 
-// A `.sameElement` re-resolve keeps the cursor drawn while taking `writeSelection` away.
+// A re-resolve can drop `writeSelection` while the cursor stays drawn.
 precondition(PhysicalPlanner.plan(
     LogicalPlanner.plan(RawCommand("P"), state: stranded),
     snapshot: FieldSnapshot(capabilities: insertOnlyProfile, text: "abc", selection: 1..<2, cursor: 1..<2)

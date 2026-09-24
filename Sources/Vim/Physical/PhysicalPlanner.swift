@@ -60,13 +60,12 @@ public enum PhysicalPlanner {
         // The field shows our block cursor: physically collapse it to its
         // gap before the plan acts, so no step ever operates on the
         // presentation selection. Empty and bell-only plans skip this —
-        // they touch nothing and the cursor stays up. A re-resolve can drop
-        // `writeSelection` under a drawn cursor, and ← collapses it just as well
-        // once settled: an AX write behind a queued press can overtake it.
+        // they touch nothing and the cursor stays up.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             if profile.has(.writeSelection) {
                 steps.append(.setSelection(gap..<gap))
             } else {
+                // Settled, so a later AX write cannot overtake the ←.
                 steps.append(.press(.left, count: 1))
                 steps += settle(context, profile: profile)
             }
@@ -285,14 +284,12 @@ private extension PhysicalPlanner {
     /// Lane B's actuator: exact target, dumb keys. Deterministic regardless
     /// of the app's column memory — vertical first, then home, then right.
     ///
-    /// Counts run from the lower bound, so a selection is collapsed there
-    /// first — ← lands on its start in Cocoa and WebKit, from either end.
-    ///
     /// Its cross-line branch stays correct under a block-scoped field: this
     /// is only ever reached through a model that already passed the
     /// `wholeDocument` gate, so either the span is same-line or the block
     /// has real internal geography (a Notion code block).
     static func keyPath(from selection: Range<Int>, to: Int, model: TextModel) -> [PhysicalStep] {
+        // ← collapses a selection to its start from either end.
         var presses: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
         let from = selection.lowerBound
         guard from != to else { return presses }
@@ -771,7 +768,7 @@ private extension PhysicalPlanner {
             steps.append(.press(.selectRight, count: model.graphemes(in: range)))
         }
         context.selection = range
-        // The AX replacement would overtake the keys that select its range.
+        // Settled, so the AX replacement cannot overtake the selecting keys.
         if !profile.has(.writeSelection), profile.has(.insertText) {
             steps += settle(context, profile: profile)
         }
@@ -933,7 +930,7 @@ private extension PhysicalPlanner {
             ? .replaceSelection(text)
             : .clipboardInsert(text)
         if let selection = context.selection, context.text != nil {
-            // An AX insertion would overtake keys still queued from the positioning; a paste would not.
+            // An AX insertion can overtake queued keys; a paste cannot.
             let pressed = positioning.contains { if case .press = $0 { return true }; return false }
             let barrier = pressed && profile.has(.insertText) ? settle(context, profile: profile) : []
             context.applyEdit(range: selection, replacement: text)
