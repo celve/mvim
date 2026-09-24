@@ -101,6 +101,14 @@ public extension ParagraphBreaks {
         return min(lower, upper)..<max(lower, upper)
     }
 
+    /// `text`, the `AXValue` substring at `range`, as the field reads it: without its breaks.
+    func fieldText(_ text: String, at range: Range<Int>) -> String {
+        let inside = Set(offsets.filter { range.contains($0) }.map { $0 - range.lowerBound })
+        guard !inside.isEmpty else { return text }
+        let units = text.utf16.enumerated().filter { !inside.contains($0.offset) }.map(\.element)
+        return String(decoding: units, as: UTF16.self)
+    }
+
     /// The breaks once `range` holds `replacement`, each `\n` typed in taken as a new paragraph.
     func replacing(_ range: Range<Int>, with replacement: String) -> ParagraphBreaks {
         let delta = replacement.utf16.count - range.count

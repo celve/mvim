@@ -51,6 +51,7 @@ public final class Executor {
         public let expectation: Expectation
         public let observedSelection: Range<Int>?
         public let observedLength: Int?
+        public let observedSelectedText: String?
         public let answered: Bool
         public let polls: Int
         public let milliseconds: Int
@@ -83,6 +84,7 @@ public final class Executor {
             expectation: expectation,
             observedSelection: outcome.observedSelection,
             observedLength: outcome.observedLength,
+            observedSelectedText: outcome.observedSelectedText,
             answered: outcome.answered,
             polls: outcome.polls,
             milliseconds: outcome.milliseconds,
@@ -242,6 +244,7 @@ public final class Executor {
         let converged: Bool
         let observedSelection: Range<Int>?
         let observedLength: Int?
+        let observedSelectedText: String?
         let answered: Bool
         let polls: Int
         let milliseconds: Int
@@ -259,6 +262,7 @@ public final class Executor {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
+        var textSlot: Int?
         if expectation.selection != nil {
             selectionSlot = names.count
             names.append(kAXSelectedTextRangeAttribute)
@@ -267,11 +271,15 @@ public final class Executor {
             lengthSlot = names.count
             names.append(kAXNumberOfCharactersAttribute)
         }
+        if expectation.selectedText != nil {
+            textSlot = names.count
+            names.append(kAXSelectedTextAttribute)
+        }
         // An expectation that predicts nothing is already met — and must not
         // spend a round trip discovering that.
         guard !names.isEmpty else {
             return SettleOutcome(
-                converged: true, observedSelection: nil, observedLength: nil,
+                converged: true, observedSelection: nil, observedLength: nil, observedSelectedText: nil,
                 answered: true, polls: 0, milliseconds: 0
             )
         }
@@ -290,18 +298,20 @@ public final class Executor {
             if let slot = lengthSlot {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
+            let text = textSlot.flatMap { reads.string($0) }
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
+                && (textSlot == nil || text != nil)
             func outcome(_ converged: Bool) -> SettleOutcome {
                 SettleOutcome(
                     converged: converged,
-                    observedSelection: selection, observedLength: length,
+                    observedSelection: selection, observedLength: length, observedSelectedText: text,
                     answered: answered, polls: polls,
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            let matched = expectation.matches(selection: selection, length: length)
+            let matched = expectation.matches(selection: selection, length: length, selectedText: text)
             if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil {
                 // A caret the page left between elements reads as its block's start; only the markers
                 // place it, and only they tell a boundary's sides apart, so without them nothing converges.
@@ -310,7 +320,9 @@ public final class Executor {
                     let edge = expectation.edge.map { edge in
                         Snapshotter.paragraphSide(of: marked, upper: true).map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
                     } ?? true
-                    if edge, expectation.matches(selection: selection, length: length) { return outcome(true) }
+                    if edge, expectation.matches(selection: selection, length: length, selectedText: text) {
+                        return outcome(true)
+                    }
                 }
             } else if matched {
                 return outcome(true)

@@ -43,6 +43,13 @@ public enum PhysicalPlanner {
             self.rejection = rejection
             self.operand = operand
         }
+
+        /// Whether the run died checking the selected text: other text is selected, however its offsets read.
+        public func abortedAtTextCheck(_ index: Int?) -> Bool {
+            guard let index, plan.steps.indices.contains(index),
+                  case .settle(let expectation) = plan.steps[index] else { return false }
+            return expectation.selectedText != nil
+        }
     }
 
     /// The plan alone — tests and any caller with no use for the rest.
@@ -208,14 +215,15 @@ private extension PhysicalPlanner {
     /// mismatch is not a failure (the app, not us, decided what the keystroke
     /// did), so it proceeds instead of aborting the mode change behind it.
     static func settle(
-        _ context: Context, profile: CapabilityProfile, hard: Bool = true
+        _ context: Context, profile: CapabilityProfile, hard: Bool = true, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
         let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
         let expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
-            edge: context.breaksUncertain ? nil : context.edge(selection.upperBound)
+            edge: context.breaksUncertain ? nil : context.edge(selection.upperBound),
+            selectedText: selectedText
         )
         return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
@@ -240,6 +248,17 @@ private extension PhysicalPlanner {
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {
         steps.contains { if case .press = $0 { return true }; return false }
+    }
+
+    /// Before an edit replaces a selection keys made: Chromium's misread caret puts
+    /// them on other text while every offset reads back as planned (LIN-1533).
+    static func checkSelectedText(
+        _ text: String, context: Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        guard !text.isEmpty, !profile.has(.writeSelection), profile.has(.readSelectedText) else { return [] }
+        // AXSelectedText leaves out the breaks a paragraph field's offsets do.
+        let selected = context.selection.flatMap { selection in context.breaks?.fieldText(text, at: selection) } ?? text
+        return settle(context, profile: profile, selectedText: selected)
     }
 }
 
@@ -663,9 +682,8 @@ private extension PhysicalPlanner {
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
             let content = model.substring(selection)
-            var steps: [PhysicalStep] = profile.has(.insertText)
-                ? [.replaceSelection("")]
-                : [.press(.deleteBack, count: 1)]
+            var steps = checkSelectedText(content, context: context, profile: profile)
+            steps.append(profile.has(.insertText) ? .replaceSelection("") : .press(.deleteBack, count: 1))
             context.applyEdit(range: selection, replacement: "")
             // Blind (press) delete: soft — a mismatch must not abort the
             // `setMode(.insert)` that follows a `ciw`/`s`/`cc`.
@@ -721,11 +739,12 @@ private extension PhysicalPlanner {
         let action: PhysicalStep = profile.has(.insertText)
             ? .replaceSelection(replacement)
             : .typeText(replacement)
-        if let selection = context.selection, context.text != nil {
+        if let selection = context.selection, let model = context.model {
+            let check = checkSelectedText(model.substring(selection), context: context, profile: profile)
             context.applyEdit(range: selection, replacement: replacement)
             // Blind (typeText) over-type: soft, so a mismatch does not abort
             // the `setMode(.insert)` behind an `o`/`O`/`i`.
-            return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
         }
         context.invalidate()
         return [action]
@@ -771,10 +790,11 @@ private extension PhysicalPlanner {
         let action: PhysicalStep = profile.has(.insertText)
             ? .replaceSelection(transformed)
             : .typeText(transformed)
+        let check = checkSelectedText(original, context: context, profile: profile)
         context.applyEdit(range: selection, replacement: transformed)
         // Blind (typeText) transform: soft. The poll still lets the following
         // `collapseSelection` land its caret on a settled field.
-        return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+        return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
     }
 
     static let indentUnit = "    "
@@ -819,9 +839,11 @@ private extension PhysicalPlanner {
         }
         context.selection = range
         // Settled, so the AX replacement cannot overtake the selecting keys.
-        if presses(steps), profile.has(.insertText) {
-            steps += settle(context, profile: profile)
+        var barrier = checkSelectedText(model.substring(range), context: context, profile: profile)
+        if barrier.isEmpty, presses(steps), profile.has(.insertText) {
+            barrier = settle(context, profile: profile)
         }
+        steps += barrier
         steps.append(profile.has(.insertText) ? .replaceSelection(joined) : .typeText(joined))
         context.applyEdit(range: range, replacement: joined)
         // Settle follows the edit; blind (typeText) join is soft.
