@@ -226,6 +226,22 @@ public enum Snapshotter {
             }
             breaks = aligned
         }
-        return (breaks.valueRange(field) { end in marked.startsParagraph(upper: end == .upper) }, breaks)
+        // A caret's two ends share one marker, so its side is read once.
+        var caretSide: ParagraphBreaks.Side??
+        let range = breaks.valueRange(field) { end in
+            if marked.isCollapsed, let known = caretSide { return known }
+            let side = marked.side(upper: end == .upper).map(paragraphSide)
+            if marked.isCollapsed { caretSide = side }
+            return side
+        }
+        return (range, breaks)
+    }
+
+    static func paragraphSide(_ side: AX.MarkedSelection.NodeSide) -> ParagraphBreaks.Side {
+        switch side {
+        case .start: return .start(skipping: 0)
+        case .end: return .end
+        case .between(let listMarker): return .start(skipping: listMarker)
+        }
     }
 }

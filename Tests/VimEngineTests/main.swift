@@ -814,12 +814,14 @@ precondition(ParagraphBreaks(value: "ab\ncd", fieldText: "abxcd") == nil)
 precondition(ParagraphBreaks(value: "ab", fieldText: "ab ") == nil)
 precondition(ParagraphBreaks(value: "a\nb", fieldText: "a\n\nb") == nil)
 
-precondition(paras.valueRange(2..<2) { _ in true } == 3..<3)
-precondition(paras.valueRange(2..<2) { _ in false } == 2..<2)
+precondition(paras.valueRange(2..<2) { _ in .start(skipping: 0) } == 3..<3)
+precondition(paras.valueRange(2..<2) { _ in .end } == 2..<2)
 precondition(paras.valueRange(2..<2) { _ in nil } == nil, "a boundary nothing resolves is unknown")
 precondition(paras.valueRange(1..<3) { _ in preconditionFailure("unambiguous") } == 1..<4)
-precondition(paras.valueRange(2..<2) { $0 == .upper } == 2..<3, "the break alone")
-precondition(paras.valueRange(2..<2) { $0 == .lower } == 2..<3, "the break alone, selected backward")
+precondition(paras.valueRange(2..<2) { $0 == .upper ? .start(skipping: 0) : .end } == 2..<3, "the break alone")
+precondition(paras.valueRange(2..<2) { $0 == .lower ? .start(skipping: 0) : .end } == 2..<3, "the break alone, selected backward")
+let listItems = ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!
+precondition(listItems.valueRange(4..<4) { _ in .start(skipping: 2) } == 7..<7, "a caret between items sits past the next marker")
 
 precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))

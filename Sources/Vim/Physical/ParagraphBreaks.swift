@@ -50,6 +50,13 @@ public extension ParagraphBreaks {
         case upper
     }
 
+    /// Which side of a paragraph boundary an end is on.
+    enum Side: Equatable, Sendable {
+        case end
+        /// The next paragraph's start, past the `skipping` field characters of a list marker.
+        case start(skipping: Int)
+    }
+
     func fieldOffset(_ valueOffset: Int) -> Int {
         valueOffset - offsets.prefix { $0 < valueOffset }.count
     }
@@ -77,14 +84,16 @@ public extension ParagraphBreaks {
 
     /// A field selection in `AXValue` offsets; nil when a paragraph boundary stays unresolved.
     ///
-    /// `startsParagraph` is asked only at a boundary, and says whether that end
-    /// starts the next paragraph rather than ending the last one.
-    func valueRange(_ field: Range<Int>, startsParagraph: (End) -> Bool?) -> Range<Int>? {
+    /// `side` is asked only at a boundary.
+    func valueRange(_ field: Range<Int>, side: (End) -> Side?) -> Range<Int>? {
         func resolve(_ fieldOffset: Int, _ end: End) -> Int? {
             let candidates = valueOffsets(fieldOffset)
             guard candidates.count > 1 else { return candidates.lowerBound }
-            guard let starts = startsParagraph(end) else { return nil }
-            return starts ? candidates.upperBound : candidates.lowerBound
+            switch side(end) {
+            case .end?: return candidates.lowerBound
+            case .start(let skipping)?: return candidates.upperBound + skipping
+            case nil: return nil
+            }
         }
         guard let lower = resolve(field.lowerBound, .lower),
               let upper = resolve(field.upperBound, .upper) else { return nil }

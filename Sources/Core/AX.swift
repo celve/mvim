@@ -289,21 +289,30 @@ public enum AX {
         let lower: AXTextMarker
         let upper: AXTextMarker
 
-        /// At a paragraph boundary, whether an end starts the next paragraph rather than ending the last.
-        ///
-        /// Only a marker at the end of its own node ends the last one; a write can leave one between a
-        /// list's items, anchored at the list, which Chromium's node offset puts in the list's middle.
-        public func startsParagraph(upper isUpper: Bool) -> Bool? {
+        public var isCollapsed: Bool { CFEqual(lower, upper) }
+
+        /// Where an end sits in the node its marker is anchored to.
+        public enum NodeSide: Equatable, Sendable {
+            case start
+            case end
+            /// Between a container's children, where a write into a list leaves the caret; `listMarker`
+            /// is the length of the marker text the next child opens with, which no caret sits before.
+            case between(listMarker: Int)
+        }
+
+        /// Nil when a read fails, so a boundary stays unknown rather than guessed.
+        public func side(upper isUpper: Bool) -> NodeSide? {
             let marker = isUpper ? upper : lower
             guard let index = AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int else { return nil }
-            guard index > 0 else { return true }
-            guard let node = AX.parameterized("AXUIElementForTextMarker", marker, of: element),
-                  CFGetTypeID(node) == AXUIElementGetTypeID(),
-                  let range = AX.textMarkerRange(AX.parameterized("AXTextMarkerRangeForUIElement", node, of: element)),
-                  let length = AX.parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int else {
-                return false
-            }
-            return index < length
+            guard index > 0 else { return .start }
+            guard let anchor = AX.node(at: marker, in: element),
+                  let length = AX.textLength(of: anchor, in: element) else { return nil }
+            guard index < length else { return .end }
+            guard let next = AX.parameterized("AXNextTextMarkerForTextMarker", marker, of: element),
+                  CFGetTypeID(next) == AXTextMarkerGetTypeID(),
+                  let leaf = AX.node(at: next as! AXTextMarker, in: element) else { return nil }
+            guard AX.role(of: leaf) == "AXListMarker" else { return .between(listMarker: 0) }
+            return AX.textLength(of: leaf, in: element).map { .between(listMarker: $0) }
         }
     }
 
@@ -335,6 +344,20 @@ public enum AX {
         return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
     }
 
+    private static func node(at marker: AXTextMarker, in element: AXUIElement) -> AXUIElement? {
+        guard let node = parameterized("AXUIElementForTextMarker", marker, of: element),
+              CFGetTypeID(node) == AXUIElementGetTypeID() else { return nil }
+        return (node as! AXUIElement)
+    }
+
+    /// A node's text, measured the way its markers count it.
+    private static func textLength(of node: AXUIElement, in element: AXUIElement) -> Int? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else {
+            return nil
+        }
+        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+    }
+
     private static func fieldMarkers(of element: AXUIElement) -> (range: AXTextMarkerRange, start: AXTextMarker)? {
         guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", element, of: element)) else {
             return nil
@@ -347,7 +370,7 @@ public enum AX {
         return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
     }
 
-    fileprivate static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
+    private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
         guard let value, CFGetTypeID(value) == AXTextMarkerRangeGetTypeID() else { return nil }
         return (value as! AXTextMarkerRange)
     }

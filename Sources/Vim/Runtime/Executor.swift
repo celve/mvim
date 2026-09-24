@@ -307,7 +307,9 @@ public final class Executor {
                 // place it, and only they tell a boundary's sides apart, so without them nothing converges.
                 if let marked = AX.markedSelection(of: element) {
                     selection = marked.range
-                    let edge = expectation.edge.map { marked.startsParagraph(upper: true) == ($0 == .paragraphStart) } ?? true
+                    let edge = expectation.edge.map { edge in
+                        marked.side(upper: true).map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
+                    } ?? true
                     if edge, expectation.matches(selection: selection, length: length) { return outcome(true) }
                 }
             } else if matched {
