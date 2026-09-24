@@ -307,14 +307,10 @@ private extension PhysicalPlanner {
         }
     }
 
-    /// Where `gi` resumes and the drawn cursor are bookkeeping, not a course of action: they merge as world 0 has them.
     static func sameAction(_ a: PhysicalStep, _ b: PhysicalStep) -> Bool {
         switch (a, b) {
-        case (.settle, .settle), (.softSettle, .softSettle),
-             (.commit(.setInsertStart), .commit(.setInsertStart)), (.commit(.setCursor), .commit(.setCursor)):
-            return true
-        default:
-            return a == b
+        case (.settle, .settle), (.softSettle, .softSettle): return true
+        default: return a == b
         }
     }
 
@@ -733,10 +729,10 @@ private extension PhysicalPlanner {
     }
 
     /// In a field that claims the native keys, a register takes the text the field selected, which every reading of
-    /// its offsets agrees on — up to one line, since Chromium's leaves paragraph breaks out (LIN-1565).
+    /// its offsets agrees on — only within a line, since Chromium's leaves paragraph breaks out (LIN-1565).
     static func registersFromField(_ content: String, _ profile: CapabilityProfile) -> Bool {
         !profile.has(.writeSelection) && profile.has(.readSelectedText)
-            && Capability.nativeKeys.contains(where: profile.has) && !content.dropLast().contains("\n")
+            && Capability.nativeKeys.contains(where: profile.has) && !content.contains("\n")
     }
 
     /// ← first, so every key starts from a caret (LIN-1532).
@@ -1199,8 +1195,10 @@ private extension PhysicalPlanner {
             case .character, .block:   // block degrades to characterwise, v1
                 return putCharacterwise(payload, action: action, context: &context, profile: profile)
             case .line:
-                let text = payload.hasSuffix("\n") ? payload : payload + "\n"
-                return putLinewise(text, action: action, context: &context, profile: profile)
+                // Each copy is a whole line: a last line or `cc` leaves its register without the newline.
+                let line = content.text.hasSuffix("\n") ? content.text : content.text + "\n"
+                return putLinewise(String(repeating: line, count: max(1, count)), action: action,
+                                   context: &context, profile: profile)
             }
         }
     }

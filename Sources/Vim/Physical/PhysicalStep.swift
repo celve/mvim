@@ -87,7 +87,23 @@ public struct Branch: Equatable, Sendable {
     /// between courses of action is exactly what the settles exist to avoid.
     public static func chosen(from branches: [Branch], consistent: Set<Int>?) -> Branch? {
         let standing = branches.filter { branch in consistent.map { !branch.worlds.isDisjoint(with: $0) } ?? true }
-        return standing.count == 1 ? standing[0] : nil
+        guard let first = standing.first else { return nil }
+        guard standing.count > 1 else { return first }
+        // Tied readings may differ only in where `gi` resumes, which then goes unrecorded.
+        let unrecorded = first.steps.map(\.unrecorded)
+        guard standing.allSatisfy({ $0.steps.map(\.unrecorded) == unrecorded }) else { return nil }
+        return Branch(worlds: first.worlds, steps: unrecorded)
+    }
+}
+
+extension PhysicalStep {
+    var unrecorded: PhysicalStep {
+        switch self {
+        case .commit(.setInsertStart): return .commit(.setInsertStart(nil))
+        case .branch(let branches):
+            return .branch(branches.map { Branch(worlds: $0.worlds, steps: $0.steps.map(\.unrecorded)) })
+        default: return self
+        }
     }
 }
 

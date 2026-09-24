@@ -1943,7 +1943,7 @@ func chords(_ plan: PhysicalPlan) -> [Chord] {
 }
 
 let keyedDD = physical("dd", text: "one\ntwo\nthree", caret: 5, profile: keyProfile)
-precondition(keyedDD.traceShape == "P!P!P!GP?CC")
+precondition(keyedDD.traceShape == "P!P!P!P?CC")
 precondition(Array(keyedDD.steps[0...5]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
@@ -1963,11 +1963,12 @@ precondition(Array(keyedDD.steps[0...5]) == [
         alternatives: [.init(world: 1, selection: 3..<6, length: 13)]
     )),
 ])
-// The register is what the field selected, which every reading of its offsets agrees on.
-precondition(Array(keyedDD.steps[6...7]) == [.captureSelectedText(into: CaptureSlot(id: 0)), .press(.deleteBack, count: 1)])
-precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .line))))
-precondition(physical("3dd", text: "a\nb\nc\nd", caret: 0, profile: keyProfile).steps
-             .contains(.commit(.deleted(into: nil, content: .literal("a\nb\nc\n"), wise: .line))))
+// Within a line the register is what the field selected, which every reading agrees on; across a newline,
+// Chromium's selected text drops it, so the register keeps the matched reading's own text.
+precondition(physical("D", text: "one\ntwo", caret: 5, profile: keyProfile).steps
+             .contains(.commit(.deleted(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .character))))
+precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .literal("two\n"), wise: .line))))
+precondition(!keyedDD.steps.contains(.captureSelectedText(into: CaptureSlot(id: 0))))
 
 let oneLine = "one two"
 precondition(chords(physical("0", text: oneLine, caret: 5, profile: keyProfile)) == [.paragraphStart])
@@ -2079,6 +2080,26 @@ sim.readsOmitBreaks = true
 sim.type("cc")
 precondition(sim.text == "\nb\n\n" && sim.state.field.mode == .insert)
 precondition(sim.state.session.register("\"") == .content(RegisterContent(text: "c", wise: .line)))
+// Under Chromium's reads a yanked line keeps its newline, so `2p` puts two lines, and a blank line puts one.
+sim = Sim(text: "alpha\nbeta", caret: 1, profile: keyProfile)
+sim.emulatesKeys = true
+sim.readsOmitBreaks = true
+sim.type("yy")
+sim.type("2p")
+precondition(sim.text == "alpha\nalpha\nalpha\nbeta" && sim.settleFailures + sim.ambiguities == 0)
+// A register without its newline (the last line, `cc`) still puts whole lines, in every lane.
+for profile in [axProfile, keyProfile] {
+    sim = Sim(text: "alpha\nbeta", caret: 7, profile: profile)
+    sim.emulatesKeys = true
+    sim.type("yy")
+    sim.type("2p")
+    precondition(sim.text == "alpha\nbeta\nbeta\nbeta")
+}
+sim = Sim(text: "a\n\nb", caret: 2, profile: keyProfile)
+sim.emulatesKeys = true
+sim.readsOmitBreaks = true
+sim.type("yyp")
+precondition(sim.text == "a\n\n\nb" && sim.settleFailures + sim.ambiguities == 0)
 sim = Sim(text: "ab\ncdef\nghij", caret: 10, profile: keyProfile)
 sim.emulatesKeys = true
 sim.readsOmitBreaks = true
@@ -2142,6 +2163,10 @@ precondition(Branch.chosen(from: branches, consistent: [0, 1])?.worlds == [0, 1]
 precondition(Branch.chosen(from: branches, consistent: [1, 2]) == nil)
 precondition(Branch.chosen(from: branches, consistent: nil) == nil)
 precondition(Branch.chosen(from: branches, consistent: [3]) == nil)
+let resumes = [Branch(worlds: [0], steps: [.commit(.setMode(.insert)), .commit(.setInsertStart(1))]),
+               Branch(worlds: [1], steps: [.commit(.setMode(.insert)), .commit(.setInsertStart(4))])]
+precondition(Branch.chosen(from: resumes, consistent: [1])?.steps.last == .commit(.setInsertStart(4)))
+precondition(Branch.chosen(from: resumes, consistent: [0, 1])?.steps.last == .commit(.setInsertStart(nil)))
 precondition(PhysicalPlan(steps: [.press(.left, count: 1), .branch(branches)]).traceShape == "P{B|}")
 precondition(PhysicalPlan(steps: [.branch([Branch(worlds: [1], steps: [.typeText("x")])])]).mutatesText)
 precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))

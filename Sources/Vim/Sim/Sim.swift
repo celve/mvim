@@ -337,7 +337,9 @@ private extension Sim {
                 applyReplace(content ?? pasteboard ?? "")
 
             case .captureSelectedText(let slot):
-                captures[slot] = TextModel(text).substring(selection)
+                // Chromium's `AXSelectedText` leaves paragraph breaks out, as its offsets do (LIN-1565).
+                let selected = TextModel(text).substring(selection)
+                captures[slot] = readsOmitBreaks ? String(selected.filter { $0 != "\n" }) : selected
 
             case .settle(let expectation):
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
