@@ -737,12 +737,52 @@ precondition(physical("ciw", text: "say hello world", selection: 5..<15, profile
     .commit(.setInsertStart(4)),
 ])
 
+// An AX write queued behind keys can land before them, so `insertText` without `writeSelection` settles between.
+let insertOnlyProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .insertText, .wholeDocument,
+])
+precondition(physical("p", text: "say hello\nworld", selection: 5..<9, profile: insertOnlyProfile, state: stranded).steps == [
+    .press(.left, count: 1),
+    .press(.right, count: 1),
+    .settle(Expectation(selection: 6..<6, length: 15)),
+    .replaceSelection("XY"),
+    .settle(Expectation(selection: 8..<8, length: 17)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("J", text: "say hello\nworld", selection: 5..<9, profile: insertOnlyProfile).steps == [
+    .press(.left, count: 1),
+    .press(.left, count: 5),
+    .press(.selectRight, count: 15),
+    .settle(Expectation(selection: 0..<15, length: 15)),
+    .replaceSelection("say hello world"),
+    .settle(Expectation(selection: 15..<15, length: 15)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("p", text: "say hello\nworld", selection: 5..<9, profile: readProfile, state: stranded).steps == [
+    .press(.left, count: 1),
+    .press(.right, count: 1),
+    .clipboardInsert("XY"),
+    .softSettle(Expectation(selection: 8..<8, length: 17)),
+    .commit(.setCursor(nil)),
+])
+
 // A `.sameElement` re-resolve keeps the cursor drawn while taking `writeSelection` away.
+precondition(PhysicalPlanner.plan(
+    LogicalPlanner.plan(RawCommand("P"), state: stranded),
+    snapshot: FieldSnapshot(capabilities: insertOnlyProfile, text: "abc", selection: 1..<2, cursor: 1..<2)
+).steps == [
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 1..<1, length: 3)),
+    .replaceSelection("XY"),
+    .settle(Expectation(selection: 3..<3, length: 5)),
+    .commit(.setCursor(nil)),
+])
 precondition(PhysicalPlanner.plan(
     LogicalPlanner.plan(RawCommand("x"), state: .initial),
     snapshot: FieldSnapshot(capabilities: readProfile, text: "abc", selection: 1..<2, cursor: 1..<2)
 ).steps == [
     .press(.left, count: 1),
+    .settle(Expectation(selection: 1..<1, length: 3)),
     .press(.selectRight, count: 1),
     .settle(Expectation(selection: 1..<2, length: 3)),
     .press(.deleteBack, count: 1),

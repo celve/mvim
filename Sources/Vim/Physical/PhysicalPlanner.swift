@@ -61,9 +61,15 @@ public enum PhysicalPlanner {
         // gap before the plan acts, so no step ever operates on the
         // presentation selection. Empty and bell-only plans skip this —
         // they touch nothing and the cursor stays up. A re-resolve can drop
-        // `writeSelection` under a drawn cursor, and ← collapses it just as well.
+        // `writeSelection` under a drawn cursor, and ← collapses it just as well
+        // once settled: an AX write behind a queued press can overtake it.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
-            steps.append(profile.has(.writeSelection) ? .setSelection(gap..<gap) : .press(.left, count: 1))
+            if profile.has(.writeSelection) {
+                steps.append(.setSelection(gap..<gap))
+            } else {
+                steps.append(.press(.left, count: 1))
+                steps += settle(context, profile: profile)
+            }
         }
         for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
@@ -765,6 +771,10 @@ private extension PhysicalPlanner {
             steps.append(.press(.selectRight, count: model.graphemes(in: range)))
         }
         context.selection = range
+        // The AX replacement would overtake the keys that select its range.
+        if !profile.has(.writeSelection), profile.has(.insertText) {
+            steps += settle(context, profile: profile)
+        }
         steps.append(profile.has(.insertText) ? .replaceSelection(joined) : .typeText(joined))
         context.applyEdit(range: range, replacement: joined)
         // Settle follows the edit; blind (typeText) join is soft.
@@ -899,15 +909,17 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep] {
-        let steps: [PhysicalStep]
+        var steps: [PhysicalStep] = []
         if profile.has(.writeSelection) {
             steps = [.setSelection(target..<target)]
         } else if let model = context.model, let selection = context.selection {
             steps = keyPath(from: selection, to: target, model: model)
-        } else {
-            steps = []
         }
         context.selection = target..<target
+        // With `insertText` the put behind keys can be an AX write, which would overtake them.
+        if !profile.has(.writeSelection), !steps.isEmpty, profile.has(.insertText) {
+            steps += settle(context, profile: profile)
+        }
         return steps
     }
 
