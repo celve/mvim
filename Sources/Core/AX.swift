@@ -295,9 +295,8 @@ public enum AX {
         public enum NodeSide: Equatable, Sendable {
             case start
             case end
-            /// Between a container's children, where a write into a list leaves the caret; `listMarker`
-            /// is the length of the marker text the next child opens with, which no caret sits before.
-            case between(listMarker: Int)
+            /// Between a container's children, where a write into a list leaves the caret.
+            case between
         }
 
         /// Nil when a read fails, so a boundary stays unknown rather than guessed.
@@ -307,12 +306,34 @@ public enum AX {
             guard index > 0 else { return .start }
             guard let anchor = AX.node(at: marker, in: element),
                   let length = AX.textLength(of: anchor, in: element) else { return nil }
-            guard index < length else { return .end }
+            return index < length ? .between : .end
+        }
+
+        /// What the text after an end opens with, which decides where typing there would land.
+        public enum Opening: Equatable, Sendable {
+            case text
+            /// A list marker, which no caret sits before: typing lands past its `length`.
+            case listMarker(length: Int)
+            /// Text the page keeps the caret out of: typing lands before it.
+            case uneditable
+        }
+
+        /// `editable: false` skips the editability read, for an end already inside the next paragraph's text.
+        public func opening(upper isUpper: Bool, editable: Bool) -> Opening? {
+            let marker = isUpper ? upper : lower
             guard let next = AX.parameterized("AXNextTextMarkerForTextMarker", marker, of: element),
                   CFGetTypeID(next) == AXTextMarkerGetTypeID(),
                   let leaf = AX.node(at: next as! AXTextMarker, in: element) else { return nil }
-            guard AX.role(of: leaf) == "AXListMarker" else { return .between(listMarker: 0) }
-            return AX.textLength(of: leaf, in: element).map { .between(listMarker: $0) }
+            let reads = AX.attributes([kAXRoleAttribute, kAXParentAttribute], of: leaf)
+            // The marker's text is a static text child of the list marker.
+            var listMarker = reads.string(0) == "AXListMarker" ? leaf : nil
+            if listMarker == nil, let parent = reads.element(1), AX.role(of: parent) == "AXListMarker" {
+                listMarker = parent
+            }
+            if let listMarker {
+                return AX.textLength(of: listMarker, in: element).map { .listMarker(length: $0) }
+            }
+            return !editable || AX.rangeSettable(leaf) ? .text : .uneditable
         }
     }
 

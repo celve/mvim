@@ -230,18 +230,25 @@ public enum Snapshotter {
         var caretSide: ParagraphBreaks.Side??
         let range = breaks.valueRange(field) { end in
             if marked.isCollapsed, let known = caretSide { return known }
-            let side = marked.side(upper: end == .upper).map(paragraphSide)
+            let side = paragraphSide(of: marked, upper: end == .upper)
             if marked.isCollapsed { caretSide = side }
             return side
         }
         return (range, breaks)
     }
 
-    static func paragraphSide(_ side: AX.MarkedSelection.NodeSide) -> ParagraphBreaks.Side {
-        switch side {
-        case .start: return .start(skipping: 0)
-        case .end: return .end
-        case .between(let listMarker): return .start(skipping: listMarker)
+    /// Where typing at a boundary end would land; nil when a read fails.
+    static func paragraphSide(of marked: AX.MarkedSelection, upper: Bool) -> ParagraphBreaks.Side? {
+        switch marked.side(upper: upper) {
+        case .end?: return .end
+        case nil: return nil
+        case let side?:
+            switch marked.opening(upper: upper, editable: side == .between) {
+            case .text?: return .start(skipping: 0)
+            case .listMarker(let length)?: return .start(skipping: length)
+            case .uneditable?: return .end
+            case nil: return nil
+            }
         }
     }
 }
