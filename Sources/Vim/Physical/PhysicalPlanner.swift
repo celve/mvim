@@ -564,8 +564,8 @@ private extension PhysicalPlanner {
         Array(repeatElement(chords, count: max(0, times)).joined())
     }
 
-    /// Presses `chords`, then settles on `landing`; a named key is blamed if the field reads as it did before them
-    /// and no caret that read could mean had nowhere to go, or if a key that leaves a caret left a selection.
+    /// Presses `chords`, then settles on `landing`; a named key is blamed if a key that leaves a caret left a selection,
+    /// or, outside web content, if the field reads as it did before them where they had somewhere to go.
     static func keys(
         _ chords: [Chord], blaming atom: Capability?, to landing: Range<Int>,
         context: inout Context, profile: CapabilityProfile
@@ -577,7 +577,8 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            let unmoved = mayStayPut(chords, from: before, in: model, web: context.webContent) ? [] : [before]
+            // Chromium's raw reads cannot tell a key that did nothing from one that had nowhere to go (LIN-1564).
+            let unmoved = context.webContent || mayStayPut(chords, from: before, in: model) ? [] : [before]
             guard !unmoved.isEmpty || leavesCaret else { return nil }
             return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
         }
@@ -592,32 +593,12 @@ private extension PhysicalPlanner {
         return steps + settle(context, profile: profile, blame: blame)
     }
 
-    /// Whether the keys may rightly leave the read as it was; in web content also from a caret Chromium's rule 1 could
-    /// mean, past a list marker, or at a line start, where rule 2 reads any caret between that block's elements (LIN-1533).
-    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel, web: Bool) -> Bool {
+    /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel) -> Bool {
         guard read.isEmpty else { return true }
-        let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
-        if web, leavesCaret, model.lineStart(of: read.lowerBound) == read.lowerBound { return true }
-        let starts: [Chord] = [.paragraphStart, .documentStart]
-        let toStart = web && chords.contains { starts.contains(Chord($0.key, $0.modifiers.subtracting(.shift))) }
-        let carets = [read.lowerBound] + (web ? model.offsets(breaksOmitted: read.lowerBound) : [])
-        return carets.contains { caret in
-            var keys = KeyModel(text: model.text, anchor: caret, focus: caret)
-            guard chords.allSatisfy({ keys.press($0) }) else { return true }
-            return keys.selection == caret..<caret || (toStart && followsMarker(caret, in: model))
-        }
-    }
-
-    /// Chromium's `AXValue` spells a list item's marker ("• ", "◦ ", "▪ ", "1. ", "a. ") before its text, and no key
-    /// puts a caret before it.
-    static func followsMarker(_ caret: Int, in model: TextModel) -> Bool {
-        let prefix = model.substring(model.lineStart(of: caret)..<caret)
-        guard prefix.hasSuffix(" ") else { return false }
-        let marker = prefix.dropLast()
-        if ["•", "◦", "▪"].contains(String(marker)) { return true }
-        guard marker.count >= 2, marker.count <= 5, marker.hasSuffix(".") else { return false }
-        let label = marker.dropLast()
-        return label.allSatisfy(\.isNumber) || label.allSatisfy { "ivxlc".contains($0) } || (label.count == 1 && label.allSatisfy(\.isLetter))
+        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound)
+        guard chords.allSatisfy({ keys.press($0) }) else { return true }
+        return keys.selection == read
     }
 
     /// In a field that claims the native keys, a yank within a line takes the text the field selected, which holds

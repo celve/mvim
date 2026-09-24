@@ -206,9 +206,9 @@ X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSele
 Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
 a blind keypress, which can never name the capability it failed, so it rings without teaching
 the learner anything. A `!` after a native key names that key, and a failure blames it
-(`fail=lineStartKey`) only when the field still reads as it did before the key and no caret
-that read could mean was already where the key goes, or when a caret key left a selection. A
-landing somewhere else aborts without learning.
+(`fail=lineStartKey`) when a caret key left a selection, or, outside web content, when the field
+still reads as it did before the key although the key had somewhere to go. A landing somewhere
+else aborts without learning.
 
 When keys made the selection an edit is about to delete or type over, the edit first checks
 the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
@@ -276,9 +276,9 @@ delete first and join lines at a line end.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
-and caret mvim can read. A key that does nothing, or a caret key that leaves a selection (as
-a select-all binding would), is learned off for that surface like a write that lies, and mvim
-counts arrows there again; switch it back on from the menu. A key that lands somewhere else
+and caret mvim can read. A caret key that leaves a selection (as a select-all binding would),
+or outside web content a key that does nothing, is learned off for that surface like a write
+that lies, and mvim counts arrows there again; switch it back on from the menu. A key that lands somewhere else
 aborts the command without learning, because Chromium's reads can put a correct landing there;
 turn such a key off for the surface from the menu.
 
@@ -286,12 +286,11 @@ Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the car
 paragraph breaks before it (LIN-1533), so past the first paragraph its offsets drift from
 `AXValue`'s. Until those reads are corrected (LIN-1564), a command there stops with a beep at
 the first settle that sees the drift. Keys are pressed even where a command has nothing to select
-or `j`/`k` stays on its line, so that settle still checks the caret the command starts from. In
-web content a key that did nothing is not blamed where a caret the read could mean had nowhere to
-go: at the line's start or end, past a list marker ("• ", "1. "), or, for a key that leaves a
-caret, at a line start, which is how Chromium reads a caret between elements of that block.
-Elsewhere reads are exact, and a key that did nothing is blamed. In such a field a yank within
-one line takes its register from the text the field selected.
+or `j`/`k` stays on its line, so that settle still checks the caret the command starts from.
+Those reads cannot tell a key that did nothing from one that had nowhere to go (a caret already
+at the line's start reads like one mid-line), so in web content only a caret key that leaves a
+selection is blamed until the reads are corrected. In such a field a yank within one line takes
+its register from the text the field selected.
 
 ## Running alongside Vibe
 

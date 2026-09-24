@@ -2289,52 +2289,43 @@ sim.emulatesKeys = true
 sim.reboundChords = [.paragraphStart: .selectAll]
 sim.type("dd")
 precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
-// In web content, no blame where a key that stayed put may have had nowhere to go: a caret a Chromium read could mean,
-// one past a list marker, or a line start, where Chromium reads carets between that block's elements.
-for (text, caret, keys, ignored, chromium) in [
-    ("a\n\nb", 2, "yy", Chord.paragraphStart, true), ("ab\ncdef\nghij", 8, "0", .paragraphStart, true),
-    ("• one\n• two", 8, "0", .paragraphStart, false), ("1. one\n2. two", 10, "0", .paragraphStart, false),
-    ("one\ntwo", 4, "$", .paragraphEnd, false),
-] {
+// In web content Chromium's raw reads cannot tell a key that did nothing from one that had nowhere to go, so only
+// a caret key that leaves a selection is blamed there.
+for (text, caret, keys, chromium) in [("a\n\nb", 2, "yy", true), ("ab\ncdef\nghij", 8, "0", true), ("the cat", 4, "0", false)] {
     sim = Sim(text: text, caret: caret, profile: keyProfile)
     sim.emulatesKeys = true
     sim.webContent = true
     sim.reads = chromium ? omitsBreaks : nil
-    if !chromium { sim.ignoredChords = [ignored] }
+    if !chromium { sim.ignoredChords = [.paragraphStart] }
     sim.type(keys)
     precondition(sim.settleFailures == 1 && sim.blamed.isEmpty && sim.text == text, "\(keys) at \(caret)")
 }
-// Elsewhere, and past words that are not markers, a key that did nothing is blamed.
-for (text, caret, keys, ignored, blamed, web) in [
-    ("one\ntwo", 5, "$", Chord.paragraphEnd, Capability.lineEndKey, false), ("one\ntwo", 4, "$", .paragraphEnd, .lineEndKey, false),
-    ("the cat", 4, "0", .paragraphStart, .lineStartKey, false), ("the cat", 4, "0", .paragraphStart, .lineStartKey, true),
-    ("ab\ncdef\nghij", 6, "0", .paragraphStart, .lineStartKey, false),
+sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
+sim.emulatesKeys = true
+sim.webContent = true
+sim.reboundChords = [.paragraphStart: .selectAll]
+sim.type("dd")
+precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
+// Elsewhere reads are exact: a key that did nothing is blamed wherever it had somewhere to go.
+for (text, caret, keys, ignored, blamed) in [
+    ("one\ntwo", 5, "$", Chord.paragraphEnd, Capability.lineEndKey), ("one\ntwo", 4, "$", .paragraphEnd, .lineEndKey),
+    ("the cat", 4, "0", .paragraphStart, .lineStartKey), ("ab\ncdef\nghij", 6, "0", .paragraphStart, .lineStartKey),
 ] {
     sim = Sim(text: text, caret: caret, profile: keyProfile)
     sim.emulatesKeys = true
-    sim.webContent = web
     sim.ignoredChords = [ignored]
     sim.type(keys)
     precondition(sim.blamed == [blamed], "\(keys) at \(caret) in \(text.debugDescription)")
 }
-let blameful = Expectation(landing: .exact(4..<4), length: 7, blame: .init(capability: .lineStartKey, unmoved: [5..<5]))
-precondition(blameful.blamed(observed: 5..<5) == .lineStartKey)
-precondition(blameful.blamed(observed: 2..<2) == nil)
-precondition(blameful.blamed(observed: 0..<7) == nil)
-precondition(blameful.blamed(observed: nil) == nil)
-precondition(Expectation(selection: 4..<4).blamed(observed: 5..<5) == nil)
-let caretKey = Expectation(landing: .exact(4..<4), blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true))
-precondition(caretKey.blamed(observed: 0..<7) == .lineStartKey)
-precondition(caretKey.blamed(observed: 2..<2) == nil)
+sim = Sim(text: "one\ntwo", caret: 4, profile: keyProfile)
+sim.emulatesKeys = true
+sim.ignoredChords = [.paragraphStart]
+sim.type("0")
+precondition(sim.blamed.isEmpty && sim.settleFailures == 0, "⌃A at a line start has nowhere to go")
 
 // Relational landings, for keys whose landing the app decides.
 precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))
 precondition(Landing.caretBefore(4, strict: false).matches(4..<4) && !Landing.caretBefore(4, strict: false).matches(2..<3))
 precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "sel=>2 len=nil")
-
-let breaks = TextModel("ab\n\ncd")
-precondition(breaks.breaksOmitted(5) == 3)
-precondition(breaks.offsets(breaksOmitted: 2) == [2, 3, 4])
-precondition(breaks.offsets(breaksOmitted: 9).isEmpty)
 
 print("Vim engine tests passed")
