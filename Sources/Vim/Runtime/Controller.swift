@@ -296,7 +296,7 @@ public final class Controller {
         }
         guard executed else {
             // A selection we could not collapse is one the app would type over.
-            if !repairStrandedSelection(on: binding, operand: planned.operand),
+            if !repairStrandedSelection(on: binding, operand: planned.operand(abortedAt: evidence.abortedAt)),
                state.field.mode.isInserting {
                 executor.commit(.setMode(before.nonVisual), state: &state)
             }

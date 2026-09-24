@@ -154,15 +154,22 @@ public struct Expectation: Equatable, Sendable {
     public let selection: Range<Int>?
     public let length: Int?
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil) {
+    /// `AXSelectedText`: offsets alone pass a selection Chromium read shifted (LIN-1533), its text does not.
+    public let selectedText: String?
+
+    public init(selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil) {
         self.selection = selection
         self.length = length
+        self.selectedText = selectedText
     }
 
     /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
-    public func matches(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
+    public func matches(
+        selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String? = nil
+    ) -> Bool {
         if let selection, observed != selection { return false }
         if let length, observedLength != length { return false }
+        if let selectedText, observedText != selectedText { return false }
         return true
     }
 }
@@ -170,10 +177,12 @@ public struct Expectation: Equatable, Sendable {
 // MARK: - Recorder
 
 extension Expectation {
-    /// `sel=4..9 len=15`. Also renders an observation, which is the same shape.
+    /// `sel=4..9 len=15`, then `text=(5)` — a length, never the text. Also renders an observation,
+    /// which is the same shape.
     var traceFields: String {
         let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
-        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        let text = selectedText.map { " text=(\($0.utf16.count))" } ?? ""
+        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")" + text
     }
 }
 

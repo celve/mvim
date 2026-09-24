@@ -329,6 +329,7 @@ precondition(ciwB.steps == [
     // Blind SELECT stays a hard settle: if the range mispredicts, aborting is
     // safer than letting the delete hit the wrong text.
     .settle(Expectation(selection: 4..<9, length: 15)),
+    .settle(Expectation(selection: 4..<9, length: 15, selectedText: "hello")),
     .press(.deleteBack, count: 1),
     // Blind DELETE is soft: a mismatch here must NOT abort the setMode below —
     // this is the ChatGPT "ciw won't enter insert" bug.
@@ -729,6 +730,7 @@ precondition(physical("ciw", text: "say hello world", selection: 5..<15, profile
     .press(.left, count: 1),
     .press(.selectRight, count: 5),
     .settle(Expectation(selection: 4..<9, length: 15)),
+    .settle(Expectation(selection: 4..<9, length: 15, selectedText: "hello")),
     .press(.deleteBack, count: 1),
     .softSettle(Expectation(selection: 4..<4, length: 10)),
     .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
@@ -758,7 +760,7 @@ precondition(physical("J", text: "say hello\nworld", selection: 5..<9, profile: 
     .press(.left, count: 1),
     .press(.left, count: 5),
     .press(.selectRight, count: 15),
-    .settle(Expectation(selection: 0..<15, length: 15)),
+    .settle(Expectation(selection: 0..<15, length: 15, selectedText: "say hello\nworld")),
     .replaceSelection("say hello world"),
     .settle(Expectation(selection: 15..<15, length: 15)),
     .commit(.setCursor(nil)),
@@ -790,11 +792,89 @@ precondition(PhysicalPlanner.plan(
     .settle(Expectation(selection: 1..<1, length: 3)),
     .press(.selectRight, count: 1),
     .settle(Expectation(selection: 1..<2, length: 3)),
+    .settle(Expectation(selection: 1..<2, length: 3, selectedText: "b")),
     .press(.deleteBack, count: 1),
     .softSettle(Expectation(selection: 1..<1, length: 2)),
     .commit(.deleted(into: nil, content: .literal("b"), wise: .character)),
     .commit(.setCursor(nil)),
 ])
+
+// MARK: - The selected-text check
+
+/// For each step that deletes or types, the text the settle right before it checks.
+func checkedTexts(_ plan: PhysicalPlan) -> [String?] {
+    var texts: [String?] = []
+    for (index, step) in plan.steps.enumerated() {
+        switch step {
+        case .press(.deleteBack, _), .typeText, .replaceSelection:
+            if index > 0, case .settle(let expectation) = plan.steps[index - 1] {
+                texts.append(expectation.selectedText)
+            } else {
+                texts.append(nil)
+            }
+        default:
+            break
+        }
+    }
+    return texts
+}
+
+let twoLines = "say hello world\nnext line"
+let laneBEdits: [(keys: String, caret: Int, text: [String?])] = [
+    ("ciw", 6, ["hello"]), ("diw", 6, ["hello"]), ("x", 6, ["l"]), ("3x", 6, ["llo"]), ("X", 6, ["e"]),
+    ("dw", 4, ["hello "]), ("de", 4, ["hello"]), ("cw", 4, ["hello"]), ("D", 4, ["hello world"]),
+    ("C", 4, ["hello world"]), ("s", 4, ["h"]), ("S", 4, ["say hello world"]), ("cc", 4, ["say hello world"]),
+    ("dd", 4, ["say hello world\n"]), ("rZ", 4, ["h"]), ("3rZ", 4, ["hel"]), ("~", 4, ["h"]),
+    ("g~iw", 4, ["hello"]), ("gUiw", 4, ["hello"]), (">>", 4, ["say hello world\n"]),
+    ("J", 4, ["say hello world\nnext line"]),
+]
+for edit in laneBEdits {
+    for profile in [readProfile, insertOnlyProfile] {
+        precondition(checkedTexts(physical(edit.keys, text: twoLines, caret: edit.caret, profile: profile)) == edit.text,
+                     "lane B must check the text \(edit.keys) replaces")
+    }
+}
+var visualWord = VimState.initial
+visualWord.field.mode = .visual(VimState.VisualContext(kind: .character, anchor: 4))
+for keys in ["d", "x", "c", "s", "~", "u"] {
+    let steps = PhysicalPlanner.plan(
+        LogicalPlanner.plan(RawCommand(keys), state: visualWord),
+        snapshot: FieldSnapshot(capabilities: readProfile, text: twoLines, selection: 4..<9, anchor: 4)
+    )
+    precondition(checkedTexts(steps) == ["hello"], "Visual \(keys) must check the selection it replaces")
+}
+
+func checksText(_ plan: PhysicalPlan) -> Bool {
+    plan.steps.contains {
+        if case .settle(let expectation) = $0 { return expectation.selectedText != nil }
+        return false
+    }
+}
+// An AX write made the selection, so lane A is exactly as it was.
+for edit in laneBEdits {
+    for profile in [axProfile, noCursorProfile, noInsertProfile, blockProfile] {
+        precondition(!checksText(physical(edit.keys, text: twoLines, caret: edit.caret, profile: profile)),
+                     "lane A must not check the text \(edit.keys) replaces")
+    }
+}
+let readNothingSelected = CapabilityProfile(available: [.readText, .readLength, .readCaret, .wholeDocument])
+for edit in laneBEdits {
+    precondition(!checksText(physical(edit.keys, text: twoLines, caret: edit.caret, profile: readNothingSelected)))
+}
+precondition(physical("ciw", text: "say hello world", caret: 6, profile: readNothingSelected).traceShape == "P2P5!P?CCC")
+var yankable = VimState.initial
+yankable.session.registers.unnamed = .content(RegisterContent(text: "XY", wise: .character))
+for keys in ["yiw", "yy", "w", "p", "P", "o", "O", "A", "i", "u"] {
+    precondition(!checksText(physical(keys, text: twoLines, caret: 6, profile: readProfile, state: yankable)),
+                 "\(keys) replaces no selection")
+}
+
+let checkedCiw = traced("ciw", text: "say hello world", caret: 6, profile: readProfile)
+precondition(checkedCiw.plan.traceShape == "P2P5!!P?CCC")
+precondition(checkedCiw.operand == 4..<9)
+precondition(checkedCiw.operand(abortedAt: nil) == 4..<9)
+precondition(checkedCiw.operand(abortedAt: 2) == 4..<9)
+precondition(checkedCiw.operand(abortedAt: 3) == nil)
 
 // MARK: - KeyNotation
 
@@ -1248,7 +1328,7 @@ precondition(refused.selection.isEmpty)
 var dotState = VimState.initial
 dotState.session.lastChange = VimState.ChangeMemory(body: "ciw", insert: "bye")
 let dotB = physical(".", text: "say hello world", caret: 6, profile: readProfile, state: dotState)
-precondition(dotB.traceShape == "P2P5!P?CCCT?P!CC")
+precondition(dotB.traceShape == "P2P5!!P?CCCT?P!CC")
 precondition(dotB.steps.contains(.typeText("bye")))
 let dotC = physical(".", profile: blindProfile, state: dotState)
 precondition(dotC.traceShape == "PPXCCCTPCC")
@@ -1404,6 +1484,76 @@ precondition(sim.state.session.register("\"") == .pasteboard(wise: .character))
 precondition(sim.perform([.setSelection(4..<7), .clipboardCopy]))
 precondition(sim.pasteboard == "two")
 precondition(sim.text == "one two")
+
+// MARK: - Lane B end to end, and hosts that misread the caret
+
+func typed(_ keys: String, text: String, caret: Int, profile: CapabilityProfile) -> Sim {
+    var host = Sim(text: text, caret: caret, profile: profile)
+    host.type(keys)
+    return host
+}
+for edit in laneBEdits {
+    let laneB = typed(edit.keys, text: twoLines, caret: edit.caret, profile: readProfile)
+    precondition(laneB.text == typed(edit.keys, text: twoLines, caret: edit.caret, profile: axProfile).text,
+                 "lane B must edit what lane A edits: \(edit.keys)")
+    precondition(laneB.settleFailures == 0 && laneB.unsupportedSteps == 0, edit.keys)
+}
+sim = Sim(text: "say hello world", caret: 6, profile: readProfile)
+sim.type("ciwbye")
+sim.feed("<Esc>")
+precondition(sim.text == "say bye world")
+precondition(sim.caret == 6)
+precondition(sim.state.field.mode == .normal)
+precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
+precondition(sim.settleFailures == 0 && sim.unsupportedSteps == 0)
+sim = typed("viwd", text: "say hello world", caret: 6, profile: readProfile)
+precondition(sim.text == "say  world" && sim.settleFailures == 0)
+
+/// Chromium's rule 1 (LIN-1533): the read leaves out the breaks before the caret.
+func omitsBreaks(_ offset: Int, _ text: String) -> Int {
+    offset - TextModel(text).newlineCount(in: 0..<offset)
+}
+let paragraphs = "alpha beta gamma\ndelta epsilon zeta\neta theta iota"
+
+var misread = Sim(text: paragraphs, caret: 7, profile: readProfile)
+misread.reads = omitsBreaks
+misread.type("ciwX")
+misread.feed("<C-[>")
+precondition(misread.text == "alpha X gamma\ndelta epsilon zeta\neta theta iota")
+precondition(misread.state.field.mode == .normal && misread.settleFailures == 0)
+
+// Paragraph 2: the keys select "psilon " while every offset reads as "epsilon".
+misread = Sim(text: paragraphs, caret: 24, profile: readProfile)
+misread.reads = omitsBreaks
+misread.type("ciw")
+precondition(misread.text == paragraphs)
+precondition(misread.settleFailures == 1)
+precondition(misread.selection == 24..<31 && misread.readSelection == 23..<30)
+precondition(misread.state.field.mode == .normal, "the operand's offsets must not keep Insert over other text")
+precondition(misread.state.session.register("-") == nil && misread.state.session.lastChange == nil)
+
+var unchecked = Sim(text: paragraphs, caret: 24, profile: readNothingSelected)
+unchecked.reads = omitsBreaks
+unchecked.type("ciwX")
+unchecked.feed("<C-[>")
+precondition(unchecked.text == "alpha beta gamma\ndelta eXzeta\neta theta iota")
+precondition(unchecked.settleFailures == 0)
+
+for keys in ["x", "3x", "X", "dw", "de", "diw", "D", "C", "s", "S", "cc", "dd", "rZ", "~", "g~iw", "J", "viwd", "viwc"] {
+    misread = Sim(text: paragraphs, caret: 24, profile: readProfile)
+    misread.reads = omitsBreaks
+    misread.type(keys)
+    precondition(misread.text == paragraphs && misread.settleFailures == 1, "\(keys) must ring, not edit, in paragraph 2")
+    precondition(!misread.state.field.mode.isInserting, keys)
+}
+
+// Rule 2: a caret at an element boundary reads as its paragraph's start.
+for keys in ["ciw", "x", "dw", "dd", "~"] {
+    misread = Sim(text: paragraphs, caret: 24, profile: readProfile)
+    misread.reads = { offset, text in offset == 24 ? 16 : omitsBreaks(offset, text) }
+    misread.type(keys)
+    precondition(misread.text == paragraphs, "\(keys) must not edit from a caret read as its block's start")
+}
 
 // MARK: - Focus transitions
 
@@ -1786,7 +1936,7 @@ func traced(
 
 precondition(ciwA.traceShape == "W!R!CCC")
 precondition(physical("ciw", text: "say hello world", caret: 6, profile: readProfile).traceShape
-             == "P2P5!P?CCC")
+             == "P2P5!!P?CCC")
 precondition(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile).traceShape
              == "P2P5PCCC")
 
@@ -1918,6 +2068,14 @@ precondition(!Expectation(selection: 4..<9).matches(selection: nil, length: nil)
 precondition(!Expectation(length: 15).matches(selection: nil, length: nil), "no answer")
 precondition(Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 15))
 precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9, length: 14))
+
+let checkedWord = Expectation(selection: 4..<9, length: 15, selectedText: "hello")
+precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "hello"))
+precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "mber "), "offsets agree, text does not")
+precondition(!checkedWord.matches(selection: 4..<9, length: 15), "no answer")
+precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil, selectedText: "mber "))
+precondition(checkedWord.traceFields == "sel=4..9 len=15 text=(5)")
+precondition(!Expectation(selectedText: secret).traceFields.contains(secret), "traceFields leaked the selected text")
 
 
 
