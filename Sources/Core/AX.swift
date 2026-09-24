@@ -356,35 +356,35 @@ public enum AX {
         return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
     }
 
-    /// The leaf a marker sits at the start of. A write or the page can leave the marker on a container
-    /// (between a list's items), so this descends through the children whose text starts at its offset.
+    /// The leaf holding the text right after a marker. A write or the page can leave the marker on a
+    /// container (between a list's items), so this descends through the children that hold its offset.
     private static func leaf(at marker: AXTextMarker, in field: AXUIElement) -> AXUIElement? {
         guard var node = node(at: marker, in: field),
               var offset = parameterized("AXIndexForTextMarker", marker, of: field) as? Int else { return nil }
-        for _ in 0..<8 {
+        for _ in 0..<16 {
             guard let children = copyAttribute(node, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty else {
                 return node
             }
             guard let start = textStart(of: node, in: field) else { return nil }
-            // Children run in text order, so the first one starting at the offset is a binary search away.
+            // Children run in text order, so the last one starting at or before the offset is a binary search away.
             var low = 0
             var high = children.count - 1
-            var found: Int?
+            var holder: (index: Int, start: Int)?
             while low <= high {
                 let middle = (low + high) / 2
                 guard let childStart = textStart(of: children[middle], in: field).flatMap({
                     parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), of: field) as? Int
                 }) else { return nil }
-                if childStart < offset {
+                if childStart <= offset {
+                    holder = (middle, childStart)
                     low = middle + 1
                 } else {
-                    if childStart == offset { found = middle }
                     high = middle - 1
                 }
             }
-            guard let index = found else { return offset == 0 ? node : nil }
-            node = children[index]
-            offset = 0
+            guard let holder else { return node }
+            node = children[holder.index]
+            offset -= holder.start
         }
         return nil
     }
