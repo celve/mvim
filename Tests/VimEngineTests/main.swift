@@ -300,11 +300,12 @@ func physical(
     _ keys: String,
     text: String? = nil,
     caret: Int? = nil,
+    selection: Range<Int>? = nil,
     profile: CapabilityProfile,
     state: VimState = .initial
 ) -> PhysicalPlan {
     let logical = LogicalPlanner.plan(RawCommand(keys), state: state)
-    let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: caret.map { $0..<$0 })
+    let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: selection ?? caret.map { $0..<$0 })
     return PhysicalPlanner.plan(logical, snapshot: snapshot)
 }
 
@@ -661,6 +662,94 @@ precondition(PhysicalPlanner.plan(
     LogicalPlanner.plan(RawCommand("x"), state: .initial),
     snapshot: cursored
 ).steps.first == .setSelection(0..<0))
+
+// MARK: - Lane B from a selection
+
+// Linear in Dia (`e14287.c993`) left Insert over a selection at 0 with `steps=!CC` and kept `0..8`:
+// lane B counts from a caret, so ← collapses the range first — its start, from either end.
+precondition(physical("<Esc>", text: "abcdefgh", selection: 0..<8, profile: readProfile, state: inserting).steps == [
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 0..<0, length: 8)),
+    .commit(.setMode(.normal)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("<Esc>", text: "abcdefgh", selection: 3..<8, profile: readProfile, state: inserting).steps == [
+    .press(.left, count: 1),
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 2..<2, length: 8)),
+    .commit(.setMode(.normal)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("<Esc>", text: "ab\ncdefgh", selection: 3..<6, profile: readProfile, state: inserting).steps == [
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 3..<3, length: 9)),
+    .commit(.setMode(.normal)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("<Esc>", text: "abcdefgh", caret: 0, profile: readProfile, state: inserting).steps == [
+    .settle(Expectation(selection: 0..<0, length: 8)),
+    .commit(.setMode(.normal)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("<Esc>", text: "abcdefgh", caret: 8, profile: readProfile, state: inserting).steps == [
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 7..<7, length: 8)),
+    .commit(.setMode(.normal)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("<Esc>", text: "abcdefgh", selection: 0..<8, profile: axProfile, state: inserting).steps == [
+    .setSelection(0..<0),
+    .settle(Expectation(selection: 0..<0, length: 8)),
+    .commit(.setMode(.normal)),
+    .setSelection(0..<1),
+    .commit(.setCursor(0..<1)),
+])
+
+for (anchor, head, key) in [(0, 8, Chord.right), (8, 0, Chord.left)] {
+    var selecting = VimState.initial
+    selecting.field.mode = .visual(VimState.VisualContext(kind: .character, anchor: anchor))
+    precondition(PhysicalPlanner.plan(
+        LogicalPlanner.plan(RawCommand("<Esc>"), state: selecting),
+        snapshot: FieldSnapshot(capabilities: readProfile, text: "abcdefgh", selection: 0..<8, anchor: anchor)
+    ).steps == [
+        .press(key, count: 1),
+        .settle(Expectation(selection: head..<head, length: 8)),
+        .commit(.setMode(.normal)),
+        .commit(.setCursor(nil)),
+    ])
+}
+
+var stranded = VimState.initial
+stranded.session.registers.unnamed = .content(RegisterContent(text: "XY", wise: .character))
+for keys in ["h", "l", "a", "x", "ciw", "p", "J"] {
+    let steps = physical(keys, text: "say hello\nworld", selection: 5..<9, profile: readProfile, state: stranded).steps
+    precondition(steps.first == .press(.left, count: 1), "\(keys) must collapse the selection before counting")
+}
+precondition(physical("ciw", text: "say hello world", selection: 5..<15, profile: readProfile).steps == [
+    .press(.left, count: 1),
+    .press(.left, count: 1),
+    .press(.selectRight, count: 5),
+    .settle(Expectation(selection: 4..<9, length: 15)),
+    .press(.deleteBack, count: 1),
+    .softSettle(Expectation(selection: 4..<4, length: 10)),
+    .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
+    .commit(.setMode(.insert)),
+    .commit(.setInsertStart(4)),
+])
+
+// A `.sameElement` re-resolve keeps the cursor drawn while taking `writeSelection` away.
+precondition(PhysicalPlanner.plan(
+    LogicalPlanner.plan(RawCommand("x"), state: .initial),
+    snapshot: FieldSnapshot(capabilities: readProfile, text: "abc", selection: 1..<2, cursor: 1..<2)
+).steps == [
+    .press(.left, count: 1),
+    .press(.selectRight, count: 1),
+    .settle(Expectation(selection: 1..<2, length: 3)),
+    .press(.deleteBack, count: 1),
+    .softSettle(Expectation(selection: 1..<1, length: 2)),
+    .commit(.deleted(into: nil, content: .literal("b"), wise: .character)),
+    .commit(.setCursor(nil)),
+])
 
 // MARK: - KeyNotation
 

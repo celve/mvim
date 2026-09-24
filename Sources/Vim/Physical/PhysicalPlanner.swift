@@ -60,9 +60,10 @@ public enum PhysicalPlanner {
         // The field shows our block cursor: physically collapse it to its
         // gap before the plan acts, so no step ever operates on the
         // presentation selection. Empty and bell-only plans skip this —
-        // they touch nothing and the cursor stays up.
+        // they touch nothing and the cursor stays up. A re-resolve can drop
+        // `writeSelection` under a drawn cursor, and ← collapses it just as well.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
-            steps.append(.setSelection(gap..<gap))
+            steps.append(profile.has(.writeSelection) ? .setSelection(gap..<gap) : .press(.left, count: 1))
         }
         for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
@@ -278,19 +279,23 @@ private extension PhysicalPlanner {
     /// Lane B's actuator: exact target, dumb keys. Deterministic regardless
     /// of the app's column memory — vertical first, then home, then right.
     ///
+    /// Counts run from the lower bound, so a selection is collapsed there
+    /// first — ← lands on its start in Cocoa and WebKit, from either end.
+    ///
     /// Its cross-line branch stays correct under a block-scoped field: this
     /// is only ever reached through a model that already passed the
     /// `wholeDocument` gate, so either the span is same-line or the block
     /// has real internal geography (a Notion code block).
-    static func keyPath(from: Int, to: Int, model: TextModel) -> [PhysicalStep] {
-        guard from != to else { return [] }
+    static func keyPath(from selection: Range<Int>, to: Int, model: TextModel) -> [PhysicalStep] {
+        var presses: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
+        let from = selection.lowerBound
+        guard from != to else { return presses }
         let fromLine = model.lineStart(of: from)
         let toLine = model.lineStart(of: to)
         if fromLine == toLine {
             let count = model.graphemes(in: min(from, to)..<max(from, to))
-            return [.press(to > from ? .right : .left, count: count)]
+            return presses + [.press(to > from ? .right : .left, count: count)]
         }
-        var presses: [PhysicalStep] = []
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
         presses.append(.press(toLine > fromLine ? .down : .up, count: lines))
         presses.append(.press(.lineStart, count: 1))
@@ -381,13 +386,14 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let model = context.model(for: destination, profile), let position = context.position {
+        if let model = context.model(for: destination, profile), let selection = context.selection {
+            let position = selection.lowerBound
             guard let target = resolve(destination, model: model, from: position) else { return nil }
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
                 actuation = [.setSelection(target..<target)]
             } else {
-                actuation = keyPath(from: position, to: target, model: model)
+                actuation = keyPath(from: selection, to: target, model: model)
             }
             context.selection = target..<target
             context.selectionOpaque = false
@@ -488,7 +494,8 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let model = context.model(for: target, profile), let position = context.position {
+        if let model = context.model(for: target, profile), let selection = context.selection {
+            let position = selection.lowerBound
             guard let range = selectionRange(for: target, model: model, at: position, context: context) else {
                 return nil
             }
@@ -501,7 +508,7 @@ private extension PhysicalPlanner {
                 context.selection = range
                 return [.setSelection(range)] + settle(context, profile: profile)
             }
-            var presses = keyPath(from: position, to: range.lowerBound, model: model)
+            var presses = keyPath(from: selection, to: range.lowerBound, model: model)
             let count = model.graphemes(in: range)
             if count > 0 {
                 presses.append(.press(.selectRight, count: count))
@@ -734,7 +741,8 @@ private extension PhysicalPlanner {
         // Definitionally cross-line, and there is no blind spelling: the
         // whitespace rules below are the whole point of the function, and a
         // chord approximation cannot compute them. Scoped fields ring.
-        guard let model = context.linewiseModel(profile), let position = context.position else { return nil }
+        guard let model = context.linewiseModel(profile), let selection = context.selection else { return nil }
+        let position = selection.lowerBound
         let range = model.lines(from: position, count: count, includingTerminator: false)
         let lines = model.substring(range)
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -753,7 +761,7 @@ private extension PhysicalPlanner {
         if profile.has(.writeSelection) {
             steps.append(.setSelection(range))
         } else {
-            steps += keyPath(from: position, to: range.lowerBound, model: model)
+            steps += keyPath(from: selection, to: range.lowerBound, model: model)
             steps.append(.press(.selectRight, count: model.graphemes(in: range)))
         }
         context.selection = range
@@ -787,7 +795,7 @@ private extension PhysicalPlanner {
                     let target = action.position == .after
                         ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
                         : position
-                    steps += moveSteps(to: target, from: position, context: &context, profile: profile)
+                    steps += moveSteps(to: target, context: &context, profile: profile)
                 } else if action.position == .after {
                     steps.append(.press(.right, count: 1))
                 }
@@ -801,7 +809,7 @@ private extension PhysicalPlanner {
                     let target = action.position == .after
                         ? (end >= model.length ? model.length : end + 1)
                         : model.lineStart(of: position)
-                    steps += moveSteps(to: target, from: position, context: &context, profile: profile)
+                    steps += moveSteps(to: target, context: &context, profile: profile)
                 } else if action.position == .after {
                     // Next line start. On the last line .down no-ops and the
                     // paste lands above — a well-formed line misplaced beats
@@ -839,7 +847,7 @@ private extension PhysicalPlanner {
             let target = action.position == .after
                 ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
                 : position
-            var steps = moveSteps(to: target, from: position, context: &context, profile: profile)
+            var steps = moveSteps(to: target, context: &context, profile: profile)
             steps += insertSteps(payload, context: &context, profile: profile)
             return steps
         }
@@ -875,7 +883,7 @@ private extension PhysicalPlanner {
             } else {
                 target = model.lineStart(of: position)
             }
-            var steps = moveSteps(to: target, from: position, context: &context, profile: profile)
+            var steps = moveSteps(to: target, context: &context, profile: profile)
             steps += insertSteps(insertion, context: &context, profile: profile)
             return steps
         }
@@ -888,15 +896,14 @@ private extension PhysicalPlanner {
 
     static func moveSteps(
         to target: Int,
-        from position: Int,
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep] {
         let steps: [PhysicalStep]
         if profile.has(.writeSelection) {
             steps = [.setSelection(target..<target)]
-        } else if let model = context.model {
-            steps = keyPath(from: position, to: target, model: model)
+        } else if let model = context.model, let selection = context.selection {
+            steps = keyPath(from: selection, to: target, model: model)
         } else {
             steps = []
         }
