@@ -54,26 +54,8 @@ public enum PhysicalPlanner {
     public static func planning(
         _ logical: LogicalPlan, snapshot: FieldSnapshot
     ) -> Planning {
-        let exact = lowering(logical, snapshot: snapshot, readsOmitBreaks: false)
-        guard exact.rejection == nil, checksKeyLanding(exact.plan) else { return exact }
-        var plans: [(world: Int, steps: [PhysicalStep])] = [(0, exact.plan.steps)]
-        for (index, world) in chromiumReadings(of: snapshot).enumerated() {
-            let lowered = lowering(logical, snapshot: world, readsOmitBreaks: true)
-            // One that reads exactly as world 0 does adds nothing but noise.
-            if lowered.rejection == nil, lowered.plan != exact.plan {
-                plans.append((index + 1, lowered.plan.steps))
-            }
-        }
-        let merged = merging(plans)
-        return Planning(plan: PhysicalPlan(steps: merged), rejection: nil, operand: exact.operand)
-    }
-
-    private static func lowering(
-        _ logical: LogicalPlan, snapshot: FieldSnapshot, readsOmitBreaks: Bool
-    ) -> Planning {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
-        context.readsOmitBreaks = readsOmitBreaks
         var steps: [PhysicalStep] = []
         // The field shows our block cursor: physically collapse it to its
         // gap before the plan acts, so no step ever operates on the
@@ -126,9 +108,6 @@ private extension PhysicalPlanner {
         /// The last predicted edit's range — the one in flight if the plan dies.
         var operand: Range<Int>?
 
-        /// This world's field reports Chromium's offsets, which leave out every `\n` before them (LIN-1533).
-        var readsOmitBreaks = false
-
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
@@ -175,13 +154,6 @@ private extension PhysicalPlanner {
         var position: Int? { selection?.lowerBound }
         var caret: Int? { selection.flatMap { $0.isEmpty ? $0.lowerBound : nil } }
 
-        /// How the field reports `range`; nil when this world cannot say.
-        func reading(_ range: Range<Int>) -> Range<Int>? {
-            guard readsOmitBreaks else { return range }
-            guard let model else { return nil }
-            return model.breaksOmitted(range.lowerBound)..<model.breaksOmitted(range.upperBound)
-        }
-
         mutating func takeSlot() -> CaptureSlot {
             defer { nextSlot += 1 }
             return CaptureSlot(id: nextSlot)
@@ -215,141 +187,11 @@ private extension PhysicalPlanner {
         _ context: Context, profile: CapabilityProfile, hard: Bool = true,
         blame: Expectation.Blame? = nil
     ) -> [PhysicalStep] {
-        guard profile.has(.readCaret), let selection = context.selection,
-              let reading = context.reading(selection) else { return [] }
+        guard profile.has(.readCaret), let selection = context.selection else { return [] }
         let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
-        var expectation = Expectation(selection: reading, length: length)
+        var expectation = Expectation(selection: selection, length: length)
         expectation.blame = blame
         return [hard ? .settle(expectation) : .softSettle(expectation)]
-    }
-}
-
-// MARK: - Chromium's offsets
-
-private extension PhysicalPlanner {
-    /// Worlds matter only where a native key predicts an exact landing; relations to a read hold in every world.
-    static func checksKeyLanding(_ plan: PhysicalPlan) -> Bool {
-        plan.steps.contains { step in
-            guard case .settle(let expectation) = step, expectation.blame != nil,
-                  case .exact? = expectation.landing else { return false }
-            return true
-        }
-    }
-
-    static let maxWorlds = 4
-
-    /// The snapshot once per `AXValue` selection its read can mean when the field leaves out paragraph breaks.
-    static func chromiumReadings(of snapshot: FieldSnapshot) -> [FieldSnapshot] {
-        // Kept without newlines too: a plan that types one reads differently after it.
-        guard let text = snapshot.text, let selection = snapshot.selection else { return [] }
-        let model = TextModel(text)
-        // Latest first: of a line's end and the next line's start, which read alike, a Normal caret is at the start.
-        let lows = model.offsets(breaksOmitted: selection.lowerBound).reversed()
-        let highs = selection.isEmpty ? [] : model.offsets(breaksOmitted: selection.upperBound).reversed()
-        var worlds: [FieldSnapshot] = []
-        for low in lows {
-            for high in selection.isEmpty ? [low] : highs where high >= low {
-                worlds.append(FieldSnapshot(
-                    capabilities: snapshot.capabilities, text: text, selection: low..<high,
-                    length: snapshot.length, anchor: snapshot.anchor, cursor: snapshot.cursor
-                ))
-            }
-        }
-        return Array(worlds.prefix(maxWorlds))
-    }
-
-    /// The worlds' plans as one: shared steps, each settle carrying every world's reading, then a branch per group whose keys agree.
-    static func merging(_ plans: [(world: Int, steps: [PhysicalStep])], settled: Bool = false) -> [PhysicalStep] {
-        guard let base = plans.first else { return [] }
-        var steps: [PhysicalStep] = []
-        var settled = settled
-        var index = 0
-        while index < base.steps.count, plans.allSatisfy({
-            index < $0.steps.count && sameAction($0.steps[index], base.steps[index])
-        }) {
-            let step = plans.dropFirst().reduce(tagged(base.steps[index], world: base.world)) { step, plan in
-                merged(step, plan.steps[index], world: plan.world)
-            }
-            settled = settled || isSettle(step)
-            steps.append(step)
-            index += 1
-        }
-        let rests = plans.map { (world: $0.world, steps: Array($0.steps[index...])) }
-        guard rests.contains(where: { !$0.steps.isEmpty }) else { return steps }
-        var groups: [[(world: Int, steps: [PhysicalStep])]] = []
-        for rest in rests {
-            if let group = groups.firstIndex(where: { sameStart($0[0].steps, rest.steps) }) {
-                groups[group].append(rest)
-            } else {
-                groups.append([rest])
-            }
-        }
-        // Until a settle has read the field, nothing can pick a world but the lowest.
-        guard settled else { return steps + merging(groups[0]) }
-        return steps + [.branch(groups.map { Branch(worlds: Set($0.map(\.world)), steps: merging($0, settled: true)) })]
-    }
-
-    static func sameStart(_ a: [PhysicalStep], _ b: [PhysicalStep]) -> Bool {
-        guard let first = a.first, let other = b.first else { return a.isEmpty && b.isEmpty }
-        return sameAction(first, other)
-    }
-
-    static func tagged(_ step: PhysicalStep, world: Int) -> PhysicalStep {
-        switch step {
-        case .settle(var expectation):
-            expectation.world = world
-            return .settle(expectation)
-        case .softSettle(var expectation):
-            expectation.world = world
-            return .softSettle(expectation)
-        default:
-            return step
-        }
-    }
-
-    static func sameAction(_ a: PhysicalStep, _ b: PhysicalStep) -> Bool {
-        switch (a, b) {
-        case (.settle, .settle), (.softSettle, .softSettle): return true
-        default: return a == b
-        }
-    }
-
-    static func isSettle(_ step: PhysicalStep) -> Bool {
-        switch step {
-        case .settle, .softSettle: return true
-        default: return false
-        }
-    }
-
-    static func merged(_ step: PhysicalStep, _ other: PhysicalStep, world: Int) -> PhysicalStep {
-        switch (step, other) {
-        case (.settle(let mine), .settle(let theirs)):
-            return .settle(mine.merging(theirs, world: world))
-        case (.softSettle(let mine), .softSettle(let theirs)):
-            return .softSettle(mine.merging(theirs, world: world))
-        default:
-            return step
-        }
-    }
-}
-
-private extension Expectation {
-    /// `other` as world `world`'s reading; a relational landing is the same in every world and adds nothing.
-    func merging(_ other: Expectation, world: Int) -> Expectation {
-        switch other.landing {
-        case .exact?, nil: break
-        default: return self
-        }
-        var merged = self
-        merged.alternatives.append(Alternative(world: world, selection: other.selection, length: other.length))
-        if let blame, let theirs = other.blame {
-            merged.blame = Blame(
-                capability: blame.capability,
-                unmoved: blame.unmoved + theirs.unmoved.filter { !blame.unmoved.contains($0) },
-                leavesCaret: blame.leavesCaret
-            )
-        }
-        return merged
     }
 }
 
@@ -602,7 +444,7 @@ private extension PhysicalPlanner {
             guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return nil }
             groups = [([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]
         default:
-            // `j`/`k` press their key even where the caret stays put: another reading of it may not.
+            // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
             var vertical: Direction?
             if case .motion(.line(let direction, _), _)? = destination { vertical = direction }
             guard targetLine != line || vertical != nil else { return nil }
@@ -626,8 +468,8 @@ private extension PhysicalPlanner {
         return pressing(groups, to: target..<target, context: &context, profile: profile)
     }
 
-    /// Lane B's line-shaped selections by native keys, as many as the command counts — keys past the end do
-    /// nothing, so every reading of Chromium's offsets presses the same ones; nil where lane B counts them.
+    /// Lane B's line-shaped selections by native keys, as many as the command counts, since keys past the end do
+    /// nothing; nil where lane B counts them.
     static func nativeSelect(
         _ target: LogicalStep.SelectionTarget, range: Range<Int>,
         context: inout Context, profile: CapabilityProfile
@@ -703,19 +545,22 @@ private extension PhysicalPlanner {
         Array(repeatElement(chords, count: max(0, times)).joined())
     }
 
-    /// Presses `chords`, then settles on `landing`; a named key is blamed if the field reads as it did before them.
+    /// Presses `chords`, then settles on `landing`; a named key is blamed if the field reads as it did before them
+    /// and no caret that read could mean had nowhere to go, or if a key that leaves a caret left a selection.
     static func keys(
         _ chords: [Chord], blaming atom: Capability?, to landing: Range<Int>,
         context: inout Context, profile: CapabilityProfile
     ) -> [PhysicalStep] {
-        let before = context.selection.flatMap(context.reading)
+        let before = context.selection
+        let model = context.model
         context.selection = landing
         context.selectionOpaque = false
-        let blame = atom.flatMap { atom in
-            before.map {
-                Expectation.Blame(capability: atom, unmoved: [$0],
-                                  leavesCaret: chords.allSatisfy { !$0.modifiers.contains(.shift) })
-            }
+        let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
+        let blame = atom.flatMap { atom -> Expectation.Blame? in
+            guard let before, let model else { return nil }
+            let unmoved = mayStayPut(chords, from: before, in: model) ? [] : [before]
+            guard !unmoved.isEmpty || leavesCaret else { return nil }
+            return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
         }
         var steps: [PhysicalStep] = []
         for chord in chords {
@@ -728,8 +573,29 @@ private extension PhysicalPlanner {
         return steps + settle(context, profile: profile, blame: blame)
     }
 
-    /// In a field that claims the native keys, a register takes the text the field selected, which every reading of
-    /// its offsets agrees on — only within a line, since Chromium's leaves paragraph breaks out (LIN-1565).
+    /// Whether the keys may rightly leave the read as it was — from a caret it could mean under Chromium's rule 1 or
+    /// past a list marker, or at a line start, where rule 2 reads any caret between that block's elements (LIN-1533).
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel) -> Bool {
+        guard read.isEmpty else { return true }
+        let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
+        if leavesCaret, model.lineStart(of: read.lowerBound) == read.lowerBound { return true }
+        let starts: [Chord] = [.paragraphStart, .documentStart]
+        let toStart = chords.contains { starts.contains(Chord($0.key, $0.modifiers.subtracting(.shift))) }
+        return ([read.lowerBound] + model.offsets(breaksOmitted: read.lowerBound)).contains { caret in
+            var keys = KeyModel(text: model.text, anchor: caret, focus: caret)
+            guard chords.allSatisfy({ keys.press($0) }) else { return true }
+            return keys.selection == caret..<caret || (toStart && followsMarker(caret, in: model))
+        }
+    }
+
+    /// Chromium's `AXValue` spells a list item's marker ("• ", "1. ") before its text, and no key puts a caret before it.
+    static func followsMarker(_ caret: Int, in model: TextModel) -> Bool {
+        let prefix = model.substring(model.lineStart(of: caret)..<caret)
+        return (2...5).contains(prefix.count) && prefix.hasSuffix(" ") && !prefix.dropLast().contains(" ")
+    }
+
+    /// In a field that claims the native keys, a register takes the text the field selected, which holds where a
+    /// misread caret shifts the model's — only within a line, since Chromium's leaves paragraph breaks out (LIN-1565).
     static func registersFromField(_ content: String, _ profile: CapabilityProfile) -> Bool {
         !profile.has(.writeSelection) && profile.has(.readSelectedText)
             && Capability.nativeKeys.contains(where: profile.has) && !content.contains("\n")
@@ -837,7 +703,7 @@ private extension PhysicalPlanner {
             }
             context.selectionWise = target.wise ?? context.selectionWise ?? .character
             context.selectionOpaque = false
-            // Pressed even where nothing is to select: the settle is what tells Chromium's readings apart.
+            // Pressed even where nothing is to select, so a settle checks the caret the command starts from.
             if let keys = nativeSelect(target, range: range, context: &context, profile: profile) {
                 return keys
             }
@@ -1097,11 +963,7 @@ private extension PhysicalPlanner {
         let lines = model.substring(range)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
-        guard lines.count > 1 else {
-            // Nothing to join, but ⌃A and back lets the settle tell Chromium's readings of the caret apart.
-            return nativeMove(.motion(.line(.up, firstNonBlank: false), count: 0), to: position, model: model,
-                              context: &context, profile: profile) ?? []
-        }
+        guard lines.count > 1 else { return [] }
         var joined = lines[0]
         for line in lines.dropFirst() {
             if keepWhitespace {

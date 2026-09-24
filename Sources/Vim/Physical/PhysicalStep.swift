@@ -47,7 +47,7 @@ public enum PhysicalStep: Equatable, Sendable {
     /// Hand an effect to the reducer (capture slots resolved to literals).
     case commit(VimEffect)
 
-    /// The rest of the plan per reading of the field; the executor runs the lowest world the settles still match.
+    /// The rest of the plan per reading of the field; the executor runs the one branch the settles leave standing.
     case branch([Branch])
 
     /// Signal invalidity; changes nothing. A plan that cannot be realized
@@ -73,7 +73,7 @@ public extension PhysicalStep {
     }
 }
 
-/// The continuation of the worlds whose keys agree from here; world 0 reads `AXValue` offsets (see `PhysicalPlanner`).
+/// The continuation of the worlds whose keys agree from here; world 0 reads `AXValue` offsets.
 public struct Branch: Equatable, Sendable {
     public let worlds: Set<Int>
     public let steps: [PhysicalStep]

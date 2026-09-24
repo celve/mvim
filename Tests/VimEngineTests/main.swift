@@ -1948,23 +1948,15 @@ precondition(Array(keyedDD.steps[0...5]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
         landing: .exact(4..<4), length: 13,
-        alternatives: [.init(world: 1, selection: 3..<3, length: 13)],
         blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true)
     )),
     .press(Chord.paragraphEnd.shifted, count: 1),
-    .settle(Expectation(
-        landing: .exact(4..<7), length: 13,
-        alternatives: [.init(world: 1, selection: 3..<6, length: 13)],
-        blame: .init(capability: .lineEndKey, unmoved: [4..<4, 3..<3])
-    )),
+    .settle(Expectation(landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4]))),
     .press(.selectRight, count: 1),
-    .settle(Expectation(
-        landing: .exact(4..<8), length: 13,
-        alternatives: [.init(world: 1, selection: 3..<6, length: 13)]
-    )),
+    .settle(Expectation(selection: 4..<8, length: 13)),
 ])
-// Within a line the register is what the field selected, which every reading agrees on; across a newline,
-// Chromium's selected text drops it, so the register keeps the matched reading's own text.
+// Within a line the register is what the field selected; across a newline, which Chromium's selected text
+// drops, it is the model's.
 precondition(physical("D", text: "one\ntwo", caret: 5, profile: keyProfile).steps
              .contains(.commit(.deleted(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .character))))
 precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .literal("two\n"), wise: .line))))
@@ -2031,12 +2023,11 @@ sim.type("d$")
 precondition(sim.text == "a\ndef")
 precondition(sim.state.session.register("-") == .content(RegisterContent(text: "bc", wise: .character)))
 
-// End to end against lane A, reading exact offsets and reading Chromium's: a run that passes did what
-// lane A did, and one that stops has written nothing lane A would not have.
+// End to end against lane A: reading exact offsets, every run does what lane A did; reading Chromium's, which
+// lane B cannot correct yet (LIN-1564), a run either does too, stops, or changes no text, and writes nothing else.
 let keyedCommands: [[String]] = ["dd", "yy", "cc", "S", "D", "C", "d$", "c$", "y$", "d0", "c0", "0", "^", "$", "A",
     "I", "gg", "G", "o", "O", "j", "k", "+", "-", "2dd", "3dd", "2yy", "dj", "dk", "yk", "cj", "ck", "dG", "dgg", "J",
     "3J", "2j", "3k", "2$", "d2$", "x", "X", "3x"].map { [$0] } + [["yy", "p"], ["yy", "P"], ["dd", "p"], ["dd", "P"]]
-var keyedStops = 0
 for doc in ["alpha one\nbeta two\ngamma three\n\ndelta four\nepsilon", "  indented\n\tx y\nlast", "single line", "a\n",
             "  indented\nx\n\n\nlast", "\nb\n\nc"] {
     for caret in 0...doc.utf16.count {
@@ -2059,34 +2050,24 @@ for doc in ["alpha one\nbeta two\ngamma three\n\ndelta four\nepsilon", "  indent
                 let same = keyed.text == reference.text && keyed.caret == reference.caret
                     && keyed.state.field.mode == reference.state.field.mode
                     && register == reference.state.session.register("\"") && keyed.bells == reference.bells
-                // Counted edits plan from lane B's own reading of the caret, as on `main` (LIN-1564).
-                if same || (chromium && ["x", "X", "3x"].contains(keys)) { continue }
-                // Otherwise a run that differs has stopped, and left only what lane A would have written.
-                precondition(keyed.settleFailures + keyed.ambiguities > 0, "passed, but not as lane A: " + context)
+                precondition(same || chromium, context)
+                // Counted edits plan from lane B's own reading of the caret, as on `main`.
+                if same || ["x", "X", "3x"].contains(keys) { continue }
                 precondition(passedThrough.contains(keyed.text), context)
                 precondition([nil, reference.state.session.register("\"")].contains(register), context)
-                keyedStops += 1
+                precondition(keyed.settleFailures > 0 || keyed.text == doc && register == nil, context)
             }
         }
     }
 }
-// Only where one read can mean several lines: blank-line runs, a line's end against the next line's start.
-precondition(keyedStops < 120, "stops: \(keyedStops)")
 
-// The reviewer's tie: exact and Chromium readings agree at every settle; the register still holds `c`.
+// Chromium reads 4 as 1, `b`'s start, and every settle passes; the register holds `c`, which the field selected.
 sim = Sim(text: "\nb\n\nc", caret: 4, profile: keyProfile)
 sim.emulatesKeys = true
 sim.readsOmitBreaks = true
 sim.type("cc")
 precondition(sim.text == "\nb\n\n" && sim.state.field.mode == .insert)
 precondition(sim.state.session.register("\"") == .content(RegisterContent(text: "c", wise: .line)))
-// Under Chromium's reads a yanked line keeps its newline, so `2p` puts two lines, and a blank line puts one.
-sim = Sim(text: "alpha\nbeta", caret: 1, profile: keyProfile)
-sim.emulatesKeys = true
-sim.readsOmitBreaks = true
-sim.type("yy")
-sim.type("2p")
-precondition(sim.text == "alpha\nalpha\nalpha\nbeta" && sim.settleFailures + sim.ambiguities == 0)
 // A register without its newline (the last line, `cc`) still puts whole lines, in every lane.
 for profile in [axProfile, keyProfile] {
     sim = Sim(text: "alpha\nbeta", caret: 7, profile: profile)
@@ -2095,25 +2076,19 @@ for profile in [axProfile, keyProfile] {
     sim.type("2p")
     precondition(sim.text == "alpha\nbeta\nbeta\nbeta")
 }
-sim = Sim(text: "a\n\nb", caret: 2, profile: keyProfile)
-sim.emulatesKeys = true
-sim.readsOmitBreaks = true
-sim.type("yyp")
-precondition(sim.text == "a\n\n\nb" && sim.settleFailures + sim.ambiguities == 0)
 sim = Sim(text: "ab\ncdef\nghij", caret: 10, profile: keyProfile)
 sim.emulatesKeys = true
 sim.readsOmitBreaks = true
 sim.type("x")
 precondition(sim.text == "ab\ncdef\nghj" && sim.state.session.register("-") == .content(RegisterContent(text: "i", wise: .character)))
 
-// Past paragraph 1 Chromium reads one low per break; the branch the settles pick counts the right column.
+// Past paragraph 1 Chromium reads one low per break, so until reads are corrected (LIN-1564) the first key's
+// settle stops `j`.
 sim = Sim(text: "ab\ncdef\nghij", caret: 5, profile: keyProfile)
 sim.emulatesKeys = true
 sim.readsOmitBreaks = true
 sim.type("j")
-precondition(sim.caret == 10 && sim.world == 1 && sim.settleFailures == 0)
-sim.type("dd")
-precondition(sim.text == "ab\ncdef\n" && sim.state.session.register("1") == .content(RegisterContent(text: "ghij", wise: .line)))
+precondition(sim.settleFailures == 1 && sim.blamed.isEmpty)
 
 // Wrapped paragraphs: ↓ and ⌘← move by visual row; ⌃E→ by logical line.
 let wrapped = "alpha beta gamma delta\nnext line"
@@ -2141,6 +2116,24 @@ sim.emulatesKeys = true
 sim.reboundChords = [.paragraphStart: .selectAll]
 sim.type("dd")
 precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
+// No blame where a key that stayed put may have had nowhere to go: a caret a Chromium read could mean, one past a
+// list marker, or a line start, where Chromium reads carets between that block's elements.
+for (text, caret, keys, ignored, chromium) in [
+    ("a\n\nb", 2, "yy", Chord.paragraphStart, true), ("ab\ncdef\nghij", 8, "0", .paragraphStart, true),
+    ("• one\n• two", 8, "0", .paragraphStart, false), ("one\ntwo", 4, "$", .paragraphEnd, false),
+] {
+    sim = Sim(text: text, caret: caret, profile: keyProfile)
+    sim.emulatesKeys = true
+    sim.readsOmitBreaks = chromium
+    if !chromium { sim.ignoredChords = [ignored] }
+    sim.type(keys)
+    precondition(sim.settleFailures == 1 && sim.blamed.isEmpty && sim.text == text, "\(keys) at \(caret)")
+}
+sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
+sim.emulatesKeys = true
+sim.ignoredChords = [.paragraphEnd]
+sim.type("$")
+precondition(sim.blamed == [.lineEndKey])
 let blameful = Expectation(landing: .exact(4..<4), length: 7, blame: .init(capability: .lineStartKey, unmoved: [5..<5]))
 precondition(blameful.blamed(observed: 5..<5) == .lineStartKey)
 precondition(blameful.blamed(observed: 2..<2) == nil)
@@ -2151,7 +2144,7 @@ let caretKey = Expectation(landing: .exact(4..<4), blame: .init(capability: .lin
 precondition(caretKey.blamed(observed: 0..<7) == .lineStartKey)
 precondition(caretKey.blamed(observed: 2..<2) == nil)
 
-// World-tagged readings, branches and relational landings.
+// World-tagged readings, branches and relational landings, for plans that branch on how the field reads.
 let dual = Expectation(landing: .exact(4..<4), length: 7, alternatives: [.init(world: 2, selection: 3..<3, length: 7)])
 precondition(dual.worlds(matching: 4..<4, length: 7) == [0])
 precondition(dual.worlds(matching: 3..<3, length: 7) == [2])

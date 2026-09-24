@@ -42,7 +42,7 @@ public final class Executor {
         /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
         public internal(set) var settleFailures: [SettleFailure] = []
 
-        /// The lowest reading of the field the settles matched, when it was not `AXValue`'s own (see `PhysicalPlanner`).
+        /// The lowest reading of the field the settles matched, when it was not `AXValue`'s own.
         public internal(set) var world: Int?
 
         /// The run stopped at a branch that more than one reading of the field still fit.

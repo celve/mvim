@@ -201,14 +201,15 @@ Reading a `cmd` line, `steps=` is the ordered, payload-free plan, one character 
 W setSelection   R replaceSelection   P press (P3 = three times)   T typeText
 X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSelectedText
 ! settle         ? softSettle         C commit                     B bell
-{…|…} branch: the rest of the plan per reading of the field (see Native keys)
+{…|…} branch: the rest of the plan per reading of the field
 ```
 
 Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
 a blind keypress, which can never name the capability it failed, so it rings without teaching
 the learner anything. A `!` after a native key names that key, and a failure blames it
-(`fail=lineStartKey`) only when the field still reads as it did before the key, or a caret key
-left a selection. A landing somewhere else aborts without learning.
+(`fail=lineStartKey`) only when the field still reads as it did before the key and no caret
+that read could mean was already where the key goes, or when a caret key left a selection. A
+landing somewhere else aborts without learning.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
@@ -216,10 +217,10 @@ aborted line can read `ok=0` and `mode=normal→insert` together. Before that, t
 sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
-`world=N` means the settles matched Chromium's offsets rather than `AXValue`'s own (absent when
-they matched `AXValue`'s, or could not tell); a `settle` line lists each reading it accepted as
-`or wN sel=…`. `ambiguous=1` with `abort@N` means the run reached a branch that more than one
-reading still fit, and stopped there rather than guess which line the caret was on.
+`world=N` and `ambiguous=1` appear only for a plan that branches on how the field reads its
+caret: the settles matched reading N rather than `AXValue`'s own (a `settle` line lists each
+reading it accepts as `or wN sel=…`), or, with `abort@N`, more than one reading still fit at a
+branch and the run stopped there rather than guess.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -280,13 +281,14 @@ aborts the command without learning, because Chromium's reads can put a correct 
 turn such a key off for the surface from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
-paragraph breaks before it (LIN-1533), so its offsets drift from `AXValue`'s past the first
-paragraph. A plan that uses native keys is also planned for each position the caret's read could
-mean there. The settles accept any of those readings, and where the keys would differ the plan
-branches and runs the reading the field matched. Where one read still fits several lines — a
-line's end against the next line's start, a run of blank lines — the command stops with a beep
-instead of guessing. In such a field a delete or yank of at most one line takes its register from
-the text the field selected, which every reading agrees on.
+paragraph breaks before it (LIN-1533), so past the first paragraph its offsets drift from
+`AXValue`'s. Until those reads are corrected (LIN-1564), a command there stops with a beep at
+the first settle that sees the drift. Keys are pressed even where a command has nothing to select
+or `j`/`k` stays on its line, so that settle still checks the caret the command starts from. A
+key that did nothing is not blamed where a caret the read could mean had nowhere to go: at the
+line's start or end, past a list marker ("• "), or, for a key that leaves a caret, at a line
+start, which is how Chromium reads a caret between elements of that block. In such a field a
+delete or yank within one line takes its register from the text the field selected.
 
 ## Running alongside Vibe
 
