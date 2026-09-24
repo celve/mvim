@@ -302,12 +302,14 @@ public final class Executor {
                 )
             }
             let matched = expectation.matches(selection: selection, length: length)
-            if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil,
-               let marked = AX.markedSelection(of: element) {
-                // A caret the page left between elements reads as its block's start; the markers do not.
-                selection = marked.range
-                let edge = expectation.edge.map { marked.startsNode(upper: true) == ($0 == .paragraphStart) } ?? true
-                if edge, expectation.matches(selection: selection, length: length) { return outcome(true) }
+            if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil {
+                // A caret the page left between elements reads as its block's start; only the markers
+                // place it, and only they tell a boundary's sides apart, so without them nothing converges.
+                if let marked = AX.markedSelection(of: element) {
+                    selection = marked.range
+                    let edge = expectation.edge.map { marked.startsNode(upper: true) == ($0 == .paragraphStart) } ?? true
+                    if edge, expectation.matches(selection: selection, length: length) { return outcome(true) }
+                }
             } else if matched {
                 return outcome(true)
             }

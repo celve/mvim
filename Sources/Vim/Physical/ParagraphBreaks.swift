@@ -88,9 +88,9 @@ public extension ParagraphBreaks {
             return starts ? candidates.upperBound : candidates.lowerBound
         }
         guard let lower = resolve(field.lowerBound, .lower),
-              let upper = resolve(field.upperBound, .upper),
-              lower <= upper else { return nil }
-        return lower..<upper
+              let upper = resolve(field.upperBound, .upper) else { return nil }
+        // Ends that share a field offset can arrive in either order: a backward selection over a break alone.
+        return min(lower, upper)..<max(lower, upper)
     }
 
     /// The breaks once `range` holds `replacement`, each `\n` typed in taken as a new paragraph.

@@ -186,7 +186,7 @@ public enum Snapshotter {
         if paragraphs {
             breaks = ParagraphBreaks()
             if capabilities.has(.readCaret) {
-                (selection, breaks) = paragraphRead(of: element, text: text, raw: selection, marked: reads.textMarkerRange(3))
+                (selection, breaks) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(3))
             }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
@@ -210,12 +210,15 @@ public enum Snapshotter {
     }
 
     /// The selection in `AXValue` offsets, nil when it cannot be placed there, and the breaks it was placed by.
+    ///
+    /// Only the markers count: the plain read may name the block's start for a caret between elements.
     private static func paragraphRead(
-        of element: AXUIElement, text: String?, raw: Range<Int>?, marked selected: AnyObject?
+        of element: AXUIElement, text: String?, marked selected: AnyObject?
     ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
-        guard let text else { return (nil, ParagraphBreaks()) }
-        let marked = AX.markedSelection(of: element, selected: selected)
-        guard let field = marked?.range ?? raw else { return (nil, ParagraphBreaks()) }
+        guard let text, let marked = AX.markedSelection(of: element, selected: selected) else {
+            return (nil, ParagraphBreaks())
+        }
+        let field = marked.range
         var breaks = ParagraphBreaks()
         if text.contains("\n") {
             guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
@@ -223,6 +226,6 @@ public enum Snapshotter {
             }
             breaks = aligned
         }
-        return (breaks.valueRange(field) { end in marked?.startsNode(upper: end == .upper) }, breaks)
+        return (breaks.valueRange(field) { end in marked.startsNode(upper: end == .upper) }, breaks)
     }
 }

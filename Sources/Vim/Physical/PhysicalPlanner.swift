@@ -222,9 +222,18 @@ private extension PhysicalPlanner {
 
     /// An AX selection write. Chromium lands a field offset at a paragraph
     /// boundary on the next paragraph's start, so an end meant for the last
-    /// paragraph's end steps back one key.
+    /// paragraph's end steps back one key, and a range starting there is
+    /// selected by keys from the caret stepped back.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
-        let step = PhysicalStep.setSelection(context.field(range))
+        let field = context.field(range)
+        if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
+            return [
+                .setSelection(field.lowerBound..<field.lowerBound),
+                .press(.left, count: 1),
+                .press(.selectRight, count: model.graphemes(in: range)),
+            ]
+        }
+        let step = PhysicalStep.setSelection(field)
         guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
         return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
     }

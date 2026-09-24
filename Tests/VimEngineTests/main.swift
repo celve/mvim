@@ -819,6 +819,7 @@ precondition(paras.valueRange(2..<2) { _ in false } == 2..<2)
 precondition(paras.valueRange(2..<2) { _ in nil } == nil, "a boundary nothing resolves is unknown")
 precondition(paras.valueRange(1..<3) { _ in preconditionFailure("unambiguous") } == 1..<4)
 precondition(paras.valueRange(2..<2) { $0 == .upper } == 2..<3, "the break alone")
+precondition(paras.valueRange(2..<2) { $0 == .lower } == 2..<3, "the break alone, selected backward")
 
 precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
@@ -882,6 +883,19 @@ precondition(paragraphPlanning("A", text: threeParagraphs, caret: 0, profile: no
     .settle(Expectation(selection: 2..<2, length: 11, edge: .paragraphEnd)),
     .commit(.setMode(.insert)),
     .commit(.setInsertStart(2)),
+])
+// A range starting at a paragraph's end would start on the next paragraph if written, so keys select it.
+let fromParagraphEnd = LogicalPlan(.select(.span(to: .offset(5), inclusive: false)), .deleteSelection(into: nil))
+precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
+    capabilities: noCursorProfile, text: threeParagraphs, selection: 2..<2, breaks: ParagraphBreaks(offsets: [2, 8])
+)).plan.steps == [
+    .setSelection(2..<2),
+    .press(.left, count: 1),
+    .press(.selectRight, count: 3),
+    .settle(Expectation(selection: 2..<4, length: 11)),
+    .replaceSelection(""),
+    .settle(Expectation(selection: 2..<2, length: 8)),
+    .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
 ])
 // A typed newline may make a paragraph or a line break, so the caret after it goes unchecked.
 precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(
