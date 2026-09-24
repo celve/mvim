@@ -77,14 +77,13 @@ public extension ParagraphBreaks {
 
     /// A field selection in `AXValue` offsets; nil when a paragraph boundary stays unresolved.
     ///
-    /// `startsNode` is asked only at a boundary, and says whether that end sits
-    /// at the start of its own node — the next paragraph — rather than the end
-    /// of the last one.
-    func valueRange(_ field: Range<Int>, startsNode: (End) -> Bool?) -> Range<Int>? {
+    /// `startsParagraph` is asked only at a boundary, and says whether that end
+    /// starts the next paragraph rather than ending the last one.
+    func valueRange(_ field: Range<Int>, startsParagraph: (End) -> Bool?) -> Range<Int>? {
         func resolve(_ fieldOffset: Int, _ end: End) -> Int? {
             let candidates = valueOffsets(fieldOffset)
             guard candidates.count > 1 else { return candidates.lowerBound }
-            guard let starts = startsNode(end) else { return nil }
+            guard let starts = startsParagraph(end) else { return nil }
             return starts ? candidates.upperBound : candidates.lowerBound
         }
         guard let lower = resolve(field.lowerBound, .lower),

@@ -289,10 +289,21 @@ public enum AX {
         let lower: AXTextMarker
         let upper: AXTextMarker
 
-        /// Whether an end sits at the start of its own node — at a paragraph boundary, the next paragraph.
-        public func startsNode(upper isUpper: Bool) -> Bool? {
+        /// At a paragraph boundary, whether an end starts the next paragraph rather than ending the last.
+        ///
+        /// Only a marker at the end of its own node ends the last one; a write can leave one between a
+        /// list's items, anchored at the list, which Chromium's node offset puts in the list's middle.
+        public func startsParagraph(upper isUpper: Bool) -> Bool? {
             let marker = isUpper ? upper : lower
-            return (AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int).map { $0 == 0 }
+            guard let index = AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int else { return nil }
+            guard index > 0 else { return true }
+            guard let node = AX.parameterized("AXUIElementForTextMarker", marker, of: element),
+                  CFGetTypeID(node) == AXUIElementGetTypeID(),
+                  let range = AX.textMarkerRange(AX.parameterized("AXTextMarkerRangeForUIElement", node, of: element)),
+                  let length = AX.parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int else {
+                return false
+            }
+            return index < length
         }
     }
 
@@ -336,7 +347,7 @@ public enum AX {
         return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
     }
 
-    private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
+    fileprivate static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
         guard let value, CFGetTypeID(value) == AXTextMarkerRangeGetTypeID() else { return nil }
         return (value as! AXTextMarkerRange)
     }

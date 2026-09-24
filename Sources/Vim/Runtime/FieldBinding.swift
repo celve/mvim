@@ -226,6 +226,6 @@ public enum Snapshotter {
             }
             breaks = aligned
         }
-        return (breaks.valueRange(field) { end in marked.startsNode(upper: end == .upper) }, breaks)
+        return (breaks.valueRange(field) { end in marked.startsParagraph(upper: end == .upper) }, breaks)
     }
 }
