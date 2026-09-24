@@ -320,18 +320,9 @@ public enum AX {
 
         /// `editable: false` skips the editability read, for an end already inside the next paragraph's text.
         public func opening(upper isUpper: Bool, editable: Bool) -> Opening? {
-            let marker = isUpper ? upper : lower
-            guard let next = AX.parameterized("AXNextTextMarkerForTextMarker", marker, of: element),
-                  CFGetTypeID(next) == AXTextMarkerGetTypeID(),
-                  let leaf = AX.node(at: next as! AXTextMarker, in: element) else { return nil }
-            let reads = AX.attributes([kAXRoleAttribute, kAXParentAttribute], of: leaf)
-            // The marker's text is a static text child of the list marker.
-            var listMarker = reads.string(0) == "AXListMarker" ? leaf : nil
-            if listMarker == nil, let parent = reads.element(1), AX.role(of: parent) == "AXListMarker" {
-                listMarker = parent
-            }
-            if let listMarker {
-                return AX.textLength(of: listMarker, in: element).map { .listMarker(length: $0) }
+            guard let leaf = AX.leaf(at: isUpper ? upper : lower, in: element) else { return nil }
+            if AX.role(of: leaf) == "AXListMarker" {
+                return AX.textLength(of: leaf, in: element).map { .listMarker(length: $0) }
             }
             return !editable || AX.rangeSettable(leaf) ? .text : .uneditable
         }
@@ -363,6 +354,43 @@ public enum AX {
     public static func textContent(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
         return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
+    }
+
+    /// The leaf a marker sits at the start of. A write or the page can leave the marker on a container
+    /// (between a list's items), so this descends through the children whose text starts at its offset.
+    private static func leaf(at marker: AXTextMarker, in field: AXUIElement) -> AXUIElement? {
+        guard var node = node(at: marker, in: field),
+              var offset = parameterized("AXIndexForTextMarker", marker, of: field) as? Int else { return nil }
+        for _ in 0..<8 {
+            guard let children = copyAttribute(node, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty else {
+                return node
+            }
+            guard let start = textStart(of: node, in: field) else { return nil }
+            // Children run in text order, so the first one starting at the offset is a binary search away.
+            var low = 0
+            var high = children.count - 1
+            var found: Int?
+            while low <= high {
+                let middle = (low + high) / 2
+                guard let childStart = textStart(of: children[middle], in: field).flatMap({
+                    parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), of: field) as? Int
+                }) else { return nil }
+                if childStart < offset {
+                    low = middle + 1
+                } else {
+                    if childStart == offset { found = middle }
+                    high = middle - 1
+                }
+            }
+            guard let index = found else { return offset == 0 ? node : nil }
+            node = children[index]
+            offset = 0
+        }
+        return nil
+    }
+
+    private static func textStart(of node: AXUIElement, in field: AXUIElement) -> AXTextMarker? {
+        textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: field)).map(AXTextMarkerRangeCopyStartMarker)
     }
 
     private static func node(at marker: AXTextMarker, in element: AXUIElement) -> AXUIElement? {
