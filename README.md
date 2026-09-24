@@ -292,11 +292,12 @@ Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the car
 paragraph breaks before it (LIN-1533), so past the first paragraph its offsets drift from
 `AXValue`'s. Until those reads are corrected (LIN-1564), a command there stops with a beep at
 the first settle that sees the drift. Keys are pressed even where a command has nothing to select
-or `j`/`k` stays on its line, so that settle still checks the caret the command starts from. A
-key that did nothing is not blamed where a caret the read could mean had nowhere to go: at the
-line's start or end, past a list marker ("• "), or, for a key that leaves a caret, at a line
-start, which is how Chromium reads a caret between elements of that block. In such a field a
-yank within one line takes its register from the text the field selected.
+or `j`/`k` stays on its line, so that settle still checks the caret the command starts from. In
+web content a key that did nothing is not blamed where a caret the read could mean had nowhere to
+go: at the line's start or end, past a list marker ("• ", "1. "), or, for a key that leaves a
+caret, at a line start, which is how Chromium reads a caret between elements of that block.
+Elsewhere reads are exact, and a key that did nothing is blamed. In such a field a yank within
+one line takes its register from the text the field selected.
 
 ## Running alongside Vibe
 

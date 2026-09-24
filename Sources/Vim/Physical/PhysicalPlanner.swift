@@ -108,10 +108,13 @@ private extension PhysicalPlanner {
         /// The last predicted edit's range — the one in flight if the plan dies.
         var operand: Range<Int>?
 
+        let webContent: Bool
+
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
             anchor = snapshot.anchor
+            webContent = snapshot.webContent
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -567,7 +570,7 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            let unmoved = mayStayPut(chords, from: before, in: model) ? [] : [before]
+            let unmoved = mayStayPut(chords, from: before, in: model, web: context.webContent) ? [] : [before]
             guard !unmoved.isEmpty || leavesCaret else { return nil }
             return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
         }
@@ -582,25 +585,32 @@ private extension PhysicalPlanner {
         return steps + settle(context, profile: profile, blame: blame)
     }
 
-    /// Whether the keys may rightly leave the read as it was — from a caret it could mean under Chromium's rule 1 or
-    /// past a list marker, or at a line start, where rule 2 reads any caret between that block's elements (LIN-1533).
-    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel) -> Bool {
+    /// Whether the keys may rightly leave the read as it was; in web content also from a caret Chromium's rule 1 could
+    /// mean, past a list marker, or at a line start, where rule 2 reads any caret between that block's elements (LIN-1533).
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel, web: Bool) -> Bool {
         guard read.isEmpty else { return true }
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
-        if leavesCaret, model.lineStart(of: read.lowerBound) == read.lowerBound { return true }
+        if web, leavesCaret, model.lineStart(of: read.lowerBound) == read.lowerBound { return true }
         let starts: [Chord] = [.paragraphStart, .documentStart]
-        let toStart = chords.contains { starts.contains(Chord($0.key, $0.modifiers.subtracting(.shift))) }
-        return ([read.lowerBound] + model.offsets(breaksOmitted: read.lowerBound)).contains { caret in
+        let toStart = web && chords.contains { starts.contains(Chord($0.key, $0.modifiers.subtracting(.shift))) }
+        let carets = [read.lowerBound] + (web ? model.offsets(breaksOmitted: read.lowerBound) : [])
+        return carets.contains { caret in
             var keys = KeyModel(text: model.text, anchor: caret, focus: caret)
             guard chords.allSatisfy({ keys.press($0) }) else { return true }
             return keys.selection == caret..<caret || (toStart && followsMarker(caret, in: model))
         }
     }
 
-    /// Chromium's `AXValue` spells a list item's marker ("• ", "1. ") before its text, and no key puts a caret before it.
+    /// Chromium's `AXValue` spells a list item's marker ("• ", "◦ ", "▪ ", "1. ", "a. ") before its text, and no key
+    /// puts a caret before it.
     static func followsMarker(_ caret: Int, in model: TextModel) -> Bool {
         let prefix = model.substring(model.lineStart(of: caret)..<caret)
-        return (2...5).contains(prefix.count) && prefix.hasSuffix(" ") && !prefix.dropLast().contains(" ")
+        guard prefix.hasSuffix(" ") else { return false }
+        let marker = prefix.dropLast()
+        if ["•", "◦", "▪"].contains(String(marker)) { return true }
+        guard marker.count >= 2, marker.count <= 5, marker.hasSuffix(".") else { return false }
+        let label = marker.dropLast()
+        return label.allSatisfy(\.isNumber) || label.allSatisfy { "ivxlc".contains($0) } || (label.count == 1 && label.allSatisfy(\.isLetter))
     }
 
     /// In a field that claims the native keys, a yank within a line takes the text the field selected, which holds

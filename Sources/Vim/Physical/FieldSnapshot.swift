@@ -29,13 +29,17 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// interference) means the selection is the user's, not ours.
     public let cursor: Range<Int>?
 
+    /// The field is web content, where Chromium's caret reads leave out paragraph breaks (LIN-1533).
+    public let webContent: Bool
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
         selection: Range<Int>? = nil,
         length: Int? = nil,
         anchor: Int? = nil,
-        cursor: Range<Int>? = nil
+        cursor: Range<Int>? = nil,
+        webContent: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -43,6 +47,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.length = length ?? text.map { $0.utf16.count }
         self.anchor = anchor
         self.cursor = cursor
+        self.webContent = webContent
     }
 
     /// The caret, when the selection is collapsed.

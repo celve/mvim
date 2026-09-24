@@ -57,6 +57,9 @@ public struct Sim {
     /// Every key `KeyModel` knows runs, not only the ones lane B counts with.
     public var emulatesKeys = false
 
+    /// The field is web content; a Chromium read fault (`reads`) implies it.
+    public var webContent = false
+
     /// Graphemes per visual row for ↓ ↑ ⌘← ⌘→; nil puts each line on one row.
     public var wrapWidth: Int?
 
@@ -177,7 +180,8 @@ private extension Sim {
             text: text,
             selection: readSelection,
             anchor: anchor,
-            cursor: cursor
+            cursor: cursor,
+            webContent: webContent || reads != nil
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan

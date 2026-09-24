@@ -171,6 +171,7 @@ public enum Snapshotter {
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
+            "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
         ], of: element)
         let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
@@ -187,7 +188,8 @@ public enum Snapshotter {
             selection: selection,
             length: length,
             anchor: anchor,
-            cursor: stampedCursor
+            cursor: stampedCursor,
+            webContent: reads.string(3) != nil
         )
     }
 }
