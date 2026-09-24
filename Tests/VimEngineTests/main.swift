@@ -871,8 +871,7 @@ for keys in ["yiw", "yy", "w", "p", "P", "o", "O", "A", "i", "u"] {
 
 let checkedCiw = traced("ciw", text: "say hello world", caret: 6, profile: readProfile)
 precondition(checkedCiw.plan.traceShape == "P2P5!!P?CCC")
-precondition(!checkedCiw.abortedAtTextCheck(nil) && !checkedCiw.abortedAtTextCheck(2))
-precondition(checkedCiw.abortedAtTextCheck(3))
+precondition(!checkedCiw.plan.steps[2].checksSelectedText && checkedCiw.plan.steps[3].checksSelectedText)
 
 // MARK: - KeyNotation
 

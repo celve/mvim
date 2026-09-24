@@ -39,6 +39,9 @@ public final class Executor {
         /// Recorder only — the learner reads the two fields above.
         public internal(set) var abortedAt: Int?
 
+        /// The step `abortedAt` names, which a branch may have spliced in.
+        public internal(set) var abortedStep: PhysicalStep?
+
         /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
         public internal(set) var settleFailures: [SettleFailure] = []
 
@@ -120,6 +123,7 @@ public final class Executor {
                 guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
                     NSSound.beep()
                     lastRun.abortedAt = index
+                    lastRun.abortedStep = step
                     lastRun.ambiguous = true
                     lastRun.world = Self.reported(consistent)
                     commitSurvivors(queue[index...], state: &state)
@@ -150,6 +154,7 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
+                lastRun.abortedStep = step
                 lastRun.world = Self.reported(consistent)
                 // A second pass, not a `continue`: `perform` would re-post a blind keypress.
                 commitSurvivors(queue[(index + 1)...], state: &state)

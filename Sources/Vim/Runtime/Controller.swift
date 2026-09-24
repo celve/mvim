@@ -295,7 +295,7 @@ public final class Controller {
             )
         }
         guard executed else {
-            if planned.abortedAtTextCheck(evidence.abortedAt) {
+            if evidence.abortedStep?.checksSelectedText == true {
                 // Only lane B checks text, and ← is its one way to collapse; the mode the plan asked for goes too.
                 if let range = AX.selectedRange(of: binding.element), range.length > 0 {
                     executor.execute(PhysicalPlan(.press(.left, count: 1)), on: binding.element, state: &state)

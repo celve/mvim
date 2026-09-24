@@ -71,6 +71,12 @@ public extension PhysicalStep {
             return branches.contains { $0.steps.contains(where: \.mutatesText) }
         }
     }
+
+    /// A run that died here has other text selected than the plan meant, however its offsets read.
+    var checksSelectedText: Bool {
+        guard case .settle(let expectation) = self else { return false }
+        return expectation.selectedText != nil
+    }
 }
 
 /// The continuation of the worlds whose keys agree from here; world 0 reads `AXValue` offsets.

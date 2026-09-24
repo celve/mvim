@@ -187,7 +187,7 @@ private extension Sim {
         abortedStep = execute(physical)
         guard abortedStep == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
-            if case .settle(let expectation)? = abortedStep, expectation.selectedText != nil {
+            if abortedStep?.checksSelectedText == true {
                 if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
                 if state.field.mode.isInserting {
                     state = VimReducer.reduce(state, .setMode(before.nonVisual))
