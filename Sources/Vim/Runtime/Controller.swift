@@ -61,6 +61,9 @@ public final class Controller {
     /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
+    /// The last snapshot's, so unbind hygiene can name the drawn cursor in the field's own offsets.
+    private var fieldBreaks: ParagraphBreaks?
+
     public init() {
         tracker.onRebind = { [weak self] binding, transition in
             self?.rebind(to: binding, transition: transition)
@@ -211,12 +214,14 @@ public final class Controller {
            old.capabilities.has(.writeSelection) {
             // Unbind hygiene, through the executor, which owns all field
             // writes. A dead element rejects harmlessly (and bounded).
+            let gap = fieldBreaks?.fieldOffset(cursor.lowerBound) ?? cursor.lowerBound
             executor.execute(
-                PhysicalPlan(.setSelection(cursor.lowerBound..<cursor.lowerBound)),
+                PhysicalPlan(.setSelection(gap..<gap)),
                 on: old.element,
                 state: &state
             )
         }
+        if !transition.preservesDrawnCursor { fieldBreaks = nil }
         binding = new
         Diag.bind(tracker.epoch, transition, new)
         // Keys-in-flight and the open dot body are one unit, and neither
@@ -265,13 +270,16 @@ public final class Controller {
             of: binding.element,
             capabilities: binding.capabilities,
             anchor: anchor,
-            cursor: state.field.cursor
+            cursor: state.field.cursor,
+            chromium: binding.isChromium
         )
+        fieldBreaks = snapshot.breaks
+        let paragraphs = snapshot.breaks != nil
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
         let epoch = tracker.epoch
         let before = state.field.mode
-        let executed = executor.execute(physical, on: binding.element, state: &state)
+        let executed = executor.execute(physical, on: binding.element, state: &state, paragraphs: paragraphs)
         // Harvested before anything else can touch the executor: the abort path
         // below runs `repairStrandedSelection`, which executes its own plan and
         // resets `lastRun` — and that is precisely the path a failed write takes.
@@ -296,7 +304,7 @@ public final class Controller {
         }
         guard executed else {
             // A selection we could not collapse is one the app would type over.
-            if !repairStrandedSelection(on: binding, operand: planned.operand),
+            if !repairStrandedSelection(on: binding, operand: planned.operand, paragraphs: paragraphs),
                state.field.mode.isInserting {
                 executor.commit(.setMode(before.nonVisual), state: &state)
             }
@@ -405,20 +413,28 @@ public final class Controller {
     }
 
     /// Collapse a stranded selection, and report whether the field is safe to type into.
-    private func repairStrandedSelection(on binding: FocusTracker.Binding, operand: Range<Int>?) -> Bool {
+    private func repairStrandedSelection(
+        on binding: FocusTracker.Binding, operand: Range<Int>?, paragraphs: Bool
+    ) -> Bool {
         // Unknown is not empty: a settle can fail *because* the read went dark.
-        guard let range = AX.selectedRange(of: binding.element) else { return false }
-        guard range.length > 0 else { return true }
+        guard let range = selection(of: binding.element, paragraphs: paragraphs) else { return false }
+        guard !range.isEmpty else { return true }
         // Still the operand: the app's own editor substitutes on the first keystroke.
-        if state.field.mode.isInserting, range.location..<(range.location + range.length) == operand { return true }
+        if state.field.mode.isInserting, range == operand { return true }
         guard binding.capabilities.has(.writeSelection) else { return false }
         executor.execute(
-            PhysicalPlan(.setSelection(range.location..<range.location)),
+            PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
             on: binding.element,
             state: &state
         )
         // The write that stranded this may be the one that lies, so confirm.
-        return AX.selectedRange(of: binding.element).map { $0.length == 0 } ?? false
+        return selection(of: binding.element, paragraphs: paragraphs).map(\.isEmpty) ?? false
+    }
+
+    /// In the field's own offsets; a Chromium rich-text field's is read through its markers.
+    private func selection(of element: AXUIElement, paragraphs: Bool) -> Range<Int>? {
+        if paragraphs, let marked = AX.markedSelection(of: element) { return marked.range }
+        return AX.selectedRange(of: element).map { $0.location..<($0.location + $0.length) }
     }
 
     /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.

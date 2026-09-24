@@ -125,6 +125,8 @@ public enum FieldProber {
         /// Web content, so worth the parent walk that finds its origin. Rides
         /// the same round trip; native fields skip the walk entirely.
         public let isWebElement: Bool
+        /// Chromium's, whose rich-text fields need their caret read another way.
+        public let isChromium: Bool
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
 
@@ -148,7 +150,8 @@ public enum FieldProber {
             isEnabled: attributes.enabled,
             role: attributes.role,
             identifier: attributes.identifier,
-            isWebElement: attributes.isWebElement
+            isWebElement: attributes.isWebElement,
+            isChromium: attributes.isChromium
         )
     }
 }
@@ -159,21 +162,32 @@ public enum Snapshotter {
         of element: AXUIElement,
         capabilities: CapabilityProfile,
         anchor: Int?,
-        cursor: Range<Int>?
+        cursor: Range<Int>?,
+        chromium: Bool = false
     ) -> FieldSnapshot {
+        let paragraphs = chromium && hasParagraphs(element)
         // One IPC for the whole volatile half. The capabilities gate which
         // slots are *used*, not which are fetched — a batch costs the same
         // round trip either way, and branching the attribute list per profile
         // would buy nothing.
-        let reads = AX.attributes([
+        var names = [
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
-        ], of: element)
+        ]
+        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 3
+        let reads = AX.attributes(names, of: element)
         let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
         if capabilities.has(.readCaret), let range = reads.range(1) {
             selection = range.location..<(range.location + range.length)
+        }
+        var breaks: ParagraphBreaks?
+        if paragraphs {
+            breaks = ParagraphBreaks()
+            if capabilities.has(.readCaret) {
+                (selection, breaks) = paragraphRead(of: element, text: text, raw: selection, marked: reads.textMarkerRange(3))
+            }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
         // The drawn cursor counts only while it still IS the selection;
@@ -185,7 +199,30 @@ public enum Snapshotter {
             selection: selection,
             length: length,
             anchor: anchor,
-            cursor: stampedCursor
+            cursor: stampedCursor,
+            breaks: breaks
         )
+    }
+
+    /// Chromium's contenteditables expose children and read in text content; its `<textarea>` and `<input>` do neither.
+    static func hasParagraphs(_ element: AXUIElement) -> Bool {
+        (AX.childCount(of: element) ?? 0) > 0
+    }
+
+    /// The selection in `AXValue` offsets, nil when it cannot be placed there, and the breaks it was placed by.
+    private static func paragraphRead(
+        of element: AXUIElement, text: String?, raw: Range<Int>?, marked selected: AnyObject?
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
+        guard let text else { return (nil, ParagraphBreaks()) }
+        let marked = AX.markedSelection(of: element, selected: selected)
+        guard let field = marked?.range ?? raw else { return (nil, ParagraphBreaks()) }
+        var breaks = ParagraphBreaks()
+        if text.contains("\n") {
+            guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
+                return (nil, breaks)
+            }
+            breaks = aligned
+        }
+        return (breaks.valueRange(field) { end in marked?.startsNode(upper: end == .upper) }, breaks)
     }
 }

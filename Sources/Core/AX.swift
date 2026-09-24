@@ -125,6 +125,9 @@ public enum AX {
         /// the batch resolves an absent attribute to nil and a present-empty
         /// one to `""`, which is exactly the distinction.
         public let isWebElement: Bool
+
+        /// Chromium's rich-text fields read their caret in other offsets than `AXValue`.
+        public let isChromium: Bool
     }
 
     public static func gateAttributes(of element: AXUIElement) -> GateAttributes {
@@ -137,6 +140,7 @@ public enum AX {
             kAXEnabledAttribute,  // 2
             "AXDOMIdentifier",    // 3
             "AXIdentifier",       // 4
+            chromiumNodeIDAttribute,  // 5
         ], of: element)
         let domIdentifier = reads.string(3)
         let identifier = [domIdentifier, reads.string(4)]
@@ -150,7 +154,8 @@ public enum AX {
             enabled: reads.bool(2) ?? true,
             identifier: identifier,
             // Presence, not non-emptiness: `""` is a web input without an id.
-            isWebElement: domIdentifier != nil
+            isWebElement: domIdentifier != nil,
+            isChromium: reads.string(5) != nil
         )
     }
 
@@ -189,6 +194,12 @@ public enum AX {
         public func element(_ index: Int) -> AXUIElement? {
             guard let slot = slot(index), CFGetTypeID(slot) == AXUIElementGetTypeID() else { return nil }
             return (slot as! AXUIElement)
+        }
+
+        /// Left opaque for `AX.markedSelection`.
+        public func textMarkerRange(_ index: Int) -> AnyObject? {
+            guard let slot = slot(index), CFGetTypeID(slot) == AXTextMarkerRangeGetTypeID() else { return nil }
+            return slot
         }
 
         /// `AXURL` answers an `NSURL`, which `string(_:)` would read as nil.
@@ -250,6 +261,98 @@ public enum AX {
                 parentError: reads.error(2)?.rawValue
             )
         }
+    }
+
+    // MARK: - Chromium's text markers
+
+    /// On every element Chromium exposes, web or native, and on nothing else.
+    public static let chromiumNodeIDAttribute = "ChromeAXNodeId"
+
+    /// Without fetching them: Chromium's `<textarea>` and `<input>` expose none, its contenteditables do.
+    public static func childCount(of element: AXUIElement) -> Int? {
+        var count: CFIndex = 0
+        guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success else {
+            return nil
+        }
+        return count
+    }
+
+    /// A Chromium field's selection, measured through text markers from the field's start.
+    ///
+    /// `AXSelectedTextRange` misplaces a caret the page left between elements
+    /// (it reads as the start of the enclosing block); the marker range is the
+    /// selection itself, so its lengths are not fooled. Both are text-content
+    /// offsets: `AXValue` without its paragraph breaks.
+    public struct MarkedSelection {
+        public let range: Range<Int>
+        let element: AXUIElement
+        let lower: AXTextMarker
+        let upper: AXTextMarker
+
+        /// Whether an end sits at the start of its own node — at a paragraph boundary, the next paragraph.
+        public func startsNode(upper isUpper: Bool) -> Bool? {
+            let marker = isUpper ? upper : lower
+            return (AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int).map { $0 == 0 }
+        }
+    }
+
+    /// Pass the batch's `AXSelectedTextMarkerRange` as `selected` to save its round trip.
+    public static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> MarkedSelection? {
+        guard let selection = textMarkerRange(selected ?? copyAttribute(element, kAXSelectedTextMarkerRangeAttribute)),
+              let field = fieldMarkers(of: element) else { return nil }
+        let first = AXTextMarkerRangeCopyStartMarker(selection)
+        let second = AXTextMarkerRangeCopyEndMarker(selection)
+        guard let firstOffset = offset(of: first, from: field.start, in: element) else { return nil }
+        var secondOffset = firstOffset
+        if !CFEqual(first, second) {
+            guard let offset = offset(of: second, from: field.start, in: element) else { return nil }
+            secondOffset = offset
+        }
+        // The range keeps the page's direction, so a backward selection starts at its larger end.
+        let forward = firstOffset <= secondOffset
+        return MarkedSelection(
+            range: min(firstOffset, secondOffset)..<max(firstOffset, secondOffset),
+            element: element,
+            lower: forward ? first : second,
+            upper: forward ? second : first
+        )
+    }
+
+    /// The field's text content: its `AXValue` without the paragraph breaks.
+    public static func textContent(of element: AXUIElement) -> String? {
+        guard let field = fieldMarkers(of: element) else { return nil }
+        return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
+    }
+
+    private static func fieldMarkers(of element: AXUIElement) -> (range: AXTextMarkerRange, start: AXTextMarker)? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", element, of: element)) else {
+            return nil
+        }
+        return (range, AXTextMarkerRangeCopyStartMarker(range))
+    }
+
+    private static func offset(of marker: AXTextMarker, from start: AXTextMarker, in element: AXUIElement) -> Int? {
+        let range = AXTextMarkerRangeCreate(kCFAllocatorDefault, start, marker)
+        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+    }
+
+    private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
+        guard let value, CFGetTypeID(value) == AXTextMarkerRangeGetTypeID() else { return nil }
+        return (value as! AXTextMarkerRange)
+    }
+
+    private static func copyAttribute(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success else { return nil }
+        return ref
+    }
+
+    fileprivate static func parameterized(_ attribute: String, _ parameter: AnyObject, of element: AXUIElement) -> AnyObject? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, attribute as CFString, parameter, &ref) == .success else {
+            return nil
+        }
+        return ref
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)

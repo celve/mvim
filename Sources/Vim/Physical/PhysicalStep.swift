@@ -137,6 +137,7 @@ public extension Chord {
     static let lineEnd = Chord(.arrowRight, [.command])
     static let documentStart = Chord(.arrowUp, [.command])
     static let documentEnd = Chord(.arrowDown, [.command])
+    static let selectLeft = Chord(.arrowLeft, [.shift])
     static let selectRight = Chord(.arrowRight, [.shift])
     static let selectDown = Chord(.arrowDown, [.shift])
     static let selectWordRight = Chord(.arrowRight, [.shift, .option])
@@ -150,13 +151,25 @@ public extension Chord {
 
 /// The planner's prediction of the field after a step, checked by the
 /// settle engine. Fields are optional in the shape of what is readable.
+///
+/// `selection` is in the field's own offsets; `length` is always `AXValue`'s.
 public struct Expectation: Equatable, Sendable {
     public let selection: Range<Int>?
     public let length: Int?
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil) {
+    /// Which side of a paragraph boundary the selection's upper end is on,
+    /// where its field offset names both; only a text-marker read can tell.
+    public let edge: Edge?
+
+    public enum Edge: Equatable, Sendable {
+        case paragraphEnd
+        case paragraphStart
+    }
+
+    public init(selection: Range<Int>? = nil, length: Int? = nil, edge: Edge? = nil) {
         self.selection = selection
         self.length = length
+        self.edge = edge
     }
 
     /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
@@ -173,7 +186,11 @@ extension Expectation {
     /// `sel=4..9 len=15`. Also renders an observation, which is the same shape.
     var traceFields: String {
         let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
-        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        var fields = "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        if let edge {
+            fields += edge == .paragraphStart ? " edge=start" : " edge=end"
+        }
+        return fields
     }
 }
 

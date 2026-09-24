@@ -29,13 +29,18 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// interference) means the selection is the user's, not ours.
     public let cursor: Range<Int>?
 
+    /// Nil where the field's own selection speaks `AXValue` offsets, as every
+    /// field but a Chromium rich-text one does; `selection` is converted either way.
+    public let breaks: ParagraphBreaks?
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
         selection: Range<Int>? = nil,
         length: Int? = nil,
         anchor: Int? = nil,
-        cursor: Range<Int>? = nil
+        cursor: Range<Int>? = nil,
+        breaks: ParagraphBreaks? = nil
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -43,6 +48,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.length = length ?? text.map { $0.utf16.count }
         self.anchor = anchor
         self.cursor = cursor
+        self.breaks = breaks
     }
 
     /// The caret, when the selection is collapsed.
