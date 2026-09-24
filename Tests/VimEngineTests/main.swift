@@ -1923,8 +1923,165 @@ precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9
 
 
 
-// MARK: - Settles that check native keys
+// MARK: - Native keys in lane B
 
+let keyProfile = CapabilityProfile(available: [
+    .readText, .readLength, .readCaret, .readSelectedText, .wholeDocument,
+    .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey,
+])
+precondition(Capability.nativeKeys.allSatisfy { $0.species == .mechanism && $0.parent == nil })
+precondition(Capability.lineStartKey.rawValue == "lineStartKey")
+
+func chords(_ plan: PhysicalPlan) -> [Chord] {
+    plan.steps.flatMap { step -> [Chord] in
+        switch step {
+        case .press(let chord, let count): return Array(repeating: chord, count: count)
+        case .branch(let branches): return branches.flatMap { chords(PhysicalPlan(steps: $0.steps)) }
+        default: return []
+        }
+    }
+}
+
+let keyedDD = physical("dd", text: "one\ntwo\nthree", caret: 5, profile: keyProfile)
+precondition(keyedDD.traceShape == "P!P!P!P?CC")
+precondition(Array(keyedDD.steps[0...5]) == [
+    .press(.paragraphStart, count: 1),
+    .settle(Expectation(
+        landing: .exact(4..<4), length: 13,
+        alternatives: [.init(world: 1, selection: 3..<3, length: 13)],
+        blame: .init(capability: .lineStartKey, unmoved: [5..<5])
+    )),
+    .press(Chord.paragraphEnd.shifted, count: 1),
+    .settle(Expectation(
+        landing: .exact(4..<7), length: 13,
+        alternatives: [.init(world: 1, selection: 3..<6, length: 13)],
+        blame: .init(capability: .lineEndKey, unmoved: [4..<4, 3..<3])
+    )),
+    .press(.selectRight, count: 1),
+    .settle(Expectation(
+        landing: .exact(4..<8), length: 13,
+        alternatives: [.init(world: 1, selection: 3..<6, length: 13)]
+    )),
+])
+precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .literal("two\n"), wise: .line))))
+
+let oneLine = "one two"
+precondition(chords(physical("0", text: oneLine, caret: 5, profile: keyProfile)) == [.paragraphStart])
+precondition(chords(physical("$", text: oneLine, caret: 1, profile: keyProfile)) == [.paragraphEnd])
+precondition(chords(physical("D", text: oneLine, caret: 2, profile: keyProfile)) == [Chord.paragraphEnd.shifted, .deleteBack])
+precondition(chords(physical("d0", text: oneLine, caret: 4, profile: keyProfile)) == [Chord.paragraphStart.shifted, .deleteBack])
+precondition(chords(physical("cc", text: oneLine, caret: 2, profile: keyProfile))
+             == [.paragraphStart, Chord.paragraphEnd.shifted, .deleteBack])
+precondition(chords(physical("yy", text: oneLine, caret: 2, profile: keyProfile))
+             == [.paragraphStart, Chord.paragraphEnd.shifted, .selectRight, .left])
+precondition(chords(physical("gg", text: "one\ntwo", caret: 5, profile: keyProfile)) == [.documentStart])
+precondition(chords(physical("G", text: "one\ntwo", caret: 1, profile: keyProfile)) == [.documentEnd, .paragraphStart])
+precondition(chords(physical("j", text: "one\ntwo", caret: 1, profile: keyProfile)) == [.paragraphEnd, .right, .right])
+precondition(chords(physical("dG", text: "one\ntwo", caret: 1, profile: keyProfile))
+             == [.paragraphStart, Chord.documentEnd.shifted, .deleteBack])
+let keyedO = physical("o", text: oneLine, caret: 2, profile: keyProfile)
+precondition(chords(keyedO) == [.paragraphEnd] && keyedO.steps.contains(.typeText("\n")))
+precondition(chords(physical("O", text: oneLine, caret: 2, profile: keyProfile))
+             == [.paragraphStart, .paragraphStart, .left, .paragraphStart])
+// `x` and `X` keep their checked select-then-delete: ⌦ or ⌫ would delete before any check, and join lines at an end.
+precondition(chords(physical("x", text: oneLine, caret: 2, profile: keyProfile)) == [.selectRight, .deleteBack])
+let longLine = "a\n" + String(repeating: "word ", count: 16) + "\ne"
+precondition(chords(physical("dd", text: longLine, caret: 42, profile: keyProfile)).count == 4)
+precondition(chords(physical("dd", text: longLine, caret: 42, profile: readProfile)).count == 122)
+
+// A key the field lacks falls back to counting, exactly as before.
+for keys in ["dd", "0", "$", "gg", "G", "j", "k", "D", "o", "O"] {
+    for (missing, text) in [(Capability.lineStartKey, "one\ntwo"), (.lineEndKey, "one\ntwo"), (.documentEndKey, "one\ntwo")] {
+        var profile = keyProfile
+        profile.statuses[missing] = .unavailable
+        let plan = physical(keys, text: text, caret: 5, profile: profile)
+        let needs: [Capability: [Chord]] = [
+            .lineStartKey: [.paragraphStart, Chord.paragraphStart.shifted],
+            .lineEndKey: [.paragraphEnd, Chord.paragraphEnd.shifted],
+            .documentEndKey: [.documentEnd, Chord.documentEnd.shifted],
+        ]
+        precondition(!chords(plan).contains { needs[missing]!.contains($0) }, "\(keys) pressed an unavailable key")
+    }
+}
+precondition(physical("dd", text: "one\ntwo", caret: 5, profile: readProfile)
+             == physical("dd", text: "one\ntwo", caret: 5, profile: CapabilityProfile(available: [
+                 .readText, .readLength, .readCaret, .readSelectedText, .wholeDocument, .documentStartKey,
+             ])))
+
+// Lane A keeps its exact writes.
+for keys in ["dd", "yy", "cc", "D", "0", "$", "gg", "G", "o", "O", "x", "j", "k", "dj", "J", "p"] {
+    var full = axProfile
+    for key in Capability.nativeKeys { full.statuses[key] = .available }
+    let plan = physical(keys, text: "one\ntwo\nthree", caret: 5, profile: full, state: putState)
+    precondition(plan == physical(keys, text: "one\ntwo\nthree", caret: 5, profile: axProfile, state: putState), keys)
+}
+
+// The logical fixes the keys rely on, in every lane.
+sim = Sim(text: "a\nb", caret: 2, profile: axProfile)
+sim.type("O")
+precondition(sim.text == "a\n\nb" && sim.caret == 2 && sim.state.field.mode == .insert)
+sim = Sim(text: "abc\ndef", caret: 1, profile: axProfile)
+sim.type("d$")
+precondition(sim.text == "a\ndef")
+precondition(sim.state.session.register("-") == .content(RegisterContent(text: "bc", wise: .character)))
+
+// End to end against lane A, reading exact offsets and reading Chromium's.
+let keyedCommands = ["dd", "yy", "cc", "S", "D", "C", "d$", "c$", "y$", "d0", "c0", "0", "^", "$", "A", "I",
+                     "gg", "G", "o", "O", "j", "k", "+", "-", "2dd", "3dd", "2yy", "dj", "dk", "yk", "cj", "ck",
+                     "dG", "dgg", "J", "3J", "2j", "3k", "2$", "yyp", "yyP", "ddp", "ddP", "x", "X"]
+for doc in ["alpha one\nbeta two\ngamma three\n\ndelta four\nepsilon", "  indented\n\tx y\nlast", "single line", "a\n"] {
+    for caret in 0...doc.utf16.count {
+        for keys in keyedCommands {
+            var reference = Sim(text: doc, caret: caret, profile: axProfile)
+            reference.type(keys)
+            for chromium in [false, true] {
+                // The counted `x`/`X` keep lane B's own reading, and `d2$` from a line's end reads as the next line's start.
+                if chromium, ["x", "X", "d2$"].contains(keys) { continue }
+                var keyed = Sim(text: doc, caret: caret, profile: keyProfile)
+                keyed.emulatesKeys = true
+                keyed.readsOmitBreaks = chromium
+                keyed.type(keys)
+                let context = "\(keys) at \(caret) in \(doc.debugDescription), chromium=\(chromium)"
+                precondition(keyed.text == reference.text && keyed.caret == reference.caret, context)
+                precondition(keyed.state.field.mode == reference.state.field.mode, context)
+                precondition(keyed.state.session.register("\"") == reference.state.session.register("\""), context)
+                precondition(keyed.settleFailures == 0 && keyed.unsupportedSteps == 0, context)
+                precondition(keyed.bells == reference.bells, context)
+            }
+        }
+    }
+}
+
+// Past paragraph 1 Chromium reads one low per break; the branch the settles pick counts the right column.
+sim = Sim(text: "ab\ncdef\nghij", caret: 5, profile: keyProfile)
+sim.emulatesKeys = true
+sim.readsOmitBreaks = true
+sim.type("j")
+precondition(sim.caret == 10 && sim.world == 1 && sim.settleFailures == 0)
+sim.type("dd")
+precondition(sim.text == "ab\ncdef\n" && sim.state.session.register("1") == .content(RegisterContent(text: "ghij", wise: .line)))
+
+// Wrapped paragraphs: ↓ and ⌘← move by visual row; ⌃E→ by logical line.
+let wrapped = "alpha beta gamma delta\nnext line"
+sim = Sim(text: wrapped, caret: 3, profile: keyProfile)
+sim.emulatesKeys = true
+sim.wrapWidth = 8
+sim.type("j")
+precondition(sim.caret == 26 && sim.settleFailures == 0)
+sim = Sim(text: wrapped, caret: 3, profile: readProfile)
+sim.emulatesKeys = true
+sim.wrapWidth = 8
+sim.type("j")
+precondition(sim.settleFailures == 1 && TextModel(wrapped).lineStart(of: sim.caret) == 0)
+
+// A key that does nothing is blamed; one that lands elsewhere is not.
+for (ignored, blamed) in [(Chord.paragraphStart, Capability.lineStartKey), (Chord.paragraphEnd.shifted, .lineEndKey)] {
+    sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
+    sim.emulatesKeys = true
+    sim.ignoredChords = [ignored]
+    sim.type("dd")
+    precondition(sim.blamed == [blamed] && sim.text == "one\ntwo")
+}
 let blameful = Expectation(landing: .exact(4..<4), length: 7, blame: .init(capability: .lineStartKey, unmoved: [5..<5]))
 precondition(blameful.blamed(observed: 5..<5) == .lineStartKey)
 precondition(blameful.blamed(observed: 2..<2) == nil)

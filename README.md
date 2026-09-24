@@ -201,17 +201,24 @@ Reading a `cmd` line, `steps=` is the ordered, payload-free plan, one character 
 W setSelection   R replaceSelection   P press (P3 = three times)   T typeText
 X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSelectedText
 ! settle         ? softSettle         C commit                     B bell
+{…|…} branch: the rest of the plan per reading of the field (see Native keys)
 ```
 
-Order is the diagnostic — a `!` directly after a `P` is a hard settle verifying a blind
-keypress, which can never name the capability it failed, so it rings without teaching the
-learner anything.
+Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
+a blind keypress, which can never name the capability it failed, so it rings without teaching
+the learner anything. A `!` after a native key names that key, and a failure blames it
+(`fail=lineStartKey`) only when the field still reads as it did before the key: the key did
+nothing. A landing somewhere else aborts without learning.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
 aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
 sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
+
+`world=N` means the settles matched Chromium's offsets rather than `AXValue`'s own (absent when
+they matched `AXValue`'s, or could not tell); a `settle` line lists each reading it accepted as
+`or wN sel=…`.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -252,6 +259,28 @@ defaults delete com.loom.mvim mvimRecordText
 **Both edges need a relaunch.** The flag is read once per process, deliberately — re-reading
 it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
 does not stop an mvim that is already running.
+
+## Native keys
+
+When a field can be read but not written, mvim moves by line and document with the standard
+Cocoa bindings instead of counting arrow presses: ⌃A/⌃E to the start and end of the caret's
+paragraph, which is mvim's line, ⇧⌃A/⇧⌃E to select there, and ⌘↑/⌘↓ (⇧ to select) for the
+document. `dd` is ⌃A, ⇧⌃E, ⇧→; `j` is ⌃E, → and then the column counted on the new line; `0`,
+`$`, `gg`, `G`, `D`, `C`, `cc`, `yy`, `o`, `O`, `J` and linewise puts follow the same pattern.
+`x` and `X` still select one character and check it before deleting, because ⌦ and ⌫ would
+delete first and join lines at a line end.
+
+Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
+**Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
+and caret mvim can read. A key that does nothing is learned off for that surface, like a write
+that lies, and mvim counts arrows there again; switch it back on from the menu.
+
+Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
+paragraph breaks before it (LIN-1533), so its offsets drift from `AXValue`'s past the first
+paragraph. A plan that uses native keys is also planned for each position the caret's read could
+mean there. The settles accept any of those readings, and where the keys would differ the plan
+branches and runs the reading the field matched. At the end of a line followed by blank lines,
+several positions read alike; mvim takes the latest.
 
 ## Running alongside Vibe
 

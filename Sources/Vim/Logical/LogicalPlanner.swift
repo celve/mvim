@@ -209,10 +209,11 @@ private extension LogicalPlanner {
             )
 
         case .newLineAbove:
+            // `h` stops at the line start, so the caret climbs to the new line with `k`.
             return LogicalPlan(
                 .moveCaret(.motion(.lineStart(firstNonBlank: false), count: 1)),
                 .insertText("\n"),
-                .moveCaret(.motion(.character(.left), count: 1)),
+                .moveCaret(.motion(.line(.up, firstNonBlank: false), count: 1)),
                 .setMode(.insert)
             )
 
@@ -653,8 +654,9 @@ private extension LogicalPlanner {
         case .mark, .offset:
             return false
         case .motion(let motion, _):
+            // `lineEnd` is already the gap after the last character; covering it would take the newline.
             switch motion {
-            case .word(_, true, _), .find, .matchingItem, .lineEnd, .lastNonBlank:
+            case .word(_, true, _), .find, .matchingItem, .lastNonBlank:
                 return true
             default:
                 return false
