@@ -346,10 +346,10 @@ public final class Controller {
 
     /// Fold one command's settle verdicts into the write probe's tally.
     ///
-    /// Only hard settles produce evidence, and only an AX write is ever
-    /// attributed — so this speaks exclusively about `writeSelection` and
-    /// `insertText`, the two capabilities a field can *claim* and then fail to
-    /// deliver. Reads were proven at bind; policies have no settle signal.
+    /// Only hard settles produce evidence, and only an AX write or a native
+    /// key is ever attributed — so this speaks exclusively about the claims a
+    /// field can make and then fail to deliver: `writeSelection`, `insertText`
+    /// and the keys. Reads were proven at bind; policies have no settle signal.
     ///
     /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), persisted and applied
     /// at once, so the next command routes around the lie. The re-resolve is
@@ -358,9 +358,9 @@ public final class Controller {
         from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64
     ) {
-        // A command that issued no AX write — the whole blind lane, and any plan
-        // whose steps were all commits — teaches nothing and should not pay for
-        // the config lookups below. Already on the command's line as `fail=nil`.
+        // A command that issued no AX write or native key — the whole blind lane,
+        // and any plan whose steps were all commits — teaches nothing and should
+        // not pay for the config lookups below. Already on the line as `fail=nil`.
         guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
             return
         }

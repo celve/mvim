@@ -23,6 +23,8 @@ public enum FieldProber {
         if reads.string(3) != nil { available.insert(.readSelectedText) }
         if AX.rangeSettable(element) { available.insert(.writeSelection) }
         if AX.isInsertable(element) { available.insert(.insertText) }
+        // No read can try a key; the settle after one is its trial.
+        if available.contains(.readText), available.contains(.readCaret) { available.formUnion(Capability.nativeKeys) }
         return CapabilityProfile(available: available)
     }
 

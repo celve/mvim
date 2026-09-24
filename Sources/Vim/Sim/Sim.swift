@@ -12,10 +12,9 @@
 /// It executes lane-A/B AX and clipboard steps exactly — including the
 /// modeled pasteboard, written by `clipboardCut`/`clipboardCopy` and read
 /// by `clipboardInsert(nil)`, which makes the clipboard=unnamed contract
-/// pure-testable. It does **not** emulate Cocoa key semantics: `press`
-/// steps (blind lanes, undo) count as `unsupportedSteps`, because the Sim
-/// can only prove we emit the plans we designed, never that a blind plan
-/// works in a real app.
+/// pure-testable. `press` steps count as `unsupportedSteps` unless
+/// `emulatesKeys` runs them through `KeyModel`, which proves the plans
+/// agree with Cocoa's bindings as modeled, never that an app honors them.
 ///
 /// Its three faults are the only way a golden reaches the abort path at all.
 public struct Sim {
@@ -35,12 +34,33 @@ public struct Sim {
     /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
     public var unreadableSelection = false
 
+    /// Presses run through `KeyModel` instead of counting as unsupported.
+    public var emulatesKeys = false
+
+    /// Reports the selection as Chromium does in rich text: every `\n` before an offset left out (LIN-1533).
+    public var readsOmitBreaks = false
+
+    /// Graphemes per visual row for ↓ ↑ ⌘← ⌘→; nil puts each line on one row.
+    public var wrapWidth: Int?
+
+    /// Keys this field ignores, as an app that rebinds them would.
+    public var ignoredChords: Set<Chord> = []
+
+    /// Keys the failed settles blamed, in order.
+    public private(set) var blamed: [Capability] = []
+
+    /// The lowest world the last run's settles matched, when it was not `AXValue`'s own.
+    public private(set) var world: Int?
+
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
     public private(set) var unsupportedSteps = 0
 
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
+
+    /// The focus is the selection's lower bound.
+    private var backward = false
 
     /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
@@ -133,7 +153,7 @@ private extension Sim {
         let snapshot = FieldSnapshot(
             capabilities: profile,
             text: text,
-            selection: selection,
+            selection: observedSelection,
             anchor: anchor,
             cursor: cursor
         )
@@ -245,13 +265,30 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
+    var observedSelection: Range<Int> {
+        guard readsOmitBreaks else { return selection }
+        let model = TextModel(text)
+        return model.breaksOmitted(selection.lowerBound)..<model.breaksOmitted(selection.upperBound)
+    }
+
     mutating func execute(_ plan: PhysicalPlan) -> Bool {
-        for (index, step) in plan.steps.enumerated() {
-            switch step {
+        var queue = plan.steps
+        // The worlds every settle so far has matched; nil is all of them.
+        var consistent: Set<Int>?
+        defer { world = consistent.flatMap { $0.contains(0) ? nil : $0.min() } }
+        var index = 0
+        while index < queue.count {
+            switch queue[index] {
+            case .branch(let branches):
+                let chosen = Branch.chosen(from: branches, consistent: consistent)
+                queue.replaceSubrange(index...index, with: chosen?.steps ?? [])
+                continue
+
             case .setSelection(let range):
                 guard !swallowsSelect else { break }
                 let model = TextModel(text)
                 selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
+                backward = false
 
             case .replaceSelection(let replacement):
                 if !swallowsReplace { applyReplace(replacement) }
@@ -259,8 +296,26 @@ private extension Sim {
             case .typeText(let typed):
                 applyReplace(typed)
 
-            case .press:
-                unsupportedSteps += 1
+            case .press(let chord, let count):
+                guard emulatesKeys else {
+                    unsupportedSteps += 1
+                    break
+                }
+                for _ in 0..<count where !ignoredChords.contains(chord) {
+                    var keys = KeyModel(
+                        text: text,
+                        anchor: backward ? selection.upperBound : selection.lowerBound,
+                        focus: backward ? selection.lowerBound : selection.upperBound,
+                        wrap: wrapWidth
+                    )
+                    guard keys.press(chord) else {
+                        unsupportedSteps += 1
+                        break
+                    }
+                    text = keys.text
+                    selection = keys.selection
+                    backward = keys.focus < keys.anchor
+                }
 
             case .clipboardCut:
                 pasteboard = TextModel(text).substring(selection)
@@ -276,26 +331,24 @@ private extension Sim {
                 captures[slot] = TextModel(text).substring(selection)
 
             case .settle(let expectation):
-                var converged = true
-                if let expected = expectation.selection {
-                    // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
-                    converged = converged && !unreadableSelection && expected == selection
-                }
-                if let expectedLength = expectation.length {
-                    converged = converged && expectedLength == text.utf16.count
-                }
-                if !converged {
+                // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
+                let observed = unreadableSelection ? nil : observedSelection
+                let matched = expectation.worlds(matching: observed, length: text.utf16.count)
+                let live = consistent.map(matched.intersection) ?? matched
+                if live.isEmpty {
                     settleFailures += 1
-                    drainResidency(of: plan, after: index)
+                    if let key = expectation.blamed(observed: observed) { blamed.append(key) }
+                    drainResidency(of: queue[(index + 1)...], consistent: consistent)
                     return false   // the rest dies, like the real executor
                 }
+                consistent = live
 
-            case .softSettle:
-                // Best-effort barrier: never aborts. In this synchronous host
-                // there is nothing async to wait for, and the blind step it
-                // follows is an unsupported no-op, so the field won't match the
-                // prediction — which is exactly why a soft settle must proceed.
-                break
+            case .softSettle(let expectation):
+                // Best-effort barrier: never aborts, and narrows the worlds only when one matched.
+                let observed = unreadableSelection ? nil : observedSelection
+                let matched = expectation.worlds(matching: observed, length: text.utf16.count)
+                let live = consistent.map(matched.intersection) ?? matched
+                if !live.isEmpty { consistent = live }
 
             case .commit(let effect):
                 state = VimReducer.reduce(state, effect, captures: captures)
@@ -303,15 +356,22 @@ private extension Sim {
             case .bell:
                 bells += 1
             }
+            index += 1
         }
         return true
     }
 
     /// The twin of the real executor's surviving-commit scan.
-    mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
-        for survivor in plan.steps[(index + 1)...] {
-            if case .commit(let effect) = survivor, effect.survivesAbort {
+    mutating func drainResidency(of steps: ArraySlice<PhysicalStep>, consistent: Set<Int>?) {
+        for survivor in steps {
+            switch survivor {
+            case .commit(let effect) where effect.survivesAbort:
                 state = VimReducer.reduce(state, effect, captures: captures)
+            case .branch(let branches):
+                let chosen = Branch.chosen(from: branches, consistent: consistent)
+                drainResidency(of: ArraySlice(chosen?.steps ?? []), consistent: consistent)
+            default:
+                break
             }
         }
     }
@@ -320,5 +380,6 @@ private extension Sim {
         text = TextModel(text).replacing(selection, with: replacement)
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
+        backward = false
     }
 }

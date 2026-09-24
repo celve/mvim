@@ -47,6 +47,9 @@ public enum PhysicalStep: Equatable, Sendable {
     /// Hand an effect to the reducer (capture slots resolved to literals).
     case commit(VimEffect)
 
+    /// The rest of the plan per reading of the field; the executor runs the lowest world the settles still match.
+    case branch([Branch])
+
     /// Signal invalidity; changes nothing. A plan that cannot be realized
     /// in this field is exactly `[.bell]`.
     case bell
@@ -64,7 +67,26 @@ public extension PhysicalStep {
             return chord.mutatesText
         case .setSelection, .clipboardCopy, .captureSelectedText, .settle, .softSettle, .commit, .bell:
             return false
+        case .branch(let branches):
+            return branches.contains { $0.steps.contains(where: \.mutatesText) }
         }
+    }
+}
+
+/// The continuation of the worlds whose keys agree from here; world 0 reads `AXValue` offsets (see `PhysicalPlanner`).
+public struct Branch: Equatable, Sendable {
+    public let worlds: Set<Int>
+    public let steps: [PhysicalStep]
+
+    public init(worlds: Set<Int>, steps: [PhysicalStep]) {
+        self.worlds = worlds
+        self.steps = steps
+    }
+
+    /// The branch holding the lowest world the field's answers still match (nil: every world), else the first.
+    public static func chosen(from branches: [Branch], consistent: Set<Int>?) -> Branch? {
+        let lowest = branches.flatMap(\.worlds).filter { consistent?.contains($0) ?? true }.min()
+        return branches.first { lowest.map($0.worlds.contains) ?? false } ?? branches.first
     }
 }
 
@@ -141,6 +163,9 @@ public extension Chord {
     static let selectDown = Chord(.arrowDown, [.shift])
     static let selectWordRight = Chord(.arrowRight, [.shift, .option])
     static let selectLineEnd = Chord(.arrowRight, [.shift, .command])
+    static let selectLeft = Chord(.arrowLeft, [.shift])
+    static let paragraphStart = Chord(.character("a"), [.control])
+    static let paragraphEnd = Chord(.character("e"), [.control])
     static let deleteBack = Chord(.delete)
     static let undo = Chord(.character("z"), [.command])
     static let redo = Chord(.character("z"), [.command, .shift])
@@ -148,20 +173,116 @@ public extension Chord {
 
 // MARK: - Expectations
 
+/// Where a settle expects the selection: a prediction, or a relation to a read for keys the app lands.
+public enum Landing: Equatable, Sendable {
+    case exact(Range<Int>)
+    case caretAfter(Int, strict: Bool)
+    case caretBefore(Int, strict: Bool)
+    /// A non-empty selection with one end at the offset, reaching forward or backward from it.
+    case extending(from: Int, forward: Bool)
+    /// A non-empty selection that contains the character after the offset.
+    case covering(Int)
+
+    public func matches(_ observed: Range<Int>) -> Bool {
+        switch self {
+        case .exact(let range):
+            return observed == range
+        case .caretAfter(let offset, let strict):
+            return observed.isEmpty && (strict ? observed.lowerBound > offset : observed.lowerBound >= offset)
+        case .caretBefore(let offset, let strict):
+            return observed.isEmpty && (strict ? observed.lowerBound < offset : observed.lowerBound <= offset)
+        case .extending(let offset, let forward):
+            return !observed.isEmpty && (forward ? observed.lowerBound == offset : observed.upperBound == offset)
+        case .covering(let offset):
+            return observed.lowerBound <= offset && offset < observed.upperBound
+        }
+    }
+}
+
 /// The planner's prediction of the field after a step, checked by the
 /// settle engine. Fields are optional in the shape of what is readable.
 public struct Expectation: Equatable, Sendable {
-    public let selection: Range<Int>?
+    public let landing: Landing?
     public let length: Int?
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil) {
-        self.selection = selection
-        self.length = length
+    /// The world `landing` and `length` predict.
+    public var world = 0
+
+    /// The same settle as other worlds read it.
+    public var alternatives: [Alternative]
+
+    /// The native key this settle checks.
+    public var blame: Blame?
+
+    public struct Alternative: Equatable, Sendable {
+        public let world: Int
+        public let selection: Range<Int>?
+        public let length: Int?
+
+        public init(world: Int, selection: Range<Int>?, length: Int?) {
+            self.world = world
+            self.selection = selection
+            self.length = length
+        }
     }
+
+    /// A failed settle demotes `capability` only when the field still reads as one of `unmoved`: the key did nothing.
+    public struct Blame: Equatable, Sendable {
+        public let capability: Capability
+        public let unmoved: [Range<Int>]
+
+        public init(capability: Capability, unmoved: [Range<Int>]) {
+            self.capability = capability
+            self.unmoved = unmoved
+        }
+    }
+
+    public init(selection: Range<Int>? = nil, length: Int? = nil) {
+        self.init(landing: selection.map(Landing.exact), length: length)
+    }
+
+    public init(landing: Landing?, length: Int? = nil, alternatives: [Alternative] = [], blame: Blame? = nil) {
+        self.landing = landing
+        self.length = length
+        self.alternatives = alternatives
+        self.blame = blame
+    }
+
+    public var selection: Range<Int>? {
+        guard case .exact(let range)? = landing else { return nil }
+        return range
+    }
+
+    var readsSelection: Bool { landing != nil || alternatives.contains { $0.selection != nil } }
+    var readsLength: Bool { length != nil || alternatives.contains { $0.length != nil } }
 
     /// Arguments are what the field answered; `nil` is a non-answer and satisfies nothing.
     public func matches(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
-        if let selection, observed != selection { return false }
+        !worlds(matching: observed, length: observedLength).isEmpty
+    }
+
+    public func worlds(matching observed: Range<Int>?, length observedLength: Int?) -> Set<Int> {
+        var worlds: Set<Int> = []
+        if Self.meets(landing, length, observed, observedLength) { worlds.insert(world) }
+        for alternative in alternatives
+        where Self.meets(alternative.selection.map(Landing.exact), alternative.length, observed, observedLength) {
+            worlds.insert(alternative.world)
+        }
+        return worlds
+    }
+
+    /// The key a non-converged settle blames, given the last selection it read.
+    public func blamed(observed: Range<Int>?) -> Capability? {
+        guard let blame, let observed, blame.unmoved.contains(observed) else { return nil }
+        return blame.capability
+    }
+
+    private static func meets(
+        _ landing: Landing?, _ length: Int?, _ observed: Range<Int>?, _ observedLength: Int?
+    ) -> Bool {
+        if let landing {
+            guard let observed, landing.matches(observed) else { return false }
+        }
         if let length, observedLength != length { return false }
         return true
     }
@@ -170,10 +291,30 @@ public struct Expectation: Equatable, Sendable {
 // MARK: - Recorder
 
 extension Expectation {
-    /// `sel=4..9 len=15`. Also renders an observation, which is the same shape.
+    /// `sel=4..9 len=15`, then `or w1 sel=3..8 len=15` per alternative. Also renders an observation.
     var traceFields: String {
-        let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
-        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        var line = (world == 0 ? "" : "w\(world) ") + Self.fields(landing.map(\.traceName) ?? "nil", length)
+        for alternative in alternatives {
+            let selection = alternative.selection.map { Landing.exact($0).traceName } ?? "nil"
+            line += " or w\(alternative.world) " + Self.fields(selection, alternative.length)
+        }
+        return line
+    }
+
+    private static func fields(_ selection: String, _ length: Int?) -> String {
+        "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+    }
+}
+
+extension Landing {
+    var traceName: String {
+        switch self {
+        case .exact(let range): return "\(range.lowerBound)..\(range.upperBound)"
+        case .caretAfter(let offset, let strict): return (strict ? ">" : ">=") + "\(offset)"
+        case .caretBefore(let offset, let strict): return (strict ? "<" : "<=") + "\(offset)"
+        case .extending(let offset, let forward): return forward ? "\(offset)->" : "<-\(offset)"
+        case .covering(let offset): return "~\(offset)"
+        }
     }
 }
 
@@ -193,6 +334,8 @@ extension PhysicalStep {
         case .softSettle: return "?"
         case .commit: return "C"
         case .bell: return "B"
+        case .branch(let branches):
+            return "{" + branches.map { $0.steps.map(\.traceCode).joined() }.joined(separator: "|") + "}"
         }
     }
 }

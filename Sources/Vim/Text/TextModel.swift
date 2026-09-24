@@ -55,6 +55,28 @@ public struct TextModel: Equatable, Sendable {
         text[index(range.lowerBound)..<index(range.upperBound)].reduce(0) { $1 == "\n" ? $0 + 1 : $0 }
     }
 
+    // MARK: - Chromium's offsets
+
+    /// The offset as Chromium's `AXSelectedTextRange` reports it in rich text: every `\n` before it left out (LIN-1533).
+    public func breaksOmitted(_ o: Int) -> Int {
+        clamp(o) - newlineCount(in: 0..<o)
+    }
+
+    /// Every offset `breaksOmitted` maps to `reading`: more than one where newlines sit between them.
+    public func offsets(breaksOmitted reading: Int) -> [Int] {
+        var offsets: [Int] = []
+        var offset = 0
+        var read = 0
+        for character in text {
+            if read == reading { offsets.append(offset) }
+            if read > reading { return offsets }
+            offset += character.utf16.count
+            if character != "\n" { read += character.utf16.count }
+        }
+        if read == reading { offsets.append(offset) }
+        return offsets
+    }
+
     // MARK: - Lines
 
     /// Offset just after the previous newline (or 0). A caret sitting on a

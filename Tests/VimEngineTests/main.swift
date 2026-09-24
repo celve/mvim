@@ -1808,7 +1808,7 @@ precondition(physical("3w", text: "say hello world", caret: 0, profile: readProf
 precondition(CapabilityReport(entries: [
     .readText: .init(status: .available, source: .probed),
     .writeSelection: .init(status: .unavailable, source: .learned),
-]).traceGrid == "RT+p RL?? RC?? RS?? WS-l IT?? DC?? WD?? FS??")
+]).traceGrid == "RT+p RL?? RC?? RS?? WS-l IT?? DC?? WD?? FS?? KA?? KE?? KT?? KB??")
 
 // MARK: - The redaction rule
 
@@ -1922,5 +1922,37 @@ precondition(!Expectation(selection: 4..<9, length: 15).matches(selection: 4..<9
 
 
 
+
+// MARK: - Settles that check native keys
+
+let blameful = Expectation(landing: .exact(4..<4), length: 7, blame: .init(capability: .lineStartKey, unmoved: [5..<5]))
+precondition(blameful.blamed(observed: 5..<5) == .lineStartKey)
+precondition(blameful.blamed(observed: 2..<2) == nil)
+precondition(blameful.blamed(observed: nil) == nil)
+precondition(Expectation(selection: 4..<4).blamed(observed: 5..<5) == nil)
+
+// World-tagged readings, branches and relational landings.
+let dual = Expectation(landing: .exact(4..<4), length: 7, alternatives: [.init(world: 2, selection: 3..<3, length: 7)])
+precondition(dual.worlds(matching: 4..<4, length: 7) == [0])
+precondition(dual.worlds(matching: 3..<3, length: 7) == [2])
+precondition(dual.worlds(matching: 3..<3, length: 6).isEmpty)
+precondition(dual.traceFields == "sel=4..4 len=7 or w2 sel=3..3 len=7")
+let branches = [Branch(worlds: [0, 1], steps: [.bell]), Branch(worlds: [2], steps: [])]
+precondition(Branch.chosen(from: branches, consistent: nil)?.worlds == [0, 1])
+precondition(Branch.chosen(from: branches, consistent: [2])?.worlds == [2])
+precondition(Branch.chosen(from: branches, consistent: [1, 2])?.worlds == [0, 1])
+precondition(PhysicalPlan(steps: [.press(.left, count: 1), .branch(branches)]).traceShape == "P{B|}")
+precondition(PhysicalPlan(steps: [.branch([Branch(worlds: [1], steps: [.typeText("x")])])]).mutatesText)
+precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))
+precondition(Landing.caretBefore(4, strict: false).matches(4..<4) && !Landing.caretBefore(4, strict: false).matches(2..<3))
+precondition(Landing.extending(from: 4, forward: true).matches(4..<9) && !Landing.extending(from: 4, forward: true).matches(4..<4))
+precondition(Landing.extending(from: 4, forward: false).matches(1..<4))
+precondition(Landing.covering(4).matches(3..<5) && !Landing.covering(4).matches(4..<4))
+precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "sel=>2 len=nil")
+
+let breaks = TextModel("ab\n\ncd")
+precondition(breaks.breaksOmitted(5) == 3)
+precondition(breaks.offsets(breaksOmitted: 2) == [2, 3, 4])
+precondition(breaks.offsets(breaksOmitted: 9).isEmpty)
 
 print("Vim engine tests passed")

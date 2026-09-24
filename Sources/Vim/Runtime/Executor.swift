@@ -28,6 +28,7 @@ public final class Executor {
     /// clears it), and each settle consumes it. A planner shape that ever
     /// interleaves other steps between write and settle fails toward NO
     /// evidence — never a false strike. Zero-settle plans say nothing.
+    /// A settle that names a native key (`Expectation.blame`) attributes to it instead.
     /// Callers must copy this immediately after their execute: hygiene
     /// plans (cursor collapse, stranded-selection repair) reuse this
     /// executor and reset it.
@@ -40,6 +41,9 @@ public final class Executor {
 
         /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
         public internal(set) var settleFailures: [SettleFailure] = []
+
+        /// The lowest reading of the field the settles matched, when it was not `AXValue`'s own (see `PhysicalPlanner`).
+        public internal(set) var world: Int?
 
         public init() {}
     }
@@ -62,6 +66,12 @@ public final class Executor {
 
     /// From the write a following settle verifies; cleared where attribution is.
     private var lastWriteError: Int32?
+
+    /// The worlds every settle of this run has matched; nil is all of them.
+    private var consistent: Set<Int>?
+
+    /// The selection the last settle read, which says whether a native key did anything.
+    private var lastObserved: Range<Int>?
 
     /// An `AXError` worth reporting: `.success` is not one.
     private static func rejection(_ error: AXError) -> Int32? {
@@ -94,19 +104,30 @@ public final class Executor {
         captures = [:]
         lastRun = RunEvidence()
         lastWriteError = nil
+        consistent = nil
+        lastObserved = nil
         var attribution: Capability?
-        for (index, step) in plan.steps.enumerated() {
+        var queue = plan.steps
+        var index = 0
+        while index < queue.count {
+            let step = queue[index]
+            if case .branch(let branches) = step {
+                let chosen = Branch.chosen(from: branches, consistent: consistent)
+                queue.replaceSubrange(index...index, with: chosen?.steps ?? [])
+                continue
+            }
             let passed = perform(step, at: index, on: element, state: &state)
             switch step {
             case .setSelection:
                 attribution = .writeSelection
             case .replaceSelection:
                 attribution = .insertText
-            case .settle:
-                if passed, let attributed = attribution {
+            case .settle(let expectation):
+                if passed, let attributed = expectation.blame?.capability ?? attribution {
                     lastRun.settledCapabilities.insert(attributed)
                 } else if !passed {
-                    lastRun.failedCapability = attribution
+                    lastRun.failedCapability = expectation.blame == nil
+                        ? attribution : expectation.blamed(observed: lastObserved)
                 }
                 attribution = nil
                 lastWriteError = nil
@@ -117,16 +138,34 @@ public final class Executor {
             }
             guard passed else {
                 lastRun.abortedAt = index
+                lastRun.world = Self.reported(consistent)
                 // A second pass, not a `continue`: `perform` would re-post a blind keypress.
-                for survivor in plan.steps[(index + 1)...] {
-                    if case .commit(let effect) = survivor, effect.survivesAbort {
-                        commit(effect, state: &state)
-                    }
-                }
+                commitSurvivors(queue[(index + 1)...], state: &state)
                 return false
             }
+            index += 1
         }
+        lastRun.world = Self.reported(consistent)
         return true
+    }
+
+    private static func reported(_ worlds: Set<Int>?) -> Int? {
+        guard let worlds, !worlds.contains(0) else { return nil }
+        return worlds.min()
+    }
+
+    private func commitSurvivors(_ steps: ArraySlice<PhysicalStep>, state: inout VimState) {
+        for survivor in steps {
+            switch survivor {
+            case .commit(let effect) where effect.survivesAbort:
+                commit(effect, state: &state)
+            case .branch(let branches):
+                commitSurvivors(ArraySlice(Branch.chosen(from: branches, consistent: consistent)?.steps ?? []),
+                                state: &state)
+            default:
+                break
+            }
+        }
     }
 
     /// Runtime-authored effects (insert payloads, dot bodies) enter through
@@ -207,7 +246,9 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
-            if record(settle(expectation, on: element), expectation, at: index, hard: true) {
+            let outcome = settle(expectation, on: element)
+            narrow(to: outcome)
+            if record(outcome, expectation, at: index, hard: true) {
                 return true
             }
             NSSound.beep()
@@ -216,7 +257,9 @@ public final class Executor {
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
-            _ = record(settle(expectation, on: element), expectation, at: index, hard: false)
+            let outcome = settle(expectation, on: element)
+            narrow(to: outcome)
+            _ = record(outcome, expectation, at: index, hard: false)
             return true
 
         case .commit(let effect):
@@ -226,17 +269,27 @@ public final class Executor {
         case .bell:
             NSSound.beep()
             return true
+
+        case .branch:
+            return true   // `execute` splices the chosen continuation in before this is reached
         }
     }
 
     /// The observed values ride every exit, so a timeout costs no extra round trip.
     private struct SettleOutcome {
         let converged: Bool
+        /// The worlds the answer matched, among those still consistent; nil when nothing was predicted.
+        var worlds: Set<Int>? = nil
         let observedSelection: Range<Int>?
         let observedLength: Int?
         let answered: Bool
         let polls: Int
         let milliseconds: Int
+    }
+
+    private func narrow(to outcome: SettleOutcome) {
+        lastObserved = outcome.observedSelection
+        if outcome.converged, let worlds = outcome.worlds { consistent = worlds }
     }
 
     /// Bounded convergence poll against the planner's prediction.
@@ -251,11 +304,11 @@ public final class Executor {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
-        if expectation.selection != nil {
+        if expectation.readsSelection {
             selectionSlot = names.count
             names.append(kAXSelectedTextRangeAttribute)
         }
-        if expectation.length != nil {
+        if expectation.readsLength {
             lengthSlot = names.count
             names.append(kAXNumberOfCharactersAttribute)
         }
@@ -285,15 +338,18 @@ public final class Executor {
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
+            let matched = expectation.worlds(matching: selection, length: length)
+            let worlds = consistent.map(matched.intersection) ?? matched
             func outcome(_ converged: Bool) -> SettleOutcome {
                 SettleOutcome(
                     converged: converged,
+                    worlds: worlds,
                     observedSelection: selection, observedLength: length,
                     answered: answered, polls: polls,
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            if expectation.matches(selection: selection, length: length) { return outcome(true) }
+            if !worlds.isEmpty { return outcome(true) }
             guard Date() < deadline else { return outcome(false) }
             Thread.sleep(forTimeInterval: 0.01)
         }
@@ -313,6 +369,8 @@ public final class Executor {
         case .escape: return 53
         case .character(let character):
             switch character {
+            case "a": return 0    // kVK_ANSI_A (⌃A)
+            case "e": return 14   // kVK_ANSI_E (⌃E)
             case "z": return 6    // kVK_ANSI_Z (undo/redo)
             case "v": return 9    // kVK_ANSI_V
             default: return nil

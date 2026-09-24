@@ -81,6 +81,9 @@ enum Diag {
         if let abortedAt = evidence.abortedAt {
             line += " abort@\(abortedAt)"
         }
+        if let world = evidence.world {
+            line += " world=\(world)"
+        }
         line += " ok=\(executed ? 1 : 0)"
         line += " fail=\(evidence.failedCapability?.traceName ?? "nil")"
         line += " settled=\(evidence.settledCapabilities.traceNames)"
