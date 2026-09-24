@@ -737,7 +737,7 @@ precondition(physical("ciw", text: "say hello world", selection: 5..<15, profile
     .commit(.setInsertStart(4)),
 ])
 
-// An AX write queued behind keys can land before them, so `insertText` without `writeSelection` settles between.
+// An AX write can overtake queued keys, so `insertText` without `writeSelection` settles between; ⌘V cannot.
 let insertOnlyProfile = CapabilityProfile(available: [
     .readText, .readLength, .readCaret, .readSelectedText, .insertText, .wholeDocument,
 ])
@@ -747,6 +747,12 @@ precondition(physical("p", text: "say hello\nworld", selection: 5..<9, profile: 
     .settle(Expectation(selection: 6..<6, length: 15)),
     .replaceSelection("XY"),
     .settle(Expectation(selection: 8..<8, length: 17)),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("\"+p", text: "say hello\nworld", selection: 5..<9, profile: insertOnlyProfile).steps == [
+    .press(.left, count: 1),
+    .press(.right, count: 1),
+    .clipboardInsert(nil),
     .commit(.setCursor(nil)),
 ])
 precondition(physical("J", text: "say hello\nworld", selection: 5..<9, profile: insertOnlyProfile).steps == [

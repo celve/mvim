@@ -858,7 +858,7 @@ private extension PhysicalPlanner {
                 ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
                 : position
             var steps = moveSteps(to: target, context: &context, profile: profile)
-            steps += insertSteps(payload, context: &context, profile: profile)
+            steps += insertSteps(payload, after: steps, context: &context, profile: profile)
             return steps
         }
         var steps: [PhysicalStep] = []
@@ -894,7 +894,7 @@ private extension PhysicalPlanner {
                 target = model.lineStart(of: position)
             }
             var steps = moveSteps(to: target, context: &context, profile: profile)
-            steps += insertSteps(insertion, context: &context, profile: profile)
+            steps += insertSteps(insertion, after: steps, context: &context, profile: profile)
             return steps
         }
         context.invalidate()
@@ -909,17 +909,15 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep] {
-        var steps: [PhysicalStep] = []
+        let steps: [PhysicalStep]
         if profile.has(.writeSelection) {
             steps = [.setSelection(target..<target)]
         } else if let model = context.model, let selection = context.selection {
             steps = keyPath(from: selection, to: target, model: model)
+        } else {
+            steps = []
         }
         context.selection = target..<target
-        // With `insertText` the put behind keys can be an AX write, which would overtake them.
-        if !profile.has(.writeSelection), !steps.isEmpty, profile.has(.insertText) {
-            steps += settle(context, profile: profile)
-        }
         return steps
     }
 
@@ -927,6 +925,7 @@ private extension PhysicalPlanner {
     /// otherwise (typing long content is slow and lossy).
     static func insertSteps(
         _ text: String,
+        after positioning: [PhysicalStep],
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep] {
@@ -934,9 +933,12 @@ private extension PhysicalPlanner {
             ? .replaceSelection(text)
             : .clipboardInsert(text)
         if let selection = context.selection, context.text != nil {
+            // An AX insertion would overtake keys still queued from the positioning; a paste would not.
+            let pressed = positioning.contains { if case .press = $0 { return true }; return false }
+            let barrier = pressed && profile.has(.insertText) ? settle(context, profile: profile) : []
             context.applyEdit(range: selection, replacement: text)
             // Blind (paste) insert is async: soft, so it never aborts what follows.
-            return [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            return barrier + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
         }
         context.invalidate()
         return [action]
