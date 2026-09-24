@@ -12,12 +12,12 @@
 /// It executes lane-A/B AX and clipboard steps exactly — including the
 /// modeled pasteboard, written by `clipboardCut`/`clipboardCopy` and read
 /// by `clipboardInsert(nil)`, which makes the clipboard=unnamed contract
-/// pure-testable. It does **not** emulate Cocoa key semantics: `press`
-/// steps (blind lanes, undo) count as `unsupportedSteps`, because the Sim
-/// can only prove we emit the plans we designed, never that a blind plan
-/// works in a real app.
+/// pure-testable. Of Cocoa's keys it emulates only the ones lane B counts
+/// with, on unwrapped text; every other `press` (the blind lane's chords,
+/// undo) counts as `unsupportedSteps`, because the Sim can only prove we
+/// emit the plans we designed, never that a blind plan works in a real app.
 ///
-/// Its three faults are the only way a golden reaches the abort path at all.
+/// Its faults are the only way a golden reaches the abort path at all.
 public struct Sim {
     public private(set) var text: String
     public private(set) var selection: Range<Int>
@@ -34,6 +34,24 @@ public struct Sim {
 
     /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
     public var unreadableSelection = false
+
+    /// Makes the field a Chromium contenteditable: `AXSelectedTextRange` starts at `reads` of the selection's
+    /// start and is as long as `AXSelectedText`, the true selected text less its paragraph breaks (LIN-1533).
+    public var reads: ((_ offset: Int, _ text: String) -> Int)?
+
+    public var readSelection: Range<Int> {
+        guard let reads else { return selection }
+        let start = reads(selection.lowerBound, text)
+        return start..<start + readSelectedText.utf16.count
+    }
+
+    public var readSelectedText: String {
+        let selected = TextModel(text).substring(selection)
+        return reads == nil ? selected : selected.filter { $0 != "\n" }
+    }
+
+    /// Where the last command's run ended early, if it did.
+    public private(set) var abortedStep: PhysicalStep?
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
@@ -90,7 +108,7 @@ public struct Sim {
     @discardableResult
     public mutating func perform(_ steps: [PhysicalStep]) -> Bool {
         captures = [:]
-        return execute(PhysicalPlan(steps: steps))
+        return execute(PhysicalPlan(steps: steps)) == nil
     }
 
     /// `Controller.rebind`'s pure twin: focus moved, and the transition says
@@ -127,13 +145,13 @@ private extension Sim {
         }
         // Same cursor match-stamp as the runtime's Snapshotter.
         var cursor: Range<Int>?
-        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == selection {
+        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == readSelection {
             cursor = drawn
         }
         let snapshot = FieldSnapshot(
             capabilities: profile,
             text: text,
-            selection: selection,
+            selection: readSelection,
             anchor: anchor,
             cursor: cursor
         )
@@ -142,10 +160,16 @@ private extension Sim {
         let before = state.field.mode
 
         captures = [:]
-        let executed = execute(physical)
-        guard executed else {
+        let abortedAt = execute(physical)
+        abortedStep = abortedAt.map { physical.steps[$0] }
+        guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
-            if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
+            if planned.abortedAtTextCheck(abortedAt) {
+                if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
+                if state.field.mode.isInserting {
+                    state = VimReducer.reduce(state, .setMode(before.nonVisual))
+                }
+            } else if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
             // The monitor drained the payload it will never offer again.
@@ -166,8 +190,8 @@ private extension Sim {
     /// The Controller's twin, and it must obey the host the same way.
     mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
         guard !unreadableSelection else { return false }   // unknown is not empty
-        guard !selection.isEmpty else { return true }
-        if state.field.mode.isInserting, selection == operand { return true }
+        guard !readSelection.isEmpty else { return true }
+        if state.field.mode.isInserting, readSelection == operand { return true }
         guard profile.has(.writeSelection), !swallowsSelect else { return false }
         selection = selection.lowerBound..<selection.lowerBound
         return true
@@ -245,7 +269,8 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    mutating func execute(_ plan: PhysicalPlan) -> Bool {
+    /// The index of the step that ended the run, nil when every step ran.
+    mutating func execute(_ plan: PhysicalPlan) -> Int? {
         for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
@@ -259,8 +284,13 @@ private extension Sim {
             case .typeText(let typed):
                 applyReplace(typed)
 
-            case .press:
-                unsupportedSteps += 1
+            case .press(let chord, let count):
+                for _ in 0..<count {
+                    guard press(chord) else {
+                        unsupportedSteps += 1
+                        break
+                    }
+                }
 
             case .clipboardCut:
                 pasteboard = TextModel(text).substring(selection)
@@ -273,28 +303,26 @@ private extension Sim {
                 applyReplace(content ?? pasteboard ?? "")
 
             case .captureSelectedText(let slot):
-                captures[slot] = TextModel(text).substring(selection)
+                captures[slot] = readSelectedText
 
             case .settle(let expectation):
-                var converged = true
-                if let expected = expectation.selection {
-                    // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
-                    converged = converged && !unreadableSelection && expected == selection
-                }
-                if let expectedLength = expectation.length {
-                    converged = converged && expectedLength == text.utf16.count
-                }
+                // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
+                let converged = expectation.matches(
+                    selection: unreadableSelection ? nil : readSelection,
+                    length: text.utf16.count,
+                    selectedText: readSelectedText
+                )
                 if !converged {
                     settleFailures += 1
                     drainResidency(of: plan, after: index)
-                    return false   // the rest dies, like the real executor
+                    return index   // the rest dies, like the real executor
                 }
 
             case .softSettle:
                 // Best-effort barrier: never aborts. In this synchronous host
                 // there is nothing async to wait for, and the blind step it
-                // follows is an unsupported no-op, so the field won't match the
-                // prediction — which is exactly why a soft settle must proceed.
+                // follows may be an unsupported no-op, so the field need not match
+                // the prediction — which is exactly why a soft settle must proceed.
                 break
 
             case .commit(let effect):
@@ -304,6 +332,38 @@ private extension Sim {
                 bells += 1
             }
         }
+        return nil
+    }
+
+    /// Lane B's keys as LIN-1533 measured them — an arrow collapses a selection to its own side, ↓ moving
+    /// from its end; false for any other chord.
+    mutating func press(_ chord: Chord) -> Bool {
+        let model = TextModel(text)
+        let caret: Int
+        switch chord {
+        case .left:
+            caret = selection.isEmpty ? model.advance(selection.lowerBound, byGraphemes: -1) : selection.lowerBound
+        case .right:
+            caret = selection.isEmpty ? model.advance(selection.upperBound, byGraphemes: 1) : selection.upperBound
+        case .up:
+            caret = model.verticalMove(from: selection.lowerBound, by: -1, firstNonBlank: false)
+        case .down:
+            caret = model.verticalMove(from: selection.upperBound, by: 1, firstNonBlank: false)
+        case .lineStart:
+            caret = model.lineStart(of: selection.lowerBound)
+        case .selectRight:
+            selection = selection.lowerBound..<model.advance(selection.upperBound, byGraphemes: 1)
+            return true
+        case .deleteBack:
+            if selection.isEmpty {
+                selection = model.advance(selection.lowerBound, byGraphemes: -1)..<selection.upperBound
+            }
+            applyReplace("")
+            return true
+        default:
+            return false
+        }
+        selection = caret..<caret
         return true
     }
 

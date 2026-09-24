@@ -295,9 +295,17 @@ public final class Controller {
             )
         }
         guard executed else {
-            // A selection we could not collapse is one the app would type over.
-            if !repairStrandedSelection(on: binding, operand: planned.operand),
-               state.field.mode.isInserting {
+            if planned.abortedAtTextCheck(evidence.abortedAt) {
+                // Only lane B checks text, and ← is its one way to collapse; the mode the plan asked for goes too.
+                if let range = AX.selectedRange(of: binding.element), range.length > 0 {
+                    executor.execute(PhysicalPlan(.press(.left, count: 1)), on: binding.element, state: &state)
+                }
+                if state.field.mode.isInserting {
+                    executor.commit(.setMode(before.nonVisual), state: &state)
+                }
+            } else if !repairStrandedSelection(on: binding, operand: planned.operand),
+                      state.field.mode.isInserting {
+                // A selection we could not collapse is one the app would type over.
                 executor.commit(.setMode(before.nonVisual), state: &state)
             }
             // `RawMonitor` drained the payload it will never offer again.
