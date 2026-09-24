@@ -218,7 +218,8 @@ on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
 `world=N` means the settles matched Chromium's offsets rather than `AXValue`'s own (absent when
 they matched `AXValue`'s, or could not tell); a `settle` line lists each reading it accepted as
-`or wN sel=…`.
+`or wN sel=…`. `ambiguous=1` with `abort@N` means the run reached a branch that more than one
+reading still fit, and stopped there rather than guess which line the caret was on.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -282,8 +283,10 @@ Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the car
 paragraph breaks before it (LIN-1533), so its offsets drift from `AXValue`'s past the first
 paragraph. A plan that uses native keys is also planned for each position the caret's read could
 mean there. The settles accept any of those readings, and where the keys would differ the plan
-branches and runs the reading the field matched. At the end of a line followed by blank lines,
-several positions read alike; mvim takes the latest.
+branches and runs the reading the field matched. Where one read still fits several lines — a
+line's end against the next line's start, a run of blank lines — the command stops with a beep
+instead of guessing. In such a field a delete or yank of at most one line takes its register from
+the text the field selected, which every reading agrees on.
 
 ## Running alongside Vibe
 

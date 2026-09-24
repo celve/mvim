@@ -83,10 +83,11 @@ public struct Branch: Equatable, Sendable {
         self.steps = steps
     }
 
-    /// The branch holding the lowest world the field's answers still match (nil: every world), else the first.
+    /// The one branch the field's answers leave standing; nil when they fit worlds in several, since a guess
+    /// between courses of action is exactly what the settles exist to avoid.
     public static func chosen(from branches: [Branch], consistent: Set<Int>?) -> Branch? {
-        let lowest = branches.flatMap(\.worlds).filter { consistent?.contains($0) ?? true }.min()
-        return branches.first { lowest.map($0.worlds.contains) ?? false } ?? branches.first
+        let standing = branches.filter { branch in consistent.map { !branch.worlds.isDisjoint(with: $0) } ?? true }
+        return standing.count == 1 ? standing[0] : nil
     }
 }
 

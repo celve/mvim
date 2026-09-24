@@ -307,10 +307,14 @@ private extension PhysicalPlanner {
         }
     }
 
+    /// Where `gi` resumes and the drawn cursor are bookkeeping, not a course of action: they merge as world 0 has them.
     static func sameAction(_ a: PhysicalStep, _ b: PhysicalStep) -> Bool {
         switch (a, b) {
-        case (.settle, .settle), (.softSettle, .softSettle): return true
-        default: return a == b
+        case (.settle, .settle), (.softSettle, .softSettle),
+             (.commit(.setInsertStart), .commit(.setInsertStart)), (.commit(.setCursor), .commit(.setCursor)):
+            return true
+        default:
+            return a == b
         }
     }
 
@@ -728,6 +732,13 @@ private extension PhysicalPlanner {
         return steps + settle(context, profile: profile, blame: blame)
     }
 
+    /// In a field that claims the native keys, a register takes the text the field selected, which every reading of
+    /// its offsets agrees on — up to one line, since Chromium's leaves paragraph breaks out (LIN-1565).
+    static func registersFromField(_ content: String, _ profile: CapabilityProfile) -> Bool {
+        !profile.has(.writeSelection) && profile.has(.readSelectedText)
+            && Capability.nativeKeys.contains(where: profile.has) && !content.dropLast().contains("\n")
+    }
+
     /// ← first, so every key starts from a caret (LIN-1532).
     static func collapsing(_ context: inout Context) -> [PhysicalStep] {
         guard let selection = context.selection, !selection.isEmpty else { return [] }
@@ -943,15 +954,20 @@ private extension PhysicalPlanner {
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
             let content = model.substring(selection)
-            var steps: [PhysicalStep] = profile.has(.insertText)
-                ? [.replaceSelection("")]
-                : [.press(.deleteBack, count: 1)]
+            var steps: [PhysicalStep] = []
+            var payload = TextPayload.literal(content)
+            if !blackhole, registersFromField(content, profile) {
+                let slot = context.takeSlot()
+                steps.append(.captureSelectedText(into: slot))
+                payload = .captured(slot)
+            }
+            steps.append(profile.has(.insertText) ? .replaceSelection("") : .press(.deleteBack, count: 1))
             context.applyEdit(range: selection, replacement: "")
             // Blind (press) delete: soft — a mismatch must not abort the
             // `setMode(.insert)` that follows a `ciw`/`s`/`cc`.
             steps += settle(context, profile: profile, hard: profile.has(.insertText))
             if !blackhole {
-                steps.append(.commit(.deleted(into: register, content: .literal(content), wise: wise)))
+                steps.append(.commit(.deleted(into: register, content: payload, wise: wise)))
             }
             return steps
         }
@@ -978,7 +994,12 @@ private extension PhysicalPlanner {
         let wise = registerWise(context.selectionWise)
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
-            return [.commit(.yanked(into: register, content: .literal(model.substring(selection)), wise: wise))]
+            let content = model.substring(selection)
+            guard registersFromField(content, profile) else {
+                return [.commit(.yanked(into: register, content: .literal(content), wise: wise))]
+            }
+            let slot = context.takeSlot()
+            return [.captureSelectedText(into: slot), .commit(.yanked(into: register, content: .captured(slot), wise: wise))]
         }
         guard context.selectionOpaque else { return nil }
         // An opaque selection was built by presses, which are QUEUED at the

@@ -84,6 +84,9 @@ enum Diag {
         if let world = evidence.world {
             line += " world=\(world)"
         }
+        if evidence.ambiguous {
+            line += " ambiguous=1"
+        }
         line += " ok=\(executed ? 1 : 0)"
         line += " fail=\(evidence.failedCapability?.traceName ?? "nil")"
         line += " settled=\(evidence.settledCapabilities.traceNames)"

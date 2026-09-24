@@ -45,6 +45,9 @@ public final class Executor {
         /// The lowest reading of the field the settles matched, when it was not `AXValue`'s own (see `PhysicalPlanner`).
         public internal(set) var world: Int?
 
+        /// The run stopped at a branch that more than one reading of the field still fit.
+        public internal(set) var ambiguous = false
+
         public init() {}
     }
 
@@ -112,8 +115,15 @@ public final class Executor {
         while index < queue.count {
             let step = queue[index]
             if case .branch(let branches) = step {
-                let chosen = Branch.chosen(from: branches, consistent: consistent)
-                queue.replaceSubrange(index...index, with: chosen?.steps ?? [])
+                guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
+                    NSSound.beep()
+                    lastRun.abortedAt = index
+                    lastRun.ambiguous = true
+                    lastRun.world = Self.reported(consistent)
+                    commitSurvivors(queue[index...], state: &state)
+                    return false
+                }
+                queue.replaceSubrange(index...index, with: chosen.steps)
                 continue
             }
             let passed = perform(step, at: index, on: element, state: &state)
@@ -160,8 +170,9 @@ public final class Executor {
             case .commit(let effect) where effect.survivesAbort:
                 commit(effect, state: &state)
             case .branch(let branches):
-                commitSurvivors(ArraySlice(Branch.chosen(from: branches, consistent: consistent)?.steps ?? []),
-                                state: &state)
+                // Residency is the same in every branch; where none can be chosen, any will do.
+                let survivor = Branch.chosen(from: branches, consistent: consistent) ?? branches.first
+                commitSurvivors(ArraySlice(survivor?.steps ?? []), state: &state)
             default:
                 break
             }

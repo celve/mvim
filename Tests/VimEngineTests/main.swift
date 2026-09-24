@@ -1943,7 +1943,7 @@ func chords(_ plan: PhysicalPlan) -> [Chord] {
 }
 
 let keyedDD = physical("dd", text: "one\ntwo\nthree", caret: 5, profile: keyProfile)
-precondition(keyedDD.traceShape == "P!P!P!P?CC")
+precondition(keyedDD.traceShape == "P!P!P!GP?CC")
 precondition(Array(keyedDD.steps[0...5]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
@@ -1963,7 +1963,11 @@ precondition(Array(keyedDD.steps[0...5]) == [
         alternatives: [.init(world: 1, selection: 3..<6, length: 13)]
     )),
 ])
-precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .literal("two\n"), wise: .line))))
+// The register is what the field selected, which every reading of its offsets agrees on.
+precondition(Array(keyedDD.steps[6...7]) == [.captureSelectedText(into: CaptureSlot(id: 0)), .press(.deleteBack, count: 1)])
+precondition(keyedDD.steps.contains(.commit(.deleted(into: nil, content: .captured(CaptureSlot(id: 0)), wise: .line))))
+precondition(physical("3dd", text: "a\nb\nc\nd", caret: 0, profile: keyProfile).steps
+             .contains(.commit(.deleted(into: nil, content: .literal("a\nb\nc\n"), wise: .line))))
 
 let oneLine = "one two"
 precondition(chords(physical("0", text: oneLine, caret: 5, profile: keyProfile)) == [.paragraphStart])
@@ -2003,10 +2007,11 @@ for keys in ["dd", "0", "$", "gg", "G", "j", "k", "D", "o", "O"] {
         precondition(!chords(plan).contains { needs[missing]!.contains($0) }, "\(keys) pressed an unavailable key")
     }
 }
-precondition(physical("dd", text: "one\ntwo", caret: 5, profile: readProfile)
-             == physical("dd", text: "one\ntwo", caret: 5, profile: CapabilityProfile(available: [
+// Counting presses what it always did; only the register now comes from the field.
+precondition(chords(physical("dd", text: "one\ntwo", caret: 5, profile: readProfile))
+             == chords(physical("dd", text: "one\ntwo", caret: 5, profile: CapabilityProfile(available: [
                  .readText, .readLength, .readCaret, .readSelectedText, .wholeDocument, .documentStartKey,
-             ])))
+             ]))))
 
 // Lane A keeps its exact writes.
 for keys in ["dd", "yy", "cc", "D", "0", "$", "gg", "G", "o", "O", "x", "j", "k", "dj", "J", "p"] {
@@ -2025,32 +2030,60 @@ sim.type("d$")
 precondition(sim.text == "a\ndef")
 precondition(sim.state.session.register("-") == .content(RegisterContent(text: "bc", wise: .character)))
 
-// End to end against lane A, reading exact offsets and reading Chromium's.
-let keyedCommands = ["dd", "yy", "cc", "S", "D", "C", "d$", "c$", "y$", "d0", "c0", "0", "^", "$", "A", "I",
-                     "gg", "G", "o", "O", "j", "k", "+", "-", "2dd", "3dd", "2yy", "dj", "dk", "yk", "cj", "ck",
-                     "dG", "dgg", "J", "3J", "2j", "3k", "2$", "yyp", "yyP", "ddp", "ddP", "x", "X"]
-for doc in ["alpha one\nbeta two\ngamma three\n\ndelta four\nepsilon", "  indented\n\tx y\nlast", "single line", "a\n"] {
+// End to end against lane A, reading exact offsets and reading Chromium's: a run that passes did what
+// lane A did, and one that stops has written nothing lane A would not have.
+let keyedCommands: [[String]] = ["dd", "yy", "cc", "S", "D", "C", "d$", "c$", "y$", "d0", "c0", "0", "^", "$", "A",
+    "I", "gg", "G", "o", "O", "j", "k", "+", "-", "2dd", "3dd", "2yy", "dj", "dk", "yk", "cj", "ck", "dG", "dgg", "J",
+    "3J", "2j", "3k", "2$", "d2$", "x", "X", "3x"].map { [$0] } + [["yy", "p"], ["yy", "P"], ["dd", "p"], ["dd", "P"]]
+var keyedStops = 0
+for doc in ["alpha one\nbeta two\ngamma three\n\ndelta four\nepsilon", "  indented\n\tx y\nlast", "single line", "a\n",
+            "  indented\nx\n\n\nlast", "\nb\n\nc"] {
     for caret in 0...doc.utf16.count {
-        for keys in keyedCommands {
+        for commands in keyedCommands {
             var reference = Sim(text: doc, caret: caret, profile: axProfile)
-            reference.type(keys)
+            var passedThrough = [doc]
+            for command in commands {
+                reference.type(command)
+                passedThrough.append(reference.text)
+            }
             for chromium in [false, true] {
-                // The counted `x`/`X` keep lane B's own reading, and `d2$` from a line's end reads as the next line's start.
-                if chromium, ["x", "X", "d2$"].contains(keys) { continue }
                 var keyed = Sim(text: doc, caret: caret, profile: keyProfile)
                 keyed.emulatesKeys = true
                 keyed.readsOmitBreaks = chromium
-                keyed.type(keys)
+                commands.forEach { keyed.type($0) }
+                let keys = commands.joined()
                 let context = "\(keys) at \(caret) in \(doc.debugDescription), chromium=\(chromium)"
-                precondition(keyed.text == reference.text && keyed.caret == reference.caret, context)
-                precondition(keyed.state.field.mode == reference.state.field.mode, context)
-                precondition(keyed.state.session.register("\"") == reference.state.session.register("\""), context)
-                precondition(keyed.settleFailures == 0 && keyed.unsupportedSteps == 0, context)
-                precondition(keyed.bells == reference.bells, context)
+                precondition(keyed.unsupportedSteps == 0, context)
+                let register = keyed.state.session.register("\"")
+                let same = keyed.text == reference.text && keyed.caret == reference.caret
+                    && keyed.state.field.mode == reference.state.field.mode
+                    && register == reference.state.session.register("\"") && keyed.bells == reference.bells
+                // Counted edits plan from lane B's own reading of the caret, as on `main` (LIN-1564).
+                if same || (chromium && ["x", "X", "3x"].contains(keys)) { continue }
+                // Otherwise a run that differs has stopped, and left only what lane A would have written.
+                precondition(keyed.settleFailures + keyed.ambiguities > 0, "passed, but not as lane A: " + context)
+                precondition(passedThrough.contains(keyed.text), context)
+                precondition([nil, reference.state.session.register("\"")].contains(register), context)
+                keyedStops += 1
             }
         }
     }
 }
+// Only where one read can mean several lines: blank-line runs, a line's end against the next line's start.
+precondition(keyedStops < 120, "stops: \(keyedStops)")
+
+// The reviewer's tie: exact and Chromium readings agree at every settle; the register still holds `c`.
+sim = Sim(text: "\nb\n\nc", caret: 4, profile: keyProfile)
+sim.emulatesKeys = true
+sim.readsOmitBreaks = true
+sim.type("cc")
+precondition(sim.text == "\nb\n\n" && sim.state.field.mode == .insert)
+precondition(sim.state.session.register("\"") == .content(RegisterContent(text: "c", wise: .line)))
+sim = Sim(text: "ab\ncdef\nghij", caret: 10, profile: keyProfile)
+sim.emulatesKeys = true
+sim.readsOmitBreaks = true
+sim.type("x")
+precondition(sim.text == "ab\ncdef\nghj" && sim.state.session.register("-") == .content(RegisterContent(text: "i", wise: .character)))
 
 // Past paragraph 1 Chromium reads one low per break; the branch the settles pick counts the right column.
 sim = Sim(text: "ab\ncdef\nghij", caret: 5, profile: keyProfile)
@@ -2104,9 +2137,11 @@ precondition(dual.worlds(matching: 3..<3, length: 7) == [2])
 precondition(dual.worlds(matching: 3..<3, length: 6).isEmpty)
 precondition(dual.traceFields == "sel=4..4 len=7 or w2 sel=3..3 len=7")
 let branches = [Branch(worlds: [0, 1], steps: [.bell]), Branch(worlds: [2], steps: [])]
-precondition(Branch.chosen(from: branches, consistent: nil)?.worlds == [0, 1])
 precondition(Branch.chosen(from: branches, consistent: [2])?.worlds == [2])
-precondition(Branch.chosen(from: branches, consistent: [1, 2])?.worlds == [0, 1])
+precondition(Branch.chosen(from: branches, consistent: [0, 1])?.worlds == [0, 1])
+precondition(Branch.chosen(from: branches, consistent: [1, 2]) == nil)
+precondition(Branch.chosen(from: branches, consistent: nil) == nil)
+precondition(Branch.chosen(from: branches, consistent: [3]) == nil)
 precondition(PhysicalPlan(steps: [.press(.left, count: 1), .branch(branches)]).traceShape == "P{B|}")
 precondition(PhysicalPlan(steps: [.branch([Branch(worlds: [1], steps: [.typeText("x")])])]).mutatesText)
 precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))

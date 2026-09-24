@@ -57,6 +57,8 @@ public struct Sim {
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
+    /// Runs stopped at a branch that more than one reading of the field still fit.
+    public private(set) var ambiguities = 0
     public private(set) var unsupportedSteps = 0
 
     private var monitor = RawMonitor()
@@ -283,8 +285,12 @@ private extension Sim {
         while index < queue.count {
             switch queue[index] {
             case .branch(let branches):
-                let chosen = Branch.chosen(from: branches, consistent: consistent)
-                queue.replaceSubrange(index...index, with: chosen?.steps ?? [])
+                guard let chosen = Branch.chosen(from: branches, consistent: consistent) else {
+                    ambiguities += 1
+                    drainResidency(of: queue[index...], consistent: consistent)
+                    return false
+                }
+                queue.replaceSubrange(index...index, with: chosen.steps)
                 continue
 
             case .setSelection(let range):
@@ -371,7 +377,7 @@ private extension Sim {
             case .commit(let effect) where effect.survivesAbort:
                 state = VimReducer.reduce(state, effect, captures: captures)
             case .branch(let branches):
-                let chosen = Branch.chosen(from: branches, consistent: consistent)
+                let chosen = Branch.chosen(from: branches, consistent: consistent) ?? branches.first
                 drainResidency(of: ArraySlice(chosen?.steps ?? []), consistent: consistent)
             default:
                 break
