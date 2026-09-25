@@ -52,7 +52,6 @@ public final class FocusTracker {
         /// nil for forced bindings — empty profile, nothing resolved.
         public let capabilityReport: CapabilityReport?
 
-        /// Chromium's, so a rich-text field's caret is read through text markers.
         public let isChromium: Bool
     }
 

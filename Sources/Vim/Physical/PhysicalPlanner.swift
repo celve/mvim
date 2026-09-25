@@ -35,7 +35,7 @@ public enum PhysicalPlanner {
         public let plan: PhysicalPlan
         public let rejection: Rejection?
 
-        /// The range the plan meant to replace, in the field's own offsets; nil in the blind lane, which has no offsets.
+        /// The range the plan meant to replace, in field offsets; nil in the blind lane, which has no offsets.
         public let operand: Range<Int>?
 
         public init(plan: PhysicalPlan, rejection: Rejection?, operand: Range<Int>?) {
@@ -112,13 +112,13 @@ private extension PhysicalPlanner {
         /// the gap to collapse to before the plan acts.
         var cursorCollapse: Int?
 
-        /// The last predicted edit's range as the field names it — the one in flight if the plan dies.
+        /// The last predicted edit's range, in field offsets — the one in flight if the plan dies.
         var operand: Range<Int>?
 
-        /// The rest is in `AXValue` offsets; a range leaving for the field goes through these.
+        /// Everything else is in `AXValue` offsets; ranges leave for the field through these.
         var breaks: ParagraphBreaks?
 
-        /// A `\n` typed into a paragraph field may have made a paragraph or a line break.
+        /// A typed `\n` may have made a paragraph or a line break.
         var breaksUncertain = false
 
         init(snapshot: FieldSnapshot) {
@@ -140,7 +140,7 @@ private extension PhysicalPlanner {
             breaks?.fieldRange(range) ?? range
         }
 
-        /// The side of a paragraph boundary `offset` is on, where its field offset names both.
+        /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
         func edge(_ offset: Int) -> Expectation.Edge? {
             guard let breaks else { return nil }
             let candidates = breaks.valueOffsets(breaks.fieldOffset(offset))
@@ -228,10 +228,7 @@ private extension PhysicalPlanner {
         return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
 
-    /// An AX selection write. Chromium lands a field offset at a paragraph
-    /// boundary on the next paragraph's start, so an end meant for the last
-    /// paragraph's end steps back one key, and a range starting there is
-    /// selected by keys from the caret stepped back.
+    /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         let field = context.field(range)
         if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
@@ -256,7 +253,7 @@ private extension PhysicalPlanner {
         _ text: String, context: Context, profile: CapabilityProfile
     ) -> [PhysicalStep] {
         guard !text.isEmpty, !profile.has(.writeSelection), profile.has(.readSelectedText) else { return [] }
-        // AXSelectedText leaves out the breaks a paragraph field's offsets do.
+        // `AXSelectedText` omits paragraph breaks.
         let selected = context.selection.flatMap { selection in context.breaks?.fieldText(text, at: selection) } ?? text
         return settle(context, profile: profile, selectedText: selected)
     }

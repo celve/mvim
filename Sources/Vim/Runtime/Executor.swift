@@ -64,7 +64,7 @@ public final class Executor {
     /// From the write a following settle verifies; cleared where attribution is.
     private var lastWriteError: Int32?
 
-    /// The run's field reads its selection in text content (a Chromium rich-text field).
+    /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
 
     /// An `AXError` worth reporting: `.success` is not one.
@@ -94,8 +94,6 @@ public final class Executor {
     }
 
     /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
-    ///
-    /// `paragraphs` is the snapshot's word that the field reads in text content.
     @discardableResult
     public func execute(
         _ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState, paragraphs: Bool = false
@@ -313,8 +311,7 @@ public final class Executor {
             }
             let matched = expectation.matches(selection: selection, length: length, selectedText: text)
             if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil {
-                // A caret the page left between elements reads as its block's start; only the markers
-                // place it, and only they tell a boundary's sides apart, so without them nothing converges.
+                // Only the markers place a caret between elements or tell a boundary's sides apart.
                 if let marked = AX.markedSelection(of: element) {
                     selection = marked.range
                     let edge = expectation.edge.map { edge in

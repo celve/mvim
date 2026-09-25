@@ -61,7 +61,7 @@ public final class Controller {
     /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
-    /// The last snapshot's, so unbind hygiene can name the drawn cursor in the field's own offsets.
+    /// The last snapshot's, to convert the drawn cursor at unbind.
     private var fieldBreaks: ParagraphBreaks?
 
     public init() {
@@ -439,7 +439,7 @@ public final class Controller {
         return selection(of: binding.element, paragraphs: paragraphs).map(\.isEmpty) ?? false
     }
 
-    /// In the field's own offsets; a Chromium rich-text field's is read through its markers.
+    /// In field offsets, through the markers for a text-content field.
     private func selection(of element: AXUIElement, paragraphs: Bool) -> Range<Int>? {
         if paragraphs, let marked = AX.markedSelection(of: element) { return marked.range }
         return AX.selectedRange(of: element).map { $0.location..<($0.location + $0.length) }

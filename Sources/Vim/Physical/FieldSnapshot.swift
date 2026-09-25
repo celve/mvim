@@ -29,8 +29,7 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// interference) means the selection is the user's, not ours.
     public let cursor: Range<Int>?
 
-    /// Nil where the field's own selection speaks `AXValue` offsets, as every
-    /// field but a Chromium rich-text one does; `selection` is converted either way.
+    /// Non-nil when the field selects in text content; `selection` is already converted.
     public let breaks: ParagraphBreaks?
 
     public init(

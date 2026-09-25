@@ -151,14 +151,12 @@ public extension Chord {
 
 /// The planner's prediction of the field after a step, checked by the
 /// settle engine. Fields are optional in the shape of what is readable.
-///
-/// `selection` is in the field's own offsets; `length` is always `AXValue`'s.
 public struct Expectation: Equatable, Sendable {
+    /// In field offsets, while `length` counts `AXValue`.
     public let selection: Range<Int>?
     public let length: Int?
 
-    /// Which side of a paragraph boundary the selection's upper end is on,
-    /// where its field offset names both; only a text-marker read can tell.
+    /// The boundary side the upper end must settle on, which only a marker read can tell.
     public let edge: Edge?
 
     public enum Edge: Equatable, Sendable {
