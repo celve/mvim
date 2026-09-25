@@ -132,6 +132,7 @@ private extension PhysicalPlanner {
             anchor = snapshot.anchor
             webContent = snapshot.webContent
             breaks = snapshot.breaks
+            emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -146,15 +147,9 @@ private extension PhysicalPlanner {
             breaks?.fieldRange(range) ?? range
         }
 
-        /// A newline the markers also read is a `<br>`, often an empty paragraph's, which Chromium leaves out of
-        /// `AXValue` and reads beside, so a caret key read there can seem to do nothing when it did.
-        func besideHiddenParagraph(_ offset: Int) -> Bool {
-            guard webContent, let breaks, let text else { return false }
-            let units = Array(text.utf16)
-            return [offset - 1, offset].contains {
-                $0 >= 0 && $0 < units.count && units[$0] == 10 && !breaks.offsets.contains($0)
-            }
-        }
+        /// The snapshot's caret when it is in an empty paragraph, which `AXValue` can leave out and read beside, so a
+        /// key pressed from it can seem to do nothing when it did.
+        let emptyParagraphCaret: Range<Int>?
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
         func edge(_ offset: Int) -> Expectation.Edge? {
@@ -628,8 +623,8 @@ private extension PhysicalPlanner {
         Array(repeatElement(chords, count: max(0, times)).joined())
     }
 
-    /// Presses `chords`, then settles on `landing`; a named key is blamed if a key that leaves a caret left a selection,
-    /// or, outside web content, if the field reads as it did before them where they had somewhere to go.
+    /// Presses `chords`, then settles on `landing`; a named key is blamed if it left a selection where it leaves a caret,
+    /// if the field reads as before where it had somewhere to go, or if it landed elsewhere where lines are the model's.
     static func keys(
         _ chords: [Chord], blaming atom: Capability?, to landing: Range<Int>,
         context: inout Context, profile: CapabilityProfile
@@ -641,7 +636,7 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            let unmoved = context.besideHiddenParagraph(before.lowerBound) || mayStayPut(chords, from: before, in: model)
+            let unmoved = before == context.emptyParagraphCaret || mayStayPut(chords, from: before, in: model)
                 ? [] : [context.field(before)]
             // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
             let offTarget = context.breaks == nil

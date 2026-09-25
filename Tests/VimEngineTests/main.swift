@@ -2923,11 +2923,23 @@ func webBlame(_ keys: String, caret: Int, breaks: ParagraphBreaks) -> Expectatio
         return expectation.blame
     }.first
 }
-// With paragraph reads too, except beside a newline the markers also read (a `<br>`), where an empty paragraph hides.
+// With paragraph reads too, beside a `<br>` as well, except from a caret in an empty paragraph, which `AXValue` can
+// leave out and read beside.
 precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: [2]))?.unmoved == [4..<4])
 precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: []))?.unmoved == [5..<5])
-precondition(webBlame("0", caret: 2, breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
-precondition(webBlame("$", caret: 3, breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
+precondition(webBlame("0", caret: 2, breaks: ParagraphBreaks(offsets: []))?.unmoved == [2..<2])
+precondition(webBlame("$", caret: 3, breaks: ParagraphBreaks(offsets: []))?.unmoved == [3..<3])
+let fromEmptyParagraph = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("0"), state: .initial), snapshot: FieldSnapshot(
+    capabilities: keyProfile, text: "ab\ncdef", selection: 2..<2, webContent: true, breaks: ParagraphBreaks(offsets: []),
+    caretInEmptyParagraph: true
+))
+precondition(fromEmptyParagraph.steps.contains {
+    guard case .settle(let expectation) = $0 else { return false }
+    return expectation.blame?.unmoved == [] && expectation.blame?.leavesCaret == true
+})
+// A landing that is right with a length that is not blames nothing: the key did its part.
+precondition(Expectation(landing: .exact(0..<0), length: 7, blame: .init(capability: .lineStartKey, unmoved: [4..<4],
+    leavesCaret: true, offTarget: true)).blamed(observed: 0..<0) == nil)
 // Rich text is where a working key lands off the model's line, so only there a landing elsewhere teaches nothing.
 precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: [2]))?.offTarget == false)
 precondition(webPhysical("0", text: "the cat", caret: 4, profile: keyProfile).steps.contains {

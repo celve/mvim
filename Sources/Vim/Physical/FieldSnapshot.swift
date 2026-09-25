@@ -35,6 +35,9 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// Non-nil when the field selects in text content; `selection` is already converted.
     public let breaks: ParagraphBreaks?
 
+    /// The caret is in an empty paragraph that `AXValue` may leave out, so its read is a neighbour's.
+    public let caretInEmptyParagraph: Bool
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -43,7 +46,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         anchor: Int? = nil,
         cursor: Range<Int>? = nil,
         webContent: Bool = false,
-        breaks: ParagraphBreaks? = nil
+        breaks: ParagraphBreaks? = nil,
+        caretInEmptyParagraph: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -53,6 +57,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.cursor = cursor
         self.webContent = webContent
         self.breaks = breaks
+        self.caretInEmptyParagraph = caretInEmptyParagraph
     }
 
     /// The caret, when the selection is collapsed.

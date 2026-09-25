@@ -284,6 +284,14 @@ public enum AX {
 
         public var isCollapsed: Bool { CFEqual(lower, upper) }
 
+        /// A caret whose marker sits on a block holding no more than its line break: an empty paragraph, which
+        /// `AXValue` can leave out and read the caret beside (LIN-1559).
+        public var inEmptyParagraph: Bool {
+            guard isCollapsed, let node = AX.node(at: lower, in: element), AX.role(of: node) != kAXStaticTextRole,
+                  let length = AX.textLength(of: node, in: element) else { return false }
+            return length <= 1
+        }
+
         public enum NodeSide: Equatable, Sendable {
             case start
             case end

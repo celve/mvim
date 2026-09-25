@@ -185,10 +185,11 @@ public enum Snapshotter {
             selection = range.location..<(range.location + range.length)
         }
         var breaks: ParagraphBreaks?
+        var emptyParagraph = false
         if paragraphs {
             breaks = ParagraphBreaks()
             if capabilities.has(.readCaret) {
-                (selection, breaks) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
+                (selection, breaks, emptyParagraph) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
             }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
@@ -203,7 +204,8 @@ public enum Snapshotter {
             anchor: anchor,
             cursor: stampedCursor,
             webContent: reads.string(3) != nil,
-            breaks: breaks
+            breaks: breaks,
+            caretInEmptyParagraph: emptyParagraph
         )
     }
 
@@ -212,18 +214,19 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, the breaks it used, and whether a caret is in an
+    /// empty paragraph.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
-    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool) {
         guard let text, let marked = AX.markedSelection(of: element, selected: selected) else {
-            return (nil, ParagraphBreaks())
+            return (nil, ParagraphBreaks(), false)
         }
         let field = marked.range
         var breaks = ParagraphBreaks()
         if text.contains("\n") {
             guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
-                return (nil, breaks)
+                return (nil, breaks, false)
             }
             breaks = aligned
         }
@@ -235,7 +238,7 @@ public enum Snapshotter {
             if marked.isCollapsed { caretSide = side }
             return side
         }
-        return (range, breaks)
+        return (range, breaks, marked.inEmptyParagraph)
     }
 
     /// Where typing at a boundary end would land; nil when a read fails.

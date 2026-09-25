@@ -214,7 +214,7 @@ public struct Expectation: Equatable, Sendable {
     public var within: Range<Int>?
 
     /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
-    /// nothing), or when a key that only ever leaves a caret left a selection.
+    /// nothing), when a key that only ever leaves a caret left a selection, or with `offTarget` when it landed elsewhere.
     public struct Blame: Equatable, Sendable {
         public let capability: Capability
         public let unmoved: [Range<Int>]
@@ -281,7 +281,8 @@ public struct Expectation: Equatable, Sendable {
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
         guard let blame, let observed,
-              blame.offTarget || blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty)
+              blame.offTarget && landing?.matches(observed) == false || blame.unmoved.contains(observed)
+                || (blame.leavesCaret && !observed.isEmpty)
                 || longest.map({ observed.count > $0 }) == true else { return nil }
         return blame.capability
     }
