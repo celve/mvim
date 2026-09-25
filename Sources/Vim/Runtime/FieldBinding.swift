@@ -210,11 +210,11 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets, nil if unplaceable, the breaks it used, and whether any leaf was hidden.
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
     ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, textlessLeaves: Bool) {
-        // A U+FFFC in `AXValue` is the page's own text, which the marker offsets skip along with the placeholders.
+        // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
         guard let text, !text.utf16.contains(0xFFFC), let marked = AX.markedSelection(of: element, selected: selected) else {
             return (nil, ParagraphBreaks(), false)
         }

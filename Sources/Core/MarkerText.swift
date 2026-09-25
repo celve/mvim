@@ -1,5 +1,4 @@
-/// Chromium's marker text holds a U+FFFC for each text-less leaf (an icon, an unlabeled button, an `<hr>`), which
-/// `AXValue`, `AXIndexForTextMarker` and the plain selection offsets all leave out.
+/// Chromium's marker text holds a U+FFFC for each text-less leaf (an icon, an `<hr>`), which `AXValue` leaves out.
 public enum MarkerText {
     static let objectReplacement: UInt16 = 0xFFFC
 

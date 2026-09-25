@@ -833,14 +833,11 @@ precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
 precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]), "J joins the paragraphs")
 
-// MARK: - Marker text (Chromium's U+FFFC for text-less leaves)
-
 precondition(MarkerText.plain("See \u{FFFC}LIN-1234") == "See LIN-1234")
 precondition(MarkerText.plainLength("\u{FFFC}\u{FFFC}Problem") == 7)
 precondition(MarkerText.plainLength("a😀\u{FFFC}") == 3, "UTF-16 units, as the offsets are")
 precondition(MarkerText.plain("") == "" && MarkerText.plainLength("") == 0)
 
-/// `AXValue` and marker text Chrome 153 gave for a field with one text-less leaf (LIN-1573), and the plain caret past it.
 let leafShapes: [(name: String, value: String, markers: String, caret: Int, valueCaret: Int)] = [
     ("icon chip",
      "Heading one\nFirst paragraph with some words.\nSee \n\nLIN-1234\n here\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
@@ -937,12 +934,10 @@ precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
 ])
 precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 4, profile: readProfile).plan) == ["cd ef"])
-// "ab\n\ncd": the empty line is one Chromium makes for a text-less leaf, so no caret stops there.
 let pastPhantom = Expectation(selection: 0..<2, length: 6, edge: .paragraphStart, selectedText: "ab")
 precondition(paragraphPlanning("dd", text: "ab\n\ncd", caret: 0, profile: readProfile).plan.steps.contains(.settle(pastPhantom)),
              "keys that stop before the break read the paragraph's end and fail it")
 
-/// `threeParagraphs` in a field whose text hides an element somewhere, as a Linear heading's widget does.
 func leafyPlanning(_ keys: String, caret: Int) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: readProfile, text: threeParagraphs, selection: caret..<caret,
                                  breaks: ParagraphBreaks(offsets: [2, 8]), textlessLeaves: true)

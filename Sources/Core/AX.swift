@@ -345,7 +345,6 @@ public enum AX {
         markerText(of: element).map(MarkerText.plain)
     }
 
-    /// `textContent` with a U+FFFC for each text-less leaf still in it.
     public static func markerText(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
         return text(from: field.start, to: AXTextMarkerRangeCopyEndMarker(field.range), in: element)

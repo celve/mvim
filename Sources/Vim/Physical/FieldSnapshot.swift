@@ -32,7 +32,7 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// Non-nil when the field selects in text content; `selection` is already converted.
     public let breaks: ParagraphBreaks?
 
-    /// Chromium's text leaves out some of the field's elements (an icon, a widget, an `<hr>`), so a break may bound one.
+    /// `AXValue` leaves out some of the field's elements, such as an icon, a widget or an `<hr>`.
     public let textlessLeaves: Bool
 
     public init(
