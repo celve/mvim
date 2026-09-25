@@ -32,8 +32,7 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// The field is web content, where a native key that seems to do nothing may have had nowhere to go (LIN-1559).
     public let webContent: Bool
 
-    /// Nil where the field's own selection speaks `AXValue` offsets, as every
-    /// field but a Chromium rich-text one does; `selection` is converted either way.
+    /// Non-nil when the field selects in text content; `selection` is already converted.
     public let breaks: ParagraphBreaks?
 
     public init(

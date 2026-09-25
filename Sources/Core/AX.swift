@@ -126,7 +126,7 @@ public enum AX {
         /// one to `""`, which is exactly the distinction.
         public let isWebElement: Bool
 
-        /// Chromium's rich-text fields read their caret in other offsets than `AXValue`.
+        /// Chromium's rich-text fields select in text-content offsets, not `AXValue`'s.
         public let isChromium: Bool
     }
 
@@ -196,7 +196,6 @@ public enum AX {
             return (slot as! AXUIElement)
         }
 
-        /// Left opaque for `AX.markedSelection`.
         public func textMarkerRange(_ index: Int) -> AnyObject? {
             guard let slot = slot(index), CFGetTypeID(slot) == AXTextMarkerRangeGetTypeID() else { return nil }
             return slot
@@ -265,10 +264,9 @@ public enum AX {
 
     // MARK: - Chromium's text markers
 
-    /// On every element Chromium exposes, web or native, and on nothing else.
+    /// Present on every element Chromium exposes and on nothing else.
     public static let chromiumNodeIDAttribute = "ChromeAXNodeId"
 
-    /// Without fetching them: Chromium's `<textarea>` and `<input>` expose none, its contenteditables do.
     public static func childCount(of element: AXUIElement) -> Int? {
         var count: CFIndex = 0
         guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success else {
@@ -277,12 +275,7 @@ public enum AX {
         return count
     }
 
-    /// A Chromium field's selection, measured through text markers from the field's start.
-    ///
-    /// `AXSelectedTextRange` misplaces a caret the page left between elements
-    /// (it reads as the start of the enclosing block); the marker range is the
-    /// selection itself, so its lengths are not fooled. Both are text-content
-    /// offsets: `AXValue` without its paragraph breaks.
+    /// A Chromium field's selection in text-content offsets, read through markers that follow the real caret.
     public struct MarkedSelection {
         public let range: Range<Int>
         let element: AXUIElement
@@ -291,15 +284,13 @@ public enum AX {
 
         public var isCollapsed: Bool { CFEqual(lower, upper) }
 
-        /// Where an end sits in the node its marker is anchored to.
         public enum NodeSide: Equatable, Sendable {
             case start
             case end
-            /// Between a container's children, where a write into a list leaves the caret.
             case between
         }
 
-        /// Nil when a read fails, so a boundary stays unknown rather than guessed.
+        /// Where an end sits in its marker's node; nil when a read fails.
         public func side(upper isUpper: Bool) -> NodeSide? {
             let marker = isUpper ? upper : lower
             guard let index = AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int else { return nil }
@@ -309,17 +300,14 @@ public enum AX {
             return index < length ? .between : .end
         }
 
-        /// What the text after an end opens with, which decides where typing there would land.
+        /// What follows an end: typing lands past a list marker and before uneditable text.
         public enum Opening: Equatable, Sendable {
             case text
-            /// A list marker, which no caret sits before: typing lands past its `length`.
             case listMarker(length: Int)
-            /// Text the page keeps the caret out of: typing lands before it.
             case uneditable
         }
 
-        /// `editable: false` skips the editability read, for an end already inside the next paragraph's text.
-        /// Nil when any read fails, which must not pass for text.
+        /// Nil when any read fails; `editable: false` skips the settable read.
         public func opening(upper isUpper: Bool, editable: Bool) -> Opening? {
             guard let leaf = AX.leaf(at: isUpper ? upper : lower, in: element),
                   let role = AX.role(of: leaf) else { return nil }
@@ -331,7 +319,6 @@ public enum AX {
         }
     }
 
-    /// Pass the batch's `AXSelectedTextMarkerRange` as `selected` to save its round trip.
     public static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> MarkedSelection? {
         guard let selection = textMarkerRange(selected ?? copyAttribute(element, kAXSelectedTextMarkerRangeAttribute)),
               let field = fieldMarkers(of: element) else { return nil }
@@ -343,7 +330,7 @@ public enum AX {
             guard let offset = offset(of: second, from: field.start, in: element) else { return nil }
             secondOffset = offset
         }
-        // The range keeps the page's direction, so a backward selection starts at its larger end.
+        // A backward selection's marker range starts at its larger end.
         let forward = firstOffset <= secondOffset
         return MarkedSelection(
             range: min(firstOffset, secondOffset)..<max(firstOffset, secondOffset),
@@ -353,14 +340,13 @@ public enum AX {
         )
     }
 
-    /// The field's text content: its `AXValue` without the paragraph breaks.
+    /// The field's `AXValue` without its paragraph breaks.
     public static func textContent(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
         return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
     }
 
-    /// The leaf holding the text right after a marker. A write or the page can leave the marker on a
-    /// container (between a list's items), so this descends through the children that hold its offset.
+    /// The leaf after a marker, which may be anchored on a container such as a list.
     private static func leaf(at marker: AXTextMarker, in field: AXUIElement) -> AXUIElement? {
         guard var node = node(at: marker, in: field),
               var offset = parameterized("AXIndexForTextMarker", marker, of: field) as? Int else { return nil }
@@ -368,7 +354,7 @@ public enum AX {
             guard let children = children(of: node) else { return nil }
             guard !children.isEmpty else { return node }
             guard let start = textStart(of: node, in: field) else { return nil }
-            // Children run in text order, so the last one starting at or before the offset is a binary search away.
+            // Children run in text order; find the last one starting at or before the offset.
             var low = 0
             var high = children.count - 1
             var holder: (index: Int, start: Int)?
@@ -391,7 +377,7 @@ public enum AX {
         return nil
     }
 
-    /// Nil when the read fails, so a container is never mistaken for a leaf.
+    /// Nil on a failed read, so a container is never taken for a leaf.
     private static func children(of node: AXUIElement) -> [AXUIElement]? {
         var ref: CFTypeRef?
         switch AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &ref) {
@@ -411,7 +397,6 @@ public enum AX {
         return (node as! AXUIElement)
     }
 
-    /// A node's text, measured the way its markers count it.
     private static func textLength(of node: AXUIElement, in element: AXUIElement) -> Int? {
         guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else {
             return nil

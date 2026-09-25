@@ -127,7 +127,6 @@ public enum FieldProber {
         /// Web content, so worth the parent walk that finds its origin. Rides
         /// the same round trip; native fields skip the walk entirely.
         public let isWebElement: Bool
-        /// Chromium's, whose rich-text fields need their caret read another way.
         public let isChromium: Bool
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
@@ -208,15 +207,12 @@ public enum Snapshotter {
         )
     }
 
-    /// Chromium's contenteditables expose children and read in text content; its `<textarea>` and `<input>` do neither.
-    /// A failed count takes the marker read, which is right for both and fails closed.
+    /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.
     static func hasParagraphs(_ element: AXUIElement) -> Bool {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The selection in `AXValue` offsets, nil when it cannot be placed there, and the breaks it was placed by.
-    ///
-    /// Only the markers count: the plain read may name the block's start for a caret between elements.
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
     ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
@@ -231,7 +227,7 @@ public enum Snapshotter {
             }
             breaks = aligned
         }
-        // A caret's two ends share one marker, so its side is read once.
+        // A caret's ends share one marker, so its side is read once.
         var caretSide: ParagraphBreaks.Side??
         let range = breaks.valueRange(field) { end in
             if marked.isCollapsed, let known = caretSide { return known }

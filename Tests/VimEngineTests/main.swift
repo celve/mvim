@@ -835,7 +835,7 @@ precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]),
 
 precondition(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd).traceFields == "sel=5..7 len=11 edge=end")
 
-/// A Chromium `<p>` editor: every `\n` in `AXValue` is a paragraph the selection does not count.
+/// A Chromium `<p>` editor: every `\n` is a generated paragraph break.
 func paragraphPlanning(
     _ keys: String, text: String, caret: Int, profile: CapabilityProfile, state: VimState = .initial
 ) -> PhysicalPlanner.Planning {
@@ -862,7 +862,6 @@ precondition(paragraphPlanning("l", text: threeParagraphs, caret: 9, profile: re
     .commit(.setCursor(nil)),
 ])
 
-// The last word's end is the paragraph's: a field write lands on the next one's start, so ⇧← pulls it back.
 let lastWordA = paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: noCursorProfile)
 precondition(lastWordA.plan.steps == [
     .setSelection(5..<7),
@@ -893,7 +892,6 @@ precondition(paragraphPlanning("A", text: threeParagraphs, caret: 0, profile: no
     .commit(.setMode(.insert)),
     .commit(.setInsertStart(2)),
 ])
-// A range starting at a paragraph's end would start on the next paragraph if written, so keys select it.
 let fromParagraphEnd = LogicalPlan(.select(.span(to: .offset(5), inclusive: false)), .deleteSelection(into: nil))
 precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     capabilities: noCursorProfile, text: threeParagraphs, selection: 2..<2, breaks: ParagraphBreaks(offsets: [2, 8])
@@ -906,11 +904,9 @@ precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     .settle(Expectation(selection: 2..<2, length: 8)),
     .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
 ])
-// AXSelectedText leaves the break out, so lane B's check before a delete does too.
 precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 4, profile: readProfile).plan) == ["cd ef"])
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("cd ef\n", at: 3..<9) == "cd ef")
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("b\ncd", at: 1..<5) == "bcd")
-// A typed newline may make a paragraph or a line break, so the caret after it goes unchecked.
 precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(
     .settle(Expectation(selection: nil, length: 12))
 ))
