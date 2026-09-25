@@ -290,14 +290,17 @@ aborts the command without learning, because Chromium's reads can put a correct 
 turn such a key off for the surface from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
-paragraph breaks before it (LIN-1533), so past the first paragraph its offsets drift from
-`AXValue`'s. Until those reads are corrected (LIN-1564), a command there stops with a beep at
-the first settle that sees the drift. Keys are pressed even where a command has nothing to select
-or `j`/`k` stays on its line, so that settle still checks the caret the command starts from.
-Those reads cannot tell a key that did nothing from one that had nowhere to go (a caret already
-at the line's start reads like one mid-line), so in web content only a caret key that leaves a
-selection is blamed until the reads are corrected. In such a field a yank within one line takes
-its register from the text the field selected.
+paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
+(LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
+even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
+the caret the command starts from. A read there still cannot always tell a key that did nothing
+from one that had nowhere to go (an empty paragraph can be missing from `AXValue`), so in web
+content only a caret key that leaves a selection is blamed. In such a field a yank within one line
+takes its register from the text the field selected.
+
+`o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
+text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
+until it holds text, so the settles after it do not check the length.
 
 ## Native word, paragraph and page keys
 

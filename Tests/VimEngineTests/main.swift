@@ -2745,6 +2745,28 @@ let keyedO = physical("o", text: oneLine, caret: 2, profile: keyProfile)
 precondition(chords(keyedO) == [.paragraphEnd] && keyedO.steps.contains(.typeText("\n")))
 precondition(chords(physical("O", text: oneLine, caret: 2, profile: keyProfile))
              == [.paragraphStart, .paragraphStart, .left, .paragraphStart])
+let webO = webPhysical("o", text: oneLine, caret: 2, profile: keyProfile)
+precondition(chords(webO) == [.paragraphEnd] && webO.steps.contains(.clipboardInsert("\n"))
+             && !webO.steps.contains(.typeText("\n")))
+let webAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: ParagraphBreaks(offsets: [2])).steps
+let pasted = webAbove.firstIndex(of: .clipboardInsert("\n"))!
+precondition(chords(PhysicalPlan(steps: webAbove)) == [.paragraphStart, .paragraphStart, .left, .paragraphStart])
+precondition(webAbove[pasted + 1] == .softSettle(Expectation(selection: nil, length: 6)))
+precondition(webAbove[(pasted + 2)...].allSatisfy {
+    guard case .settle(let expectation) = $0 else { return true }
+    return expectation.length == nil && expectation.selection == nil
+})
+for (keys, text) in [("oZ", "ab\nZ\ncd"), ("OZ", "Z\nab\ncd")] {
+    var sim = Sim(text: "ab\ncd", caret: 1, profile: keyProfile)
+    sim.webContent = true
+    sim.emulatesKeys = true
+    sim.type(keys)
+    precondition(sim.text == text && sim.state.session.register("\"") == nil, "\(keys) in web content")
+}
+precondition(webPhysical("g~j", text: "ab\ncd", caret: 0, profile: readProfile).steps.contains {
+    guard case .clipboardInsert(let text?) = $0 else { return false }
+    return text.contains("\n")
+})
 // `x` and `X` keep their checked select-then-delete: ⌦ or ⌫ would delete before any check, and join lines at an end.
 precondition(chords(physical("x", text: oneLine, caret: 2, profile: keyProfile)) == [.selectRight, .deleteBack])
 let longLine = "a\n" + String(repeating: "word ", count: 16) + "\ne"

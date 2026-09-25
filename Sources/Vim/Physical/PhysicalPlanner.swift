@@ -123,6 +123,9 @@ private extension PhysicalPlanner {
         /// A typed `\n` may have made a paragraph or a line break.
         var breaksUncertain = false
 
+        /// Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so after a blind newline the length is unknown.
+        var lengthUncertain = false
+
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
@@ -222,7 +225,7 @@ private extension PhysicalPlanner {
         blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
-        let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
+        let length = profile.has(.readLength) && !context.lengthUncertain ? context.text.map { $0.utf16.count } : nil
         var expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
@@ -1267,18 +1270,24 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        let action: PhysicalStep = profile.has(.insertText)
-            ? .replaceSelection(replacement)
-            : .typeText(replacement)
+        let action = profile.has(.insertText) ? .replaceSelection(replacement) : blindText(replacement, context: context)
         if let selection = context.selection, let model = context.model {
             let check = checkSelectedText(model.substring(selection), context: context, profile: profile)
             context.applyEdit(range: selection, replacement: replacement)
             // Blind (typeText) over-type: soft, so a mismatch does not abort
             // the `setMode(.insert)` behind an `o`/`O`/`i`.
-            return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            let steps = check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            context.lengthUncertain = context.lengthUncertain
+                || !profile.has(.insertText) && context.breaks != nil && replacement.contains("\n")
+            return steps
         }
         context.invalidate()
         return [action]
+    }
+
+    /// A typed `\n` makes no paragraph in Chromium's rich text, and ⏎ would send a chat message, so web content pastes it.
+    static func blindText(_ text: String, context: Context) -> PhysicalStep {
+        context.webContent && text.contains("\n") ? .clipboardInsert(text) : .typeText(text)
     }
 
     static func lowerTransform(
@@ -1318,9 +1327,7 @@ private extension PhysicalPlanner {
                 return String(trimmed)
             }
         }
-        let action: PhysicalStep = profile.has(.insertText)
-            ? .replaceSelection(transformed)
-            : .typeText(transformed)
+        let action = profile.has(.insertText) ? .replaceSelection(transformed) : blindText(transformed, context: context)
         let check = checkSelectedText(original, context: context, profile: profile)
         context.applyEdit(range: selection, replacement: transformed)
         // Blind (typeText) transform: soft. The poll still lets the following
