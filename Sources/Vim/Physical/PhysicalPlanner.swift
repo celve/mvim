@@ -146,6 +146,13 @@ private extension PhysicalPlanner {
             breaks?.fieldRange(range) ?? range
         }
 
+        /// A newline the markers also read is a `<br>`, often an empty paragraph's, which Chromium leaves out of
+        /// `AXValue` or reads beside, so a caret key there can seem to do nothing when it did.
+        var mayHideParagraphs: Bool {
+            guard webContent, let breaks, let model else { return false }
+            return breaks.offsets.count < model.newlineCount(in: 0..<model.length)
+        }
+
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
         func edge(_ offset: Int) -> Expectation.Edge? {
             guard let breaks else { return nil }
@@ -631,8 +638,7 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            // Chromium's raw reads cannot tell a key that did nothing from one that had nowhere to go (LIN-1564).
-            let unmoved = context.webContent || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
+            let unmoved = context.mayHideParagraphs || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
             guard !unmoved.isEmpty || leavesCaret else { return nil }
             return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
         }

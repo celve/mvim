@@ -316,7 +316,7 @@ public final class Controller {
         guard executed else {
             if planned.abortedAtTextCheck(evidence.abortedAt) {
                 // Only lane B checks text, and ← is its one way to collapse; the mode the plan asked for goes too.
-                if let range = selection(of: binding.element, paragraphs: paragraphs), !range.isEmpty {
+                if let read = selection(of: binding.element, paragraphs: paragraphs), !read.caret {
                     executor.execute(PhysicalPlan(.press(.left, count: 1)), on: binding.element, state: &state)
                 }
                 if state.field.mode.isInserting {
@@ -436,8 +436,9 @@ public final class Controller {
         on binding: FocusTracker.Binding, operand: Range<Int>?, paragraphs: Bool
     ) -> Bool {
         // Unknown is not empty: a settle can fail *because* the read went dark.
-        guard let range = selection(of: binding.element, paragraphs: paragraphs) else { return false }
-        guard !range.isEmpty else { return true }
+        guard let read = selection(of: binding.element, paragraphs: paragraphs) else { return false }
+        guard !read.caret else { return true }
+        let range = read.range
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, range == operand { return true }
         if binding.capabilities.has(.writeSelection) {
@@ -457,13 +458,14 @@ public final class Controller {
             )
         }
         // The write that stranded this may be the one that lies, so confirm.
-        return selection(of: binding.element, paragraphs: paragraphs).map(\.isEmpty) ?? false
+        return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false
     }
 
-    /// In field offsets, through the markers for a text-content field.
-    private func selection(of element: AXUIElement, paragraphs: Bool) -> Range<Int>? {
-        if paragraphs, let marked = AX.markedSelection(of: element) { return marked.range }
-        return AX.selectedRange(of: element).map { $0.location..<($0.location + $0.length) }
+    /// In field offsets, through the markers for a text-content field, where a selection of one paragraph break is
+    /// empty in offsets but no caret.
+    private func selection(of element: AXUIElement, paragraphs: Bool) -> (range: Range<Int>, caret: Bool)? {
+        if paragraphs, let marked = AX.markedSelection(of: element) { return (marked.range, marked.isCollapsed) }
+        return AX.selectedRange(of: element).map { ($0.location..<($0.location + $0.length), $0.length == 0) }
     }
 
     /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.

@@ -2901,17 +2901,22 @@ sim.emulatesKeys = true
 sim.reboundChords = [.paragraphStart: .selectAll]
 sim.type("dd")
 precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
-// In web content Chromium's raw reads cannot tell a key that did nothing from one that had nowhere to go, so only
-// a caret key that leaves a selection is blamed there.
-for (text, caret, keys, chromium) in [("a\n\nb", 2, "yy", true), ("ab\ncdef\nghij", 8, "0", true), ("the cat", 4, "0", false)] {
-    sim = Sim(text: text, caret: caret, profile: keyProfile)
-    sim.emulatesKeys = true
-    sim.webContent = true
-    sim.reads = chromium ? omitsBreaks : nil
-    if !chromium { sim.ignoredChords = [.paragraphStart] }
-    sim.type(keys)
-    precondition(sim.settleFailures == 1 && sim.blamed.isEmpty && sim.text == text, "\(keys) at \(caret)")
+// In web content a key that did nothing is blamed where the reads are exact, as in a textarea.
+sim = Sim(text: "the cat", caret: 4, profile: keyProfile)
+sim.emulatesKeys = true
+sim.webContent = true
+sim.ignoredChords = [.paragraphStart]
+sim.type("0")
+precondition(sim.settleFailures == 1 && sim.blamed == [.lineStartKey] && sim.text == "the cat")
+func webLineStartBlame(text: String, breaks: ParagraphBreaks) -> Expectation.Blame? {
+    webPhysical("0", text: text, caret: 5, profile: keyProfile, breaks: breaks).steps.lazy.compactMap {
+        guard case .settle(let expectation) = $0 else { return nil }
+        return expectation.blame
+    }.first
 }
+// With paragraph reads too, unless a newline the markers also read (a `<br>`) says an empty paragraph may be hidden.
+precondition(webLineStartBlame(text: "ab\ncdef", breaks: ParagraphBreaks(offsets: [2]))?.unmoved == [4..<4])
+precondition(webLineStartBlame(text: "ab\ncdef", breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
 sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
 sim.emulatesKeys = true
 sim.webContent = true
