@@ -941,6 +941,19 @@ precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 
 let pastPhantom = Expectation(selection: 0..<2, length: 6, edge: .paragraphStart, selectedText: "ab")
 precondition(paragraphPlanning("dd", text: "ab\n\ncd", caret: 0, profile: readProfile).plan.steps.contains(.settle(pastPhantom)),
              "keys that stop before the break read the paragraph's end and fail it")
+
+/// `threeParagraphs` in a field whose text hides an element somewhere, as a Linear heading's widget does.
+func leafyPlanning(_ keys: String, caret: Int) -> PhysicalPlanner.Planning {
+    let snapshot = FieldSnapshot(capabilities: readProfile, text: threeParagraphs, selection: caret..<caret,
+                                 breaks: ParagraphBreaks(offsets: [2, 8]), textlessLeaves: true)
+    return PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
+}
+precondition(leafyPlanning("J", caret: 4).rejection != nil, "typing over a break could drop an <hr> or a table cell")
+precondition(leafyPlanning("gUj", caret: 4).rejection != nil, "and so could retyping two lines")
+precondition(leafyPlanning("gUiw", caret: 4).rejection == nil, "one line's text is safe to retype")
+precondition(leafyPlanning("dd", caret: 4).rejection == nil, "a delete retypes nothing")
+precondition(paragraphPlanning("J", text: threeParagraphs, caret: 4, profile: readProfile).rejection == nil)
+precondition(paragraphPlanning("gUj", text: threeParagraphs, caret: 4, profile: readProfile).rejection == nil)
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("cd ef\n", at: 3..<9) == "cd ef")
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("b\ncd", at: 1..<5) == "bcd")
 precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(

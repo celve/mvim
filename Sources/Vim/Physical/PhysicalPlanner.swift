@@ -121,11 +121,14 @@ private extension PhysicalPlanner {
         /// A typed `\n` may have made a paragraph or a line break.
         var breaksUncertain = false
 
+        var textlessLeaves = false
+
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
             anchor = snapshot.anchor
             breaks = snapshot.breaks
+            textlessLeaves = snapshot.textlessLeaves
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -138,6 +141,11 @@ private extension PhysicalPlanner {
 
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
+        }
+
+        /// Typing over `range` would drop a break that may bound an `<hr>` or a table cell, which no typed text rebuilds.
+        func retypesStructure(_ range: Range<Int>) -> Bool {
+            textlessLeaves && (breaks?.offsets.contains { range.contains($0) } ?? false)
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -733,6 +741,7 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
+        if let selection = context.selection, context.retypesStructure(selection) { return nil }
         let action: PhysicalStep = profile.has(.insertText)
             ? .replaceSelection(replacement)
             : .typeText(replacement)
@@ -752,7 +761,8 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        guard let model = context.model, let selection = context.selection, !selection.isEmpty else {
+        guard let model = context.model, let selection = context.selection, !selection.isEmpty,
+              !context.retypesStructure(selection) else {
             return nil   // content must be readable to rewrite it
         }
         let original = model.substring(selection)
@@ -814,6 +824,7 @@ private extension PhysicalPlanner {
         guard let model = context.linewiseModel(profile), let selection = context.selection else { return nil }
         let position = selection.lowerBound
         let range = model.lines(from: position, count: count, includingTerminator: false)
+        guard !context.retypesStructure(range) else { return nil }
         let lines = model.substring(range)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)

@@ -342,8 +342,13 @@ public enum AX {
 
     /// The field's `AXValue` without its paragraph breaks.
     public static func textContent(of element: AXUIElement) -> String? {
+        markerText(of: element).map(MarkerText.plain)
+    }
+
+    /// `textContent` with a U+FFFC for each text-less leaf still in it.
+    public static func markerText(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
-        return text(from: field.start, to: AXTextMarkerRangeCopyEndMarker(field.range), in: element).map(MarkerText.plain)
+        return text(from: field.start, to: AXTextMarkerRangeCopyEndMarker(field.range), in: element)
     }
 
     /// The leaf after a marker, which may be anchored on a container such as a list.
