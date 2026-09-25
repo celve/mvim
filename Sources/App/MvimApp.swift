@@ -391,6 +391,13 @@ final class AppModel: ObservableObject {
         // reads as the block-editor fact.
         case .wholeDocument: return "Text covers whole document"
         case .fieldIsSession: return "New field starts a session"
+        case .lineStartKey: return "Line start key (⌃A)"
+        case .lineEndKey: return "Line end key (⌃E)"
+        case .documentStartKey: return "Document start key (⌘↑)"
+        case .documentEndKey: return "Document end key (⌘↓)"
+        case .nativeMotions: return "App's word, paragraph & page keys"
+        case .wordKeys: return "Word keys (⌥← ⌥→)"
+        case .paragraphKeys: return "Paragraph keys (⌥↑ ⌥↓)"
         }
     }
 

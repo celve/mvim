@@ -37,7 +37,9 @@ public enum KeyNotation {
     /// `characters` is the tap's layout- and shift-resolved text, so non-US
     /// layouts resolve without a keycode table; `keyCode` is consulted only
     /// for keys that carry no usable character of their own.
-    public static func token(keyCode: Int, chord: Chord, characters: String) -> String? {
+    public static func token(
+        keyCode: Int, chord: Chord, characters: String, profile: CapabilityProfile = CapabilityProfile()
+    ) -> String? {
         // ⌘ belongs to the system, whatever the key rides with it.
         if chord.contains(.command) { return nil }
 
@@ -90,9 +92,11 @@ public enum KeyNotation {
         if chord.contains(.control) {
             // Control chords arrive as control characters: ⌃r is U+0012.
             guard (1...26).contains(scalar.value),
-                  let letter = UnicodeScalar(scalar.value + 96),
-                  boundControlLetters.contains(Character(letter)) else { return nil }
-            return "<C-\(Character(letter))>"
+                  let letter = UnicodeScalar(scalar.value + 96) else { return nil }
+            let character = Character(letter)
+            guard boundControlLetters.contains(character)
+                || (profile.has(.nativeMotions) && nativeControlLetters.contains(character)) else { return nil }
+            return "<C-\(character)>"
         }
 
         // Globe chords over a character key are macOS's own shortcuts — 🌐E
@@ -156,4 +160,6 @@ private extension KeyNotation {
     /// derive this set from the planners and fail if it drifts, so
     /// implementing the page motions will say so out loud.
     static let boundControlLetters: Set<Character> = ["r", "v"]
+
+    static let nativeControlLetters: Set<Character> = ["f", "b"]
 }

@@ -77,6 +77,27 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// The one atom with no parent mechanism — no AX call gates whether a
     /// focus change ends a session. Never probed, never learned.
     case fieldIsSession
+
+    /// ⌃A and ⇧⌃A: to the start of the caret's paragraph, which is mvim's line.
+    case lineStartKey
+
+    /// ⌃E and ⇧⌃E: to the end of the caret's paragraph.
+    case lineEndKey
+
+    /// ⌘↑ and ⇧⌘↑: to the start of the document.
+    case documentStartKey
+
+    /// ⌘↓ and ⇧⌘↓: to the end of the document.
+    case documentEndKey
+
+    /// Opt-in: word, paragraph and page motions press the app's own keys.
+    case nativeMotions
+
+    /// ⌥← ⌥→ and their ⇧ forms: by the app's words.
+    case wordKeys
+
+    /// ⌥↑ ⌥↓: to the app's paragraph start and end.
+    case paragraphKeys
 }
 
 public extension Capability {
@@ -88,12 +109,18 @@ public extension Capability {
 
     var species: Species {
         switch self {
-        case .drawCursor, .wholeDocument, .fieldIsSession:
+        case .drawCursor, .wholeDocument, .fieldIsSession, .nativeMotions:
             return .policy
-        case .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText:
+        case .readText, .readLength, .readCaret, .readSelectedText, .writeSelection, .insertText,
+             .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey, .wordKeys, .paragraphKeys:
             return .mechanism
         }
     }
+
+    /// Lane B's keys: the probe claims them, and a settle that finds a key did nothing demotes it.
+    static let nativeKeys: Set<Capability> = [
+        .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey, .wordKeys, .paragraphKeys,
+    ]
 
     /// The mechanism a policy atom rides on: no mechanism, no question. Its
     /// absence makes the policy unavailable regardless of seeds or the user
@@ -146,7 +173,7 @@ public struct CapabilityProfile: Equatable, Sendable {
 /// Why each atom resolved as it did. Here, not beside the impure `FieldProber`, so `make test` reaches it.
 public struct CapabilityReport: Equatable, Sendable {
     public enum Source: Equatable, Sendable {
-        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism.
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism; for a native key, the probe's claim.
         case probed
         /// A shipped `CapabilityConfig` seed.
         case seeded
@@ -192,6 +219,13 @@ extension Capability {
         case .drawCursor: return "DC"
         case .wholeDocument: return "WD"
         case .fieldIsSession: return "FS"
+        case .lineStartKey: return "KA"
+        case .lineEndKey: return "KE"
+        case .documentStartKey: return "KT"
+        case .documentEndKey: return "KB"
+        case .nativeMotions: return "NM"
+        case .wordKeys: return "WK"
+        case .paragraphKeys: return "PK"
         }
     }
 }

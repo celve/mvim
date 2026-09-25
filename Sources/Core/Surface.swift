@@ -140,6 +140,9 @@ public extension Surface {
     /// curation makes, not one a user makes from a menu standing in one app.
     static func webRung(_ origin: String) -> String { "web:" + origin }
 
+    /// A seed-only rung past every ladder, so curation can deny an atom everywhere.
+    static let everywhere = "*"
+
     /// Identifiers are arbitrary strings from a DOM; a raw `|` would forge a
     /// rung boundary. Escaped rather than rejected — the key is only ever
     /// generated and compared, never parsed back, so this just has to avoid
@@ -245,7 +248,7 @@ public enum SurfaceLadder {
     public static func seedEntry(
         _ capability: String, rungs: [String], seeds: Seeds
     ) -> String? {
-        for rung in rungs where seeds[rung]?.contains(capability) == true {
+        for rung in rungs + [Surface.everywhere] where seeds[rung]?.contains(capability) == true {
             return rung
         }
         return nil

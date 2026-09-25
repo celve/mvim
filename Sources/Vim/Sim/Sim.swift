@@ -12,10 +12,11 @@
 /// It executes lane-A/B AX and clipboard steps exactly — including the
 /// modeled pasteboard, written by `clipboardCut`/`clipboardCopy` and read
 /// by `clipboardInsert(nil)`, which makes the clipboard=unnamed contract
-/// pure-testable. Of Cocoa's keys it emulates only the ones lane B counts
-/// with, on unwrapped text; every other `press` (the blind lane's chords,
-/// undo) counts as `unsupportedSteps`, because the Sim can only prove we
-/// emit the plans we designed, never that a blind plan works in a real app.
+/// pure-testable. Of Cocoa's keys it emulates, through `KeyModel`, the
+/// ones lane B counts with, and every one the model knows under
+/// `emulatesKeys`; any other `press` (the blind lane's chords, undo) counts
+/// as `unsupportedSteps`, because the Sim can only prove we emit the plans
+/// we designed, never that a blind plan works in a real app.
 ///
 /// Its faults are the only way a golden reaches the abort path at all.
 public struct Sim {
@@ -53,12 +54,33 @@ public struct Sim {
     /// Where the last command's run ended early, if it did.
     public private(set) var abortedStep: PhysicalStep?
 
+    /// Every key `KeyModel` knows runs, not only the ones lane B counts with.
+    public var emulatesKeys = false
+
+    /// The field is web content; a Chromium read fault (`reads`) implies it.
+    public var webContent = false
+
+    /// Graphemes per visual row for ↓ ↑ ⌘← ⌘→; nil puts each line on one row.
+    public var wrapWidth: Int?
+
+    /// Keys this field ignores, as an app that rebinds them would.
+    public var ignoredChords: Set<Chord> = []
+
+    /// Keys this field treats as others, as an app that rebinds ⌃A to select-all would.
+    public var reboundChords: [Chord: Chord] = [:]
+
+    /// Keys the failed settles blamed, in order.
+    public private(set) var blamed: [Capability] = []
+
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
     public private(set) var unsupportedSteps = 0
 
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
+
+    /// The focus is the selection's lower bound.
+    private var backward = false
 
     /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
@@ -153,7 +175,8 @@ private extension Sim {
             text: text,
             selection: readSelection,
             anchor: anchor,
-            cursor: cursor
+            cursor: cursor,
+            webContent: webContent || reads != nil
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
@@ -192,7 +215,10 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        guard profile.has(.writeSelection), !swallowsSelect else { return false }
+        guard profile.has(.writeSelection), !swallowsSelect else {
+            guard profile.has(.nativeMotions), !ignoredChords.contains(.left), press(reboundChords[.left] ?? .left) else { return false }
+            return selection.isEmpty
+        }
         selection = selection.lowerBound..<selection.lowerBound
         return true
     }
@@ -271,12 +297,14 @@ private extension Sim {
 private extension Sim {
     /// The index of the step that ended the run, nil when every step ran.
     mutating func execute(_ plan: PhysicalPlan) -> Int? {
+        var kept: [Int: Int] = [:]
         for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
                 guard !swallowsSelect else { break }
                 let model = TextModel(text)
                 selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
+                backward = false
 
             case .replaceSelection(let replacement):
                 if !swallowsReplace { applyReplace(replacement) }
@@ -285,8 +313,8 @@ private extension Sim {
                 applyReplace(typed)
 
             case .press(let chord, let count):
-                for _ in 0..<count {
-                    guard press(chord) else {
+                for _ in 0..<count where !ignoredChords.contains(chord) {
+                    guard emulatesKeys || Self.countedKeys.contains(chord), press(reboundChords[chord] ?? chord) else {
                         unsupportedSteps += 1
                         break
                     }
@@ -305,18 +333,17 @@ private extension Sim {
             case .captureSelectedText(let slot):
                 captures[slot] = readSelectedText
 
-            case .settle(let expectation):
+            case .settle(let planned):
+                let expectation = planned.resolving(kept)
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
-                let converged = expectation.matches(
-                    selection: unreadableSelection ? nil : readSelection,
-                    length: text.utf16.count,
-                    selectedText: readSelectedText
-                )
-                if !converged {
+                let observed = unreadableSelection ? nil : readSelection
+                if !expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText) {
                     settleFailures += 1
+                    if let key = expectation.blamed(observed: observed) { blamed.append(key) }
                     drainResidency(of: plan, after: index)
                     return index   // the rest dies, like the real executor
                 }
+                if let slot = expectation.keeps, let caret = observed?.lowerBound { kept[slot] = caret }
 
             case .softSettle:
                 // Best-effort barrier: never aborts. In this synchronous host
@@ -335,35 +362,22 @@ private extension Sim {
         return nil
     }
 
-    /// Lane B's keys as LIN-1533 measured them — an arrow collapses a selection to its own side, ↓ moving
-    /// from its end; false for any other chord.
+    /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
+    static let countedKeys: Set<Chord> = [.left, .right, .up, .down, .lineStart, .selectRight, .deleteBack]
+
+    /// One key as `KeyModel` has Cocoa's bindings do it, which is how LIN-1533 measured Chromium's arrows; false for
+    /// a key the model does not know.
     mutating func press(_ chord: Chord) -> Bool {
-        let model = TextModel(text)
-        let caret: Int
-        switch chord {
-        case .left:
-            caret = selection.isEmpty ? model.advance(selection.lowerBound, byGraphemes: -1) : selection.lowerBound
-        case .right:
-            caret = selection.isEmpty ? model.advance(selection.upperBound, byGraphemes: 1) : selection.upperBound
-        case .up:
-            caret = model.verticalMove(from: selection.lowerBound, by: -1, firstNonBlank: false)
-        case .down:
-            caret = model.verticalMove(from: selection.upperBound, by: 1, firstNonBlank: false)
-        case .lineStart:
-            caret = model.lineStart(of: selection.lowerBound)
-        case .selectRight:
-            selection = selection.lowerBound..<model.advance(selection.upperBound, byGraphemes: 1)
-            return true
-        case .deleteBack:
-            if selection.isEmpty {
-                selection = model.advance(selection.lowerBound, byGraphemes: -1)..<selection.upperBound
-            }
-            applyReplace("")
-            return true
-        default:
-            return false
-        }
-        selection = caret..<caret
+        var keys = KeyModel(
+            text: text,
+            anchor: backward ? selection.upperBound : selection.lowerBound,
+            focus: backward ? selection.lowerBound : selection.upperBound,
+            wrap: wrapWidth
+        )
+        guard keys.press(chord) else { return false }
+        text = keys.text
+        selection = keys.selection
+        backward = keys.focus < keys.anchor
         return true
     }
 
@@ -380,5 +394,6 @@ private extension Sim {
         text = TextModel(text).replacing(selection, with: replacement)
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
+        backward = false
     }
 }

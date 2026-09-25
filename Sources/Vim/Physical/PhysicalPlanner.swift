@@ -115,11 +115,16 @@ private extension PhysicalPlanner {
         /// The last predicted edit's range, in field offsets — the one in flight if the plan dies.
         var operand: Range<Int>?
 
+        let webContent: Bool
+
         /// Everything else is in `AXValue` offsets; ranges leave for the field through these.
         var breaks: ParagraphBreaks?
 
         /// A typed `\n` may have made a paragraph or a line break.
         var breaksUncertain = false
+
+        /// Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so after a blind newline the length is unknown.
+        var lengthUncertain = false
 
         var textlessLeaves = false
 
@@ -127,7 +132,9 @@ private extension PhysicalPlanner {
             text = snapshot.text
             selection = snapshot.selection
             anchor = snapshot.anchor
+            webContent = snapshot.webContent
             breaks = snapshot.breaks
+            emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
@@ -142,6 +149,10 @@ private extension PhysicalPlanner {
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
         }
+
+        /// The snapshot's caret when it is in an empty paragraph, which `AXValue` can leave out and read beside, so a
+        /// key pressed from it can seem to do nothing when it did.
+        let emptyParagraphCaret: Range<Int>?
 
         /// Typing over `range` would drop a break that may bound an `<hr>` or a table cell, which no typed text rebuilds.
         func retypesStructure(_ range: Range<Int>) -> Bool {
@@ -223,16 +234,18 @@ private extension PhysicalPlanner {
     /// mismatch is not a failure (the app, not us, decided what the keystroke
     /// did), so it proceeds instead of aborting the mode change behind it.
     static func settle(
-        _ context: Context, profile: CapabilityProfile, hard: Bool = true, selectedText: String? = nil
+        _ context: Context, profile: CapabilityProfile, hard: Bool = true,
+        blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
-        let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
-        let expectation = Expectation(
+        let length = profile.has(.readLength) && !context.lengthUncertain ? context.text.map { $0.utf16.count } : nil
+        var expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
             edge: context.breaksUncertain ? nil : context.edge(selection.upperBound),
             selectedText: selectedText
         )
+        expectation.blame = blame
         return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
 
@@ -463,9 +476,13 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
+        if let keys = appMove(destination, context: &context, profile: profile) { return keys }
         if let model = context.model(for: destination, profile), let selection = context.selection {
             let position = selection.lowerBound
             guard let target = resolve(destination, model: model, from: position) else { return nil }
+            if let keys = nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
+                return keys
+            }
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
                 actuation = write(target..<target, context: context)
@@ -481,6 +498,523 @@ private extension PhysicalPlanner {
         context.selection = nil
         context.selectionOpaque = false
         return [.press(blind.chord, count: blind.counted ? count : 1)]
+    }
+}
+
+// MARK: - Native keys
+
+private extension PhysicalPlanner {
+    /// Chords pressed together, then one settle; a group that blames a key holds that key alone.
+    typealias KeyGroup = (chords: [Chord], blame: Capability?)
+
+    /// Lane B's move by paragraph and document keys, counting only the column; nil where lane B counts it all.
+    static func nativeMove(
+        _ destination: LogicalStep.Destination?, to target: Int, model: TextModel,
+        context: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep]? {
+        guard !profile.has(.writeSelection), let position = context.position else { return nil }
+        let line = model.lineStart(of: position)
+        let targetLine = model.lineStart(of: target)
+        var groups: [KeyGroup]
+        switch destination {
+        case .motion(.lineStart, _)?:
+            guard profile.has(.lineStartKey) else { return nil }
+            groups = [([.paragraphStart], .lineStartKey)]
+        case .motion(.lineEnd, let count)?:
+            guard profile.has(.lineEndKey) else { return nil }
+            groups = [([.paragraphEnd], .lineEndKey), (repeated([.right, .paragraphEnd], count - 1), nil)]
+        case .motion(.fileStart, _)?:
+            guard profile.has(.documentStartKey) else { return nil }
+            groups = [([.documentStart], .documentStartKey)]
+        case .motion(.fileEnd, _)?:
+            guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return nil }
+            groups = [([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]
+        default:
+            // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
+            var vertical: Direction?
+            if case .motion(.line(let direction, _), _)? = destination { vertical = direction }
+            guard targetLine != line || vertical != nil else { return nil }
+            if targetLine > line || vertical == .down {
+                guard profile.has(.lineEndKey) else { return nil }
+                let lines = model.newlineCount(in: line..<targetLine)
+                var hops: [Chord] = lines > 0 ? [.right] : []
+                hops += repeated([.paragraphEnd, .right], lines - 1)
+                groups = [([.paragraphEnd], .lineEndKey), (hops, nil)]
+            } else {
+                guard profile.has(.lineStartKey) else { return nil }
+                let lines = model.newlineCount(in: targetLine..<line)
+                groups = [([.paragraphStart], .lineStartKey), (repeated([.left, .paragraphStart], lines), nil)]
+            }
+        }
+        // Only the column is counted, in its own settle so the line the field reports decides it.
+        guard let reached = landing(of: groups.flatMap(\.chords), from: position, in: model.text),
+              model.lineStart(of: reached) == targetLine else { return nil }
+        let step: Chord = target > reached ? .right : .left
+        groups.append((Array(repeating: step, count: model.graphemes(in: min(reached, target)..<max(reached, target))), nil))
+        return pressing(groups, to: target..<target, context: &context, profile: profile)
+    }
+
+    /// Lane B's line-shaped selections by native keys, as many as the command counts, since keys past the end do
+    /// nothing; nil where lane B counts them.
+    static func nativeSelect(
+        _ target: LogicalStep.SelectionTarget, range: Range<Int>,
+        context: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep]? {
+        guard !profile.has(.writeSelection) else { return nil }
+        let groups: [KeyGroup]
+        switch target {
+        case .lines(let count, let interior):
+            groups = linesDown(count, newline: !interior)
+        case .lineSpan(to: .motion(.line(.down, _), let count), let interior):
+            groups = linesDown(count + 1, newline: !interior)
+        case .lineSpan(to: .motion(.line(.up, _), let count), let interior):
+            groups = [([.paragraphEnd], .lineEndKey), (interior ? [] : [.right, .selectLeft], nil),
+                      ([Chord.paragraphStart.shifted], .lineStartKey),
+                      (repeated([.selectLeft, Chord.paragraphStart.shifted], count), nil)]
+        case .lineSpan(to: .motion(.fileEnd, _), _):
+            groups = [([.paragraphStart], .lineStartKey), ([Chord.documentEnd.shifted], .documentEndKey)]
+        case .lineSpan(to: .motion(.fileStart, _), let interior):
+            groups = [([.paragraphEnd], .lineEndKey), (interior ? [] : [.right], nil),
+                      ([Chord.documentStart.shifted], .documentStartKey)]
+        case .toLineEnd:
+            groups = [([Chord.paragraphEnd.shifted], .lineEndKey)]
+        case .span(to: .motion(.lineEnd, let count), false):
+            groups = [([Chord.paragraphEnd.shifted], .lineEndKey),
+                      (repeated([.selectRight, Chord.paragraphEnd.shifted], count - 1), nil)]
+        case .span(to: .motion(.lineStart(firstNonBlank: false), _), false):
+            groups = [([Chord.paragraphStart.shifted], .lineStartKey)]
+        default:
+            return nil
+        }
+        return pressing(groups, to: range, context: &context, profile: profile)
+    }
+
+    /// ⌃A, then ⇧⌃E per line with ⇧→ between, and ⇧→ once more for the last newline.
+    static func linesDown(_ count: Int, newline: Bool) -> [KeyGroup] {
+        var rest = repeated([.selectRight, Chord.paragraphEnd.shifted], count - 1)
+        if newline { rest.append(.selectRight) }
+        return [([.paragraphStart], .lineStartKey), ([Chord.paragraphEnd.shifted], .lineEndKey), (rest, nil)]
+    }
+
+    /// Presses the groups from the context's caret, each followed by its settle; nil unless they land on `target`.
+    static func pressing(
+        _ groups: [KeyGroup], to target: Range<Int>, context original: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep]? {
+        guard let text = original.text, let position = original.position else { return nil }
+        let atoms = Set(groups.compactMap(\.blame))
+        guard atoms.allSatisfy(profile.has) else { return nil }
+        var context = original
+        var steps = collapsing(&context)
+        // One model throughout: which end of a selection moves is state the keys build up.
+        var model = KeyModel(text: text, anchor: position, focus: position)
+        for group in groups where !group.chords.isEmpty {
+            for chord in group.chords {
+                guard model.press(chord) else { return nil }
+            }
+            steps += keys(group.chords, blaming: group.blame, to: model.selection, context: &context, profile: profile)
+        }
+        guard model.selection == target else { return nil }
+        original = context
+        return steps
+    }
+
+    /// Where Cocoa's standard bindings leave a caret after `chords`.
+    static func landing(of chords: [Chord], from caret: Int, in text: String) -> Int? {
+        var keys = KeyModel(text: text, anchor: caret, focus: caret)
+        for chord in chords {
+            guard keys.press(chord) else { return nil }
+        }
+        return keys.focus
+    }
+
+    static func repeated(_ chords: [Chord], _ times: Int) -> [Chord] {
+        Array(repeatElement(chords, count: max(0, times)).joined())
+    }
+
+    /// Presses `chords`, then settles on `landing`; a named key is blamed if it left a selection where it leaves a caret,
+    /// if the field reads as before where it had somewhere to go, or if it landed elsewhere where lines are the model's.
+    static func keys(
+        _ chords: [Chord], blaming atom: Capability?, to landing: Range<Int>,
+        context: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        let before = context.selection
+        let model = context.model
+        context.selection = landing
+        context.selectionOpaque = false
+        let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
+        let blame = atom.flatMap { atom -> Expectation.Blame? in
+            guard let before, let model else { return nil }
+            let unmoved = before == context.emptyParagraphCaret || mayStayPut(chords, from: before, in: model)
+                ? [] : [context.field(before)]
+            // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
+            let offTarget = context.breaks == nil
+            guard !unmoved.isEmpty || leavesCaret || offTarget else { return nil }
+            return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget)
+        }
+        var steps: [PhysicalStep] = []
+        for chord in chords {
+            if case .press(chord, let count)? = steps.last {
+                steps[steps.count - 1] = .press(chord, count: count + 1)
+            } else {
+                steps.append(.press(chord, count: 1))
+            }
+        }
+        return steps + settle(context, profile: profile, blame: blame)
+    }
+
+    /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel) -> Bool {
+        guard read.isEmpty else { return true }
+        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound)
+        guard chords.allSatisfy({ keys.press($0) }) else { return true }
+        return keys.selection == read
+    }
+
+    /// In a field that claims the native keys, a yank within a line takes the text the field selected, which holds
+    /// where a misread caret shifts the model's; Chromium's leaves paragraph breaks out, and deletes check it instead.
+    static func registersFromField(_ content: String, _ profile: CapabilityProfile) -> Bool {
+        !profile.has(.writeSelection) && profile.has(.readSelectedText)
+            && Capability.nativeKeys.contains(where: profile.has) && !content.contains("\n")
+    }
+
+    /// ← first, so every key starts from a caret (LIN-1532).
+    static func collapsing(_ context: inout Context) -> [PhysicalStep] {
+        guard let selection = context.selection, !selection.isEmpty else { return [] }
+        context.selection = selection.lowerBound..<selection.lowerBound
+        return [.press(.left, count: 1)]
+    }
+}
+
+// MARK: - The app's keys
+
+/// Every landing is checked against p, the caret the field reported.
+private extension PhysicalPlanner {
+    struct AppKey {
+        let chord: Chord
+        let forward: Bool
+        /// Demoted when the key misbehaves; nil where staying put is legitimate.
+        let atom: Capability?
+    }
+
+    static func appKey(_ motion: Motion) -> AppKey? {
+        switch motion {
+        case .word(.forward, _, false): return AppKey(chord: .wordRight, forward: true, atom: .wordKeys)
+        case .word(.backward, false, false): return AppKey(chord: .wordLeft, forward: false, atom: .wordKeys)
+        case .paragraph(.forward): return AppKey(chord: .paragraphForward, forward: true, atom: .paragraphKeys)
+        case .paragraph(.backward): return AppKey(chord: .paragraphBackward, forward: false, atom: .paragraphKeys)
+        case .displayLine(.down): return AppKey(chord: .down, forward: true, atom: nil)
+        case .displayLine(.up): return AppKey(chord: .up, forward: false, atom: nil)
+        case .page(.forward, false): return AppKey(chord: .pageForward, forward: true, atom: nil)
+        case .page(.backward, false): return AppKey(chord: .pageBackward, forward: false, atom: nil)
+        case .line(.down, false): return AppKey(chord: .down, forward: true, atom: nil)
+        case .line(.up, false): return AppKey(chord: .up, forward: false, atom: nil)
+        default: return nil
+        }
+    }
+
+    static func mustMove(from p: Int, forward: Bool, model: TextModel) -> Bool {
+        forward ? p < model.length : p > 0
+    }
+
+    /// None in web content: raw reads cannot tell a key that did nothing (LIN-1564).
+    static func wordBlame(_ blame: Expectation.Blame?, context: Context) -> Expectation.Blame? {
+        context.webContent ? nil : blame
+    }
+
+    /// `j`/`k` press ↓/↑ only where neither a write nor ⌃E/⌃A can land a line.
+    static func movesByRow(_ motion: Motion, profile: CapabilityProfile) -> Bool {
+        guard case .line(let direction, false) = motion else { return false }
+        return !profile.has(.writeSelection) && !profile.has(direction == .down ? .lineEndKey : .lineStartKey)
+    }
+
+    static func isBlank(_ o: Int, in model: TextModel) -> Bool {
+        model.substring(o..<model.advance(o, byGraphemes: 1)).first?.isWhitespace ?? true
+    }
+
+    /// No app word crosses a blank, so this run bounds any word at `o`.
+    static func run(at o: Int, in model: TextModel) -> Range<Int> {
+        guard !isBlank(o, in: model) else { return o..<o }
+        var lower = o, upper = o
+        while lower > 0, !isBlank(model.advance(lower, byGraphemes: -1), in: model) { lower = model.advance(lower, byGraphemes: -1) }
+        while upper < model.length, !isBlank(upper, in: model) { upper = model.advance(upper, byGraphemes: 1) }
+        return lower..<upper
+    }
+
+    static func isWordCharacter(_ o: Int, in model: TextModel) -> Bool {
+        model.substring(o..<model.advance(o, byGraphemes: 1)).first.map { $0.isLetter || $0.isNumber || $0 == "_" } ?? false
+    }
+
+    static func hasWord(_ run: Range<Int>, in model: TextModel) -> Bool {
+        model.substring(run).contains { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
+    static func wordRunBefore(_ c: Int, in model: TextModel) -> Int {
+        guard c > 0 else { return 0 }
+        let found = run(at: model.advance(c, byGraphemes: -1), in: model)
+        return hasWord(found, in: model) ? found.count : 0
+    }
+
+    /// How far `words` app words reach; like the keys, it skips punctuation-only runs.
+    static func wordReach(from o: Int, words: Int, forward: Bool, in model: TextModel) -> Int {
+        var at = o
+        for _ in 0..<max(1, words) {
+            while true {
+                let blanksDone: Int
+                if forward {
+                    var next = at
+                    while next < model.length, isBlank(next, in: model) { next = model.advance(next, byGraphemes: 1) }
+                    blanksDone = next
+                    guard blanksDone < model.length else { at = model.length; break }
+                    let found = run(at: blanksDone, in: model)
+                    at = found.upperBound
+                    if hasWord(found, in: model) { break }
+                } else {
+                    var next = at
+                    while next > 0, isBlank(model.advance(next, byGraphemes: -1), in: model) { next = model.advance(next, byGraphemes: -1) }
+                    blanksDone = next
+                    guard blanksDone > 0 else { at = 0; break }
+                    let found = run(at: model.advance(blanksDone, byGraphemes: -1), in: model)
+                    at = found.lowerBound
+                    if hasWord(found, in: model) { break }
+                }
+            }
+        }
+        return abs(at - o)
+    }
+
+    /// Where ⌥→ ⌥← from a blank lands.
+    static func nextWordStart(after o: Int, in model: TextModel) -> Int? {
+        var at = o
+        while at < model.length {
+            if isWordCharacter(at, in: model) { return at }
+            at = model.advance(at, byGraphemes: 1)
+        }
+        return nil
+    }
+
+    /// What `iw` finds at p; `trailing` is blanks to the text's end.
+    enum Under: Equatable {
+        case letter
+        case blank(nextWord: Int)
+        case trailing
+    }
+
+    static func under(_ c: Int, in model: TextModel) -> Under {
+        guard isBlank(c, in: model) else { return .letter }
+        return nextWordStart(after: c, in: model).map { .blank(nextWord: $0) } ?? .trailing
+    }
+
+    /// The word p is in or starts, else the one ending at p.
+    static func wordKeys(
+        after under: Under, at p: Int, model: TextModel, context: Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        let before = p > 0 ? run(at: model.advance(p, byGraphemes: -1), in: model) : p..<p
+        switch under {
+        case .letter:
+            return selectBack(to: .caretAfter(p, strict: true), within: run(at: p, in: model), context: context, profile: profile)
+        case .blank:
+            return [.press(.wordLeft, count: 1),
+                    appSettle(.caretBefore(p, strict: true), blame: nil, keeps: 0, context: context, profile: profile)]
+                + selectBack(to: .exact(p..<p), within: before, context: context, profile: profile)
+        case .trailing:
+            return selectBack(to: .exact(p..<p), within: before, context: context, profile: profile)
+        }
+    }
+
+    /// The selection must be exactly the kept span, inside `within`.
+    static func selectBack(to end: Landing, within: Range<Int>, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
+        [.press(.wordRight, count: 1),
+         appSettle(end, blame: nil, keeps: 1, context: context, profile: profile),
+         .press(.selectWordLeft, count: 1),
+         appSettle(.between(0, 1), blame: wordBlame(Expectation.Blame(capability: .wordKeys, unmoved: []), context: context),
+                   within: within, context: context, profile: profile)]
+    }
+
+    /// Scripts written without spaces, where one run holds many words.
+    static func isUnspaced(_ character: Character) -> Bool {
+        character.unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x0E00...0x0EFF, 0x1000...0x109F, 0x1780...0x17FF, 0x3040...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF,
+                 0xF900...0xFAFF, 0x20000...0x2FA1F:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    enum Edge { case start, end }
+
+    static func edge(at c: Int, in model: TextModel) -> Edge? {
+        let before = c > 0 && isWordCharacter(model.advance(c, byGraphemes: -1), in: model)
+        let after = isWordCharacter(c, in: model)
+        return before == after ? nil : after ? .start : .end
+    }
+
+    /// Whether the reach ends a plain word run, so the span is known exactly.
+    static func oneWordRun(_ reached: Range<Int>, forward: Bool, in model: TextModel) -> Bool {
+        let characters = Array(model.substring(reached))
+        let word = { (c: Character) in c.isLetter || c.isNumber || c == "_" }
+        let rest = forward ? Array(characters.drop { !word($0) }) : Array(characters.reversed().drop { !word($0) })
+        return !rest.isEmpty && rest.allSatisfy(word)
+    }
+
+    /// Out and back to p with the unshifted keys; the selection must be exactly their span.
+    static func exactSpanKeys(
+        _ p: Int, forward: Bool, fromStart: Bool, count: Int, reached: Range<Int>, context: Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        let (out, back): (Chord, Chord) = forward ? (.wordRight, .wordLeft) : (.wordLeft, .wordRight)
+        let (far, near) = forward ? (1, 0) : (0, 1)
+        let leaves = forward == fromStart
+        return [.press(out, count: count),
+                appSettle(forward ? .caretAfter(p, strict: true) : .caretBefore(p, strict: true), blame: nil, keeps: far,
+                          context: context, profile: profile)]
+            // From the other edge: one word further back, then one out.
+            + (leaves ? [.press(back, count: count)] : [.press(back, count: count + 1), .press(out, count: 1)])
+            + [appSettle(.exact(p..<p), blame: nil, keeps: near, context: context, profile: profile),
+                .press(forward ? .selectWordRight : .selectWordLeft, count: count),
+                appSettle(.between(0, 1), blame: wordBlame(Expectation.Blame(capability: .wordKeys, unmoved: []), context: context),
+                          within: reached, context: context, profile: profile)]
+    }
+
+    /// Where ⌥→ ⌥← lands: exactly on the next word from a blank, else at or before p.
+    static func roundTripLanding(_ under: Under, at p: Int) -> Landing {
+        if case .blank(let next) = under { return .exact(next..<next) }
+        return .caretBefore(p, strict: false)
+    }
+
+    /// Checks precede selections, so a failure strands a caret, not a selection.
+    static func wordAtCaretKeys(_ p: Int, model: TextModel, context: Context, profile: CapabilityProfile) -> [PhysicalStep]? {
+        let under = under(p, in: model)
+        if under != .letter, wordRunBefore(p, in: model) == 0 { return nil }
+        return [.press(.wordRight, count: 1), .press(.wordLeft, count: 1),
+                appSettle(roundTripLanding(under, at: p), blame: nil, keeps: 0, context: context, profile: profile)]
+            + wordKeys(after: under, at: p, model: model, context: context, profile: profile)
+    }
+
+    /// Landings come in `AXValue` offsets and leave in the field's, with the side a boundary caret must settle on.
+    static func appSettle(
+        _ landing: Landing, blame: Expectation.Blame?, keeps: Int? = nil, within: Range<Int>? = nil,
+        context: Context, profile: CapabilityProfile
+    ) -> PhysicalStep {
+        let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
+        let read: Landing
+        var edge: Expectation.Edge?
+        switch landing {
+        case .exact(let range):
+            read = .exact(context.field(range))
+            edge = context.edge(range.upperBound)
+        case .caretAfter(let o, let strict):
+            read = .caretAfter(context.field(o..<o).lowerBound, strict: strict)
+        case .caretBefore(let o, let strict):
+            read = .caretBefore(context.field(o..<o).lowerBound, strict: strict)
+        case .between:
+            read = landing
+        }
+        var expectation = Expectation(landing: read, length: length, edge: edge, blame: blame)
+        expectation.within = within.map(context.field)
+        expectation.longest = expectation.within?.count
+        expectation.keeps = keeps
+        return .settle(expectation)
+    }
+
+    /// Blamed only if the field still reads p after the keys.
+    static func stuck(_ atom: Capability?, at p: Int, context: Context) -> Expectation.Blame? {
+        atom.map { Expectation.Blame(capability: $0, unmoved: [context.field(p..<p)]) }
+    }
+
+    /// A key may land across paragraph breaks alone, which the field's offsets skip.
+    static func mayCrossOnlyBreaks(from p: Int, forward: Bool, context: Context) -> Bool {
+        context.breaks?.offsets.contains(forward ? p : p - 1) ?? false
+    }
+
+    static func appMove(
+        _ destination: LogicalStep.Destination, context: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep]? {
+        guard profile.has(.nativeMotions), case .motion(let motion, let count) = destination,
+              let key = appKey(motion) else { return nil }
+        guard let model = context.model(for: destination, profile), let selection = context.selection,
+              profile.has(.readCaret) else {
+            // Lane C already maps words and lines.
+            if key.atom == .wordKeys { return nil }
+            if case .line = motion { return nil }
+            context.selection = nil
+            context.selectionOpaque = false
+            return [.press(key.chord, count: count)]
+        }
+        // Exact fields keep vim's words.
+        if key.atom == .wordKeys, profile.has(.writeSelection) { return nil }
+        if case .line = motion, !movesByRow(motion, profile: profile) { return nil }
+        if let atom = key.atom, !profile.has(atom) { return nil }
+        let p = selection.lowerBound
+        let strict = mustMove(from: p, forward: key.forward, model: model)
+            && !mayCrossOnlyBreaks(from: p, forward: key.forward, context: context)
+        let landing: Landing = key.forward ? .caretAfter(p, strict: strict) : .caretBefore(p, strict: strict)
+        context.selection = nil
+        context.selectionOpaque = false
+        return (selection.isEmpty ? [] : [.press(.left, count: 1)]) + [
+            .press(key.chord, count: count),
+            // Blamed for leaving a selection, or, outside web content, for staying put.
+            appSettle(landing, blame: key.atom.map {
+                let unmoved = strict && !context.webContent ? [context.field(p..<p)] : []
+                return Expectation.Blame(capability: $0, unmoved: unmoved, leavesCaret: true)
+            }, context: context, profile: profile),
+        ]
+    }
+
+    /// Outer nil hands back to vim's lowering; inner nil rejects.
+    static func appSelect(
+        _ target: LogicalStep.SelectionTarget, context: inout Context, profile: CapabilityProfile
+    ) -> [PhysicalStep]?? {
+        guard profile.has(.nativeMotions) else { return nil }
+        let span: AppKey?
+        switch target {
+        case .textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), 1):
+            span = nil
+        case .span(.motion(let motion, _), _):
+            guard let key = appKey(motion), key.atom == .wordKeys else { return nil }
+            span = key
+        default:
+            return nil
+        }
+        guard let model = context.model(for: target, profile), let selection = context.selection,
+              profile.has(.readCaret) else {
+            // ⌥→ first, so a caret at a word's start stays in that word.
+            guard span == nil else { return nil }
+            context.selection = nil
+            context.selectionOpaque = true
+            context.selectionWise = .character
+            return [.press(.wordRight, count: 1), .press(.wordLeft, count: 1), .press(.selectWordRight, count: 1)]
+        }
+        guard !profile.has(.writeSelection), profile.has(.wordKeys) else { return nil }
+        let p = selection.lowerBound
+        var steps: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
+        if let key = span, case .span(.motion(_, let count), _) = target {
+            let reach = wordReach(from: p, words: count, forward: key.forward, in: model)
+            let reached = key.forward ? p..<min(model.length, p + reach) : max(0, p - reach)..<p
+            // Proven at an edge, predicted in a plain word, else refused.
+            if let edge = edge(at: p, in: model) {
+                steps += exactSpanKeys(p, forward: key.forward, fromStart: edge == .start, count: count, reached: reached,
+                                       context: context, profile: profile)
+            } else if model.substring(reached).contains(where: isUnspaced) {
+                // The app may see a word edge here the model cannot; it rings if not.
+                steps += exactSpanKeys(p, forward: key.forward, fromStart: key.forward, count: count, reached: reached,
+                                       context: context, profile: profile)
+            } else if oneWordRun(reached, forward: key.forward, in: model) {
+                steps.append(.press(key.forward ? .selectWordRight : .selectWordLeft, count: count))
+                let blame = wordBlame(stuck(.wordKeys, at: p, context: context), context: context)
+                steps.append(appSettle(.exact(reached), blame: blame, context: context, profile: profile))
+            } else {
+                return .some(nil)
+            }
+        } else {
+            guard let keys = wordAtCaretKeys(p, model: model, context: context, profile: profile) else { return .some(nil) }
+            steps += keys
+        }
+        context.selection = nil
+        context.selectionOpaque = true
+        context.selectionWise = .character
+        return steps
     }
 }
 
@@ -571,6 +1105,7 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
+        if let keys = appSelect(target, context: &context, profile: profile) { return keys }
         if let model = context.model(for: target, profile), let selection = context.selection {
             let position = selection.lowerBound
             guard let range = selectionRange(for: target, model: model, at: position, context: context) else {
@@ -578,6 +1113,10 @@ private extension PhysicalPlanner {
             }
             context.selectionWise = target.wise ?? context.selectionWise ?? .character
             context.selectionOpaque = false
+            // Pressed even where nothing is to select, so a settle checks the caret the command starts from.
+            if let keys = nativeSelect(target, range: range, context: &context, profile: profile) {
+                return keys
+            }
             if range == context.selection {
                 return []   // already selected (Visual operators)
             }
@@ -721,7 +1260,12 @@ private extension PhysicalPlanner {
         let wise = registerWise(context.selectionWise)
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
-            return [.commit(.yanked(into: register, content: .literal(model.substring(selection)), wise: wise))]
+            let content = model.substring(selection)
+            guard registersFromField(content, profile) else {
+                return [.commit(.yanked(into: register, content: .literal(content), wise: wise))]
+            }
+            let slot = context.takeSlot()
+            return [.captureSelectedText(into: slot), .commit(.yanked(into: register, content: .captured(slot), wise: wise))]
         }
         guard context.selectionOpaque else { return nil }
         // An opaque selection was built by presses, which are QUEUED at the
@@ -742,18 +1286,24 @@ private extension PhysicalPlanner {
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
         if let selection = context.selection, context.retypesStructure(selection) { return nil }
-        let action: PhysicalStep = profile.has(.insertText)
-            ? .replaceSelection(replacement)
-            : .typeText(replacement)
+        let action = profile.has(.insertText) ? .replaceSelection(replacement) : blindText(replacement, context: context)
         if let selection = context.selection, let model = context.model {
             let check = checkSelectedText(model.substring(selection), context: context, profile: profile)
             context.applyEdit(range: selection, replacement: replacement)
             // Blind (typeText) over-type: soft, so a mismatch does not abort
             // the `setMode(.insert)` behind an `o`/`O`/`i`.
-            return check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            let steps = check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
+            context.lengthUncertain = context.lengthUncertain
+                || !profile.has(.insertText) && context.breaks != nil && replacement.contains("\n")
+            return steps
         }
         context.invalidate()
         return [action]
+    }
+
+    /// A typed `\n` makes no paragraph in Chromium's rich text, and ⏎ would send a chat message, so web content pastes it.
+    static func blindText(_ text: String, context: Context) -> PhysicalStep {
+        context.webContent && text.contains("\n") ? .clipboardInsert(text) : .typeText(text)
     }
 
     static func lowerTransform(
@@ -794,9 +1344,7 @@ private extension PhysicalPlanner {
                 return String(trimmed)
             }
         }
-        let action: PhysicalStep = profile.has(.insertText)
-            ? .replaceSelection(transformed)
-            : .typeText(transformed)
+        let action = profile.has(.insertText) ? .replaceSelection(transformed) : blindText(transformed, context: context)
         let check = checkSelectedText(original, context: context, profile: profile)
         context.applyEdit(range: selection, replacement: transformed)
         // Blind (typeText) transform: soft. The poll still lets the following
@@ -839,8 +1387,13 @@ private extension PhysicalPlanner {
             }
         }
         var steps: [PhysicalStep] = []
+        var settled = false
         if profile.has(.writeSelection) {
             steps += write(range, context: context)
+        } else if let keys = nativeSelect(.lines(count: count, interior: true), range: range,
+                                          context: &context, profile: profile) {
+            steps += keys
+            settled = true
         } else {
             steps += keyPath(from: selection, to: range.lowerBound, model: model)
             steps.append(.press(.selectRight, count: model.graphemes(in: range)))
@@ -848,7 +1401,7 @@ private extension PhysicalPlanner {
         context.selection = range
         // Settled, so the AX replacement cannot overtake the selecting keys.
         var barrier = checkSelectedText(model.substring(range), context: context, profile: profile)
-        if barrier.isEmpty, presses(steps), profile.has(.insertText) {
+        if barrier.isEmpty, !settled, presses(steps), profile.has(.insertText) {
             barrier = settle(context, profile: profile)
         }
         steps += barrier
@@ -896,7 +1449,8 @@ private extension PhysicalPlanner {
                     let target = action.position == .after
                         ? (end >= model.length ? model.length : end + 1)
                         : model.lineStart(of: position)
-                    steps += moveSteps(to: target, context: &context, profile: profile)
+                    steps += moveSteps(to: target, as: lineTarget(action, end: end, model: model),
+                                       context: &context, profile: profile)
                 } else if action.position == .after {
                     // Next line start. On the last line .down no-ops and the
                     // paste lands above — a well-formed line misplaced beats
@@ -918,8 +1472,10 @@ private extension PhysicalPlanner {
             case .character, .block:   // block degrades to characterwise, v1
                 return putCharacterwise(payload, action: action, context: &context, profile: profile)
             case .line:
-                let text = payload.hasSuffix("\n") ? payload : payload + "\n"
-                return putLinewise(text, action: action, context: &context, profile: profile)
+                // Each copy is a whole line: a last line or `cc` leaves its register without the newline.
+                let line = content.text.hasSuffix("\n") ? content.text : content.text + "\n"
+                return putLinewise(String(repeating: line, count: max(1, count)), action: action,
+                                   context: &context, profile: profile)
             }
         }
     }
@@ -958,8 +1514,8 @@ private extension PhysicalPlanner {
         if let model = context.linewiseModel(profile), let position = context.position {
             var insertion = text
             let target: Int
+            let end = model.lineEnd(of: position)
             if action.position == .after {
-                let end = model.lineEnd(of: position)
                 if end >= model.length {
                     // Last line without a terminator: lead with the newline.
                     target = model.length
@@ -970,7 +1526,8 @@ private extension PhysicalPlanner {
             } else {
                 target = model.lineStart(of: position)
             }
-            var steps = moveSteps(to: target, context: &context, profile: profile)
+            var steps = moveSteps(to: target, as: lineTarget(action, end: end, model: model),
+                                  context: &context, profile: profile)
             steps += insertSteps(insertion, after: steps, context: &context, profile: profile)
             return steps
         }
@@ -981,8 +1538,15 @@ private extension PhysicalPlanner {
         return [.press(.lineStart, count: 1), .clipboardInsert(text)]
     }
 
+    /// What a linewise put's target is to the native keys; nil for the next line's start, which is a hop.
+    static func lineTarget(_ action: PutAction, end: Int, model: TextModel) -> LogicalStep.Destination? {
+        guard action.position == .after else { return .motion(.lineStart(firstNonBlank: false), count: 1) }
+        return end >= model.length ? .motion(.lineEnd, count: 1) : nil
+    }
+
     static func moveSteps(
         to target: Int,
+        as destination: LogicalStep.Destination? = nil,
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep] {
@@ -990,6 +1554,9 @@ private extension PhysicalPlanner {
         if profile.has(.writeSelection) {
             steps = write(target..<target, context: context)
         } else if let model = context.model, let selection = context.selection {
+            if let keys = nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
+                return keys
+            }
             steps = keyPath(from: selection, to: target, model: model)
         } else {
             steps = []
@@ -1010,8 +1577,9 @@ private extension PhysicalPlanner {
             ? .replaceSelection(text)
             : .clipboardInsert(text)
         if let selection = context.selection, context.text != nil {
-            // An AX insertion can overtake queued keys; a paste cannot.
-            let barrier = presses(positioning) && profile.has(.insertText) ? settle(context, profile: profile) : []
+            // An AX insertion can overtake queued keys; a paste cannot, and native keys already settled.
+            let pressed = positioning.last.map { if case .press = $0 { return true }; return false } ?? false
+            let barrier = pressed && profile.has(.insertText) ? settle(context, profile: profile) : []
             context.applyEdit(range: selection, replacement: text)
             // Blind (paste) insert is async: soft, so it never aborts what follows.
             return barrier + [action] + settle(context, profile: profile, hard: profile.has(.insertText))

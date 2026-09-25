@@ -23,6 +23,8 @@ public enum FieldProber {
         if reads.string(3) != nil { available.insert(.readSelectedText) }
         if AX.rangeSettable(element) { available.insert(.writeSelection) }
         if AX.isInsertable(element) { available.insert(.insertText) }
+        // No read can try a key; the settle after one is its trial.
+        if available.contains(.readText), available.contains(.readCaret) { available.formUnion(Capability.nativeKeys) }
         return CapabilityProfile(available: available)
     }
 
@@ -173,8 +175,9 @@ public enum Snapshotter {
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
+            "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
         ]
-        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 3
+        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 4
         let reads = AX.attributes(names, of: element)
         let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
@@ -182,11 +185,13 @@ public enum Snapshotter {
             selection = range.location..<(range.location + range.length)
         }
         var breaks: ParagraphBreaks?
+        var emptyParagraph = false
         var textlessLeaves = false
         if paragraphs {
             breaks = ParagraphBreaks()
             if capabilities.has(.readCaret) {
-                (selection, breaks, textlessLeaves) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(3))
+                (selection, breaks, emptyParagraph, textlessLeaves)
+                    = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
             }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
@@ -200,7 +205,9 @@ public enum Snapshotter {
             length: length,
             anchor: anchor,
             cursor: stampedCursor,
+            webContent: reads.string(3) != nil,
             breaks: breaks,
+            caretInEmptyParagraph: emptyParagraph,
             textlessLeaves: textlessLeaves
         )
     }
@@ -210,13 +217,14 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, the breaks it used, and whether a caret is in an
+    /// empty paragraph.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
-    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, textlessLeaves: Bool) {
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool, textlessLeaves: Bool) {
         // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
         guard let text, !text.utf16.contains(0xFFFC), let marked = AX.markedSelection(of: element, selected: selected) else {
-            return (nil, ParagraphBreaks(), false)
+            return (nil, ParagraphBreaks(), false, false)
         }
         let field = marked.range
         var breaks = ParagraphBreaks()
@@ -224,7 +232,7 @@ public enum Snapshotter {
         if text.contains("\n") {
             guard let markers = AX.markerText(of: element),
                   let aligned = ParagraphBreaks(value: text, fieldText: MarkerText.plain(markers)) else {
-                return (nil, breaks, false)
+                return (nil, breaks, false, false)
             }
             breaks = aligned
             textlessLeaves = markers.utf16.contains(0xFFFC)
@@ -237,7 +245,7 @@ public enum Snapshotter {
             if marked.isCollapsed { caretSide = side }
             return side
         }
-        return (range, breaks, textlessLeaves)
+        return (range, breaks, marked.inEmptyParagraph, textlessLeaves)
     }
 
     /// Where typing at a boundary end would land; nil when a read fails.

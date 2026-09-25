@@ -6,9 +6,9 @@ import LoomCore
 /// LoomCore.
 public extension KeyNotation {
     /// nil means "not vim's key" — the controller passes it through untouched.
-    static func token(for event: KeyEvent) -> String? {
+    static func token(for event: KeyEvent, profile: CapabilityProfile = CapabilityProfile()) -> String? {
         guard event.kind == .keyDown else { return nil }
-        return token(keyCode: event.keyCode, chord: Chord(event.mods), characters: event.characters)
+        return token(keyCode: event.keyCode, chord: Chord(event.mods), characters: event.characters, profile: profile)
     }
 }
 
