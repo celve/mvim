@@ -111,7 +111,8 @@ public final class Controller {
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
         guard enabled, event.kind == .keyDown else { return false }
-        guard let token = KeyNotation.token(for: event) else {
+        // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
+        guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive
             // it: the app may move the caret, and a later key would complete
             // the command against a position the user never aimed at (`d`,
@@ -150,6 +151,10 @@ public final class Controller {
         case .passthrough:
             return false
         case .pending, .cancelled:
+            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+                monitor.cancelPending()
+                return false
+            }
             return true
         case .command(let completed):
             // Numbered here, not in `run`, so the three silent drops below are too.
@@ -190,6 +195,10 @@ public final class Controller {
                     }
                 }
             }
+            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+                Diag.dropped(tracker.epoch, commandSeq, command: completed.command, reason: "app-key")
+                return false
+            }
             run(completed, on: binding, seq: commandSeq)
             // Publish even on mid-plan aborts: a .setMode commit may have
             // landed before a later step failed.
@@ -197,6 +206,8 @@ public final class Controller {
             return true
         }
     }
+
+    private static let readsAppKeys = CapabilityProfile(available: [.nativeMotions])
 
     /// A completed command verify-before-run threw away, then handed to its reverify.
     private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
@@ -429,12 +440,22 @@ public final class Controller {
         guard !range.isEmpty else { return true }
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, range == operand { return true }
-        guard binding.capabilities.has(.writeSelection) else { return false }
-        executor.execute(
-            PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
-            on: binding.element,
-            state: &state
-        )
+        if binding.capabilities.has(.writeSelection) {
+            executor.execute(
+                PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
+                on: binding.element,
+                state: &state
+            )
+        } else {
+            // ← collapses a selection to its start in every host measured (LIN-1532).
+            guard binding.capabilities.has(.nativeMotions) else { return false }
+            executor.execute(
+                PhysicalPlan(steps: [.press(.left, count: 1), .settle(Expectation(selection: range.lowerBound..<range.lowerBound))]),
+                on: binding.element,
+                state: &state,
+                paragraphs: paragraphs
+            )
+        }
         // The write that stranded this may be the one that lies, so confirm.
         return selection(of: binding.element, paragraphs: paragraphs).map(\.isEmpty) ?? false
     }

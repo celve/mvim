@@ -395,6 +395,9 @@ final class AppModel: ObservableObject {
         case .lineEndKey: return "Line end key (⌃E)"
         case .documentStartKey: return "Document start key (⌘↑)"
         case .documentEndKey: return "Document end key (⌘↓)"
+        case .nativeMotions: return "App's word, paragraph & page keys"
+        case .wordKeys: return "Word keys (⌥← ⌥→)"
+        case .paragraphKeys: return "Paragraph keys (⌥↑ ⌥↓)"
         }
     }
 
