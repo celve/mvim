@@ -183,8 +183,8 @@ repository's GitHub releases: the feed is the `appcast.xml` attached to the late
 - **Check for Updates…** checks now. When a daily check finds an update later than right after
   launch, the item reads **Update to mvim X…** instead: a menu-bar app has no window to bring
   forward, so Sparkle would otherwise open its window behind your work.
-- **Grants survive an update** because every release carries the same signature — the
-  `make publish` guards below keep it that way.
+- **Grants survive an update** because TCC holds them against the app's designated requirement,
+  and `make publish` refuses a build that fails the current release's — see below.
 - **Debug builds never update.** `project.yml` gives the feed and key to Release only, and a
   build missing either has no update items — as does a Release build made before the key is set.
 - **What goes out:** a request to github.com for the feed, and the download when you install.
@@ -213,12 +213,16 @@ For each release, from a clean checkout of `main` on a Mac holding the signing c
 
 `make publish` refuses to release when:
 
-- the app is ad-hoc signed — TCC ties Accessibility and Input Monitoring to the signature, so every
-  install would lose both;
+- the app is ad-hoc signed, or does not satisfy the designated requirement of the latest
+  release's app — TCC holds Accessibility and Input Monitoring against that requirement, so every
+  install would lose both. An Apple Development requirement names the certificate's holder, so
+  publish from the same person's certificate; for a deliberate change, such as moving to
+  Developer ID, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
 - the appcast item came out unsigned — the key is not the one `SUPublicEDKey` names, and every
   install would reject the update;
 - the tree has uncommitted changes, `HEAD` is not on `main`, `v<version>` exists, or the build
-  number does not exceed the live feed's, which installs would ignore.
+  number does not exceed the one the latest release offers, which installs would ignore;
+- GitHub cannot answer any of those questions: a failed read refuses rather than guesses.
 
 `SPARKLE_KEY_FILE=<file>` signs with a key file instead of the keychain.
 

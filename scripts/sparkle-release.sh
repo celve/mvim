@@ -25,6 +25,30 @@ repo=${repo%/releases/latest/download/appcast.xml}
 tag=v$version
 sha=$(git rev-parse HEAD)
 
+# The HTTP status GitHub answers a GET with; empty when it could not be asked.
+http_status() { { gh api --include "$1" 2>/dev/null || true; } | sed -n '1s|^HTTP/[0-9.]* \([0-9]*\).*|\1|p'; }
+
+# Every install updates from the latest release: outnumber its build and keep its signing identity.
+check_latest() {
+    local latest previous requirement
+    latest=$(gh api "repos/$repo/releases/latest" --jq .tag_name) || die "could not read $repo's latest release"
+    live=$(mktemp -d)
+    trap 'rm -rf "$live"' EXIT
+    gh release download "$latest" --repo "$repo" --pattern appcast.xml --pattern 'mvim-*.zip' --dir "$live" ||
+        die "could not download $latest's appcast.xml and zip"
+    previous=$(sed -n 's|.*<sparkle:version>\([^<]*\)</sparkle:version>.*|\1|p' "$live/appcast.xml")
+    previous=${previous%%$'\n'*}
+    case $previous in '' | *[!0-9]*) die "$latest's appcast.xml names no numeric build" ;; esac
+    [ "$build" -gt "$previous" ] || die "build $build does not exceed $latest's $previous: installs would ignore it"
+    ditto -x -k "$live"/mvim-*.zip "$live/app"
+    requirement=$(codesign -d -r- "$live/app/mvim.app" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')
+    [ -n "$requirement" ] || die "could not read the designated requirement of $latest's app"
+    # TCC holds each install's grants against that requirement, so an app failing it starts over.
+    [ -n "${SPARKLE_NEW_IDENTITY:-}" ] || codesign --verify --test-requirement="=$requirement" "$app" ||
+        die "$app does not satisfy $latest's designated requirement: every install would lose its grants" \
+            "(SPARKLE_NEW_IDENTITY=1 publishes anyway)"
+}
+
 # TCC keys Accessibility and Input Monitoring to the signature, and an ad-hoc one is new every build.
 signature=$(codesign -dv "$app" 2>&1) || die "$app is not signed"
 case $signature in
@@ -38,12 +62,16 @@ if [ "$mode" = publish ]; then
         behind | identical) ;;
         *) die "$sha is not on $repo's $main, the only branch whose build numbers keep growing" ;;
     esac
-    ! gh api "repos/$repo/git/ref/tags/$tag" >/dev/null 2>&1 ||
-        die "$tag exists: bump MARKETING_VERSION in project.yml"
-    live=$(curl -fsSL "$feed" 2>/dev/null |
-        sed -n 's|.*<sparkle:version>\([^<]*\)</sparkle:version>.*|\1|p' | head -1) || true
-    [ -z "$live" ] || [ "$build" -gt "$live" ] ||
-        die "build $build does not exceed the live feed's $live: installs would ignore it"
+    case $(http_status "repos/$repo/git/ref/tags/$tag") in
+        404) ;;
+        200) die "$tag exists: bump MARKETING_VERSION in project.yml" ;;
+        *) die "could not ask GitHub whether $tag exists" ;;
+    esac
+    case $(http_status "repos/$repo/releases/latest") in
+        404) echo "No release yet: $tag will be the first." ;;
+        200) check_latest ;;
+        *) die "could not read $repo's latest release" ;;
+    esac
 fi
 
 rm -rf "$dir"
