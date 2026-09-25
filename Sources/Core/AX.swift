@@ -125,6 +125,9 @@ public enum AX {
         /// the batch resolves an absent attribute to nil and a present-empty
         /// one to `""`, which is exactly the distinction.
         public let isWebElement: Bool
+
+        /// Chromium's rich-text fields select in text-content offsets, not `AXValue`'s.
+        public let isChromium: Bool
     }
 
     public static func gateAttributes(of element: AXUIElement) -> GateAttributes {
@@ -137,6 +140,7 @@ public enum AX {
             kAXEnabledAttribute,  // 2
             "AXDOMIdentifier",    // 3
             "AXIdentifier",       // 4
+            chromiumNodeIDAttribute,  // 5
         ], of: element)
         let domIdentifier = reads.string(3)
         let identifier = [domIdentifier, reads.string(4)]
@@ -150,7 +154,8 @@ public enum AX {
             enabled: reads.bool(2) ?? true,
             identifier: identifier,
             // Presence, not non-emptiness: `""` is a web input without an id.
-            isWebElement: domIdentifier != nil
+            isWebElement: domIdentifier != nil,
+            isChromium: reads.string(5) != nil
         )
     }
 
@@ -189,6 +194,11 @@ public enum AX {
         public func element(_ index: Int) -> AXUIElement? {
             guard let slot = slot(index), CFGetTypeID(slot) == AXUIElementGetTypeID() else { return nil }
             return (slot as! AXUIElement)
+        }
+
+        public func textMarkerRange(_ index: Int) -> AnyObject? {
+            guard let slot = slot(index), CFGetTypeID(slot) == AXTextMarkerRangeGetTypeID() else { return nil }
+            return slot
         }
 
         /// `AXURL` answers an `NSURL`, which `string(_:)` would read as nil.
@@ -252,6 +262,179 @@ public enum AX {
         }
     }
 
+    // MARK: - Chromium's text markers
+
+    /// Present on every element Chromium exposes and on nothing else.
+    public static let chromiumNodeIDAttribute = "ChromeAXNodeId"
+
+    public static func childCount(of element: AXUIElement) -> Int? {
+        var count: CFIndex = 0
+        guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success else {
+            return nil
+        }
+        return count
+    }
+
+    /// A Chromium field's selection in text-content offsets, read through markers that follow the real caret.
+    public struct MarkedSelection {
+        public let range: Range<Int>
+        let element: AXUIElement
+        let lower: AXTextMarker
+        let upper: AXTextMarker
+
+        public var isCollapsed: Bool { CFEqual(lower, upper) }
+
+        public enum NodeSide: Equatable, Sendable {
+            case start
+            case end
+            case between
+        }
+
+        /// Where an end sits in its marker's node; nil when a read fails.
+        public func side(upper isUpper: Bool) -> NodeSide? {
+            let marker = isUpper ? upper : lower
+            guard let index = AX.parameterized("AXIndexForTextMarker", marker, of: element) as? Int else { return nil }
+            guard index > 0 else { return .start }
+            guard let anchor = AX.node(at: marker, in: element),
+                  let length = AX.textLength(of: anchor, in: element) else { return nil }
+            return index < length ? .between : .end
+        }
+
+        /// What follows an end: typing lands past a list marker and before uneditable text.
+        public enum Opening: Equatable, Sendable {
+            case text
+            case listMarker(length: Int)
+            case uneditable
+        }
+
+        /// Nil when any read fails; `editable: false` skips the settable read.
+        public func opening(upper isUpper: Bool, editable: Bool) -> Opening? {
+            guard let leaf = AX.leaf(at: isUpper ? upper : lower, in: element),
+                  let role = AX.role(of: leaf) else { return nil }
+            if role == "AXListMarker" {
+                return AX.textLength(of: leaf, in: element).map { .listMarker(length: $0) }
+            }
+            guard editable else { return .text }
+            return AX.rangeSettability(of: leaf).map { $0 ? .text : .uneditable }
+        }
+    }
+
+    public static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> MarkedSelection? {
+        guard let selection = textMarkerRange(selected ?? copyAttribute(element, kAXSelectedTextMarkerRangeAttribute)),
+              let field = fieldMarkers(of: element) else { return nil }
+        let first = AXTextMarkerRangeCopyStartMarker(selection)
+        let second = AXTextMarkerRangeCopyEndMarker(selection)
+        guard let firstOffset = offset(of: first, from: field.start, in: element) else { return nil }
+        var secondOffset = firstOffset
+        if !CFEqual(first, second) {
+            guard let offset = offset(of: second, from: field.start, in: element) else { return nil }
+            secondOffset = offset
+        }
+        // A backward selection's marker range starts at its larger end.
+        let forward = firstOffset <= secondOffset
+        return MarkedSelection(
+            range: min(firstOffset, secondOffset)..<max(firstOffset, secondOffset),
+            element: element,
+            lower: forward ? first : second,
+            upper: forward ? second : first
+        )
+    }
+
+    /// The field's `AXValue` without its paragraph breaks.
+    public static func textContent(of element: AXUIElement) -> String? {
+        guard let field = fieldMarkers(of: element) else { return nil }
+        return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
+    }
+
+    /// The leaf after a marker, which may be anchored on a container such as a list.
+    private static func leaf(at marker: AXTextMarker, in field: AXUIElement) -> AXUIElement? {
+        guard var node = node(at: marker, in: field),
+              var offset = parameterized("AXIndexForTextMarker", marker, of: field) as? Int else { return nil }
+        for _ in 0..<16 {
+            guard let children = children(of: node) else { return nil }
+            guard !children.isEmpty else { return node }
+            guard let start = textStart(of: node, in: field) else { return nil }
+            // Children run in text order; find the last one starting at or before the offset.
+            var low = 0
+            var high = children.count - 1
+            var holder: (index: Int, start: Int)?
+            while low <= high {
+                let middle = (low + high) / 2
+                guard let childStart = textStart(of: children[middle], in: field).flatMap({
+                    parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), of: field) as? Int
+                }) else { return nil }
+                if childStart <= offset {
+                    holder = (middle, childStart)
+                    low = middle + 1
+                } else {
+                    high = middle - 1
+                }
+            }
+            guard let holder else { return node }
+            node = children[holder.index]
+            offset -= holder.start
+        }
+        return nil
+    }
+
+    /// Nil on a failed read, so a container is never taken for a leaf.
+    private static func children(of node: AXUIElement) -> [AXUIElement]? {
+        var ref: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &ref) {
+        case .success: return ref as? [AXUIElement]
+        case .noValue, .attributeUnsupported: return []
+        default: return nil
+        }
+    }
+
+    private static func textStart(of node: AXUIElement, in field: AXUIElement) -> AXTextMarker? {
+        textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: field)).map(AXTextMarkerRangeCopyStartMarker)
+    }
+
+    private static func node(at marker: AXTextMarker, in element: AXUIElement) -> AXUIElement? {
+        guard let node = parameterized("AXUIElementForTextMarker", marker, of: element),
+              CFGetTypeID(node) == AXUIElementGetTypeID() else { return nil }
+        return (node as! AXUIElement)
+    }
+
+    private static func textLength(of node: AXUIElement, in element: AXUIElement) -> Int? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else {
+            return nil
+        }
+        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+    }
+
+    private static func fieldMarkers(of element: AXUIElement) -> (range: AXTextMarkerRange, start: AXTextMarker)? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", element, of: element)) else {
+            return nil
+        }
+        return (range, AXTextMarkerRangeCopyStartMarker(range))
+    }
+
+    private static func offset(of marker: AXTextMarker, from start: AXTextMarker, in element: AXUIElement) -> Int? {
+        let range = AXTextMarkerRangeCreate(kCFAllocatorDefault, start, marker)
+        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+    }
+
+    private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {
+        guard let value, CFGetTypeID(value) == AXTextMarkerRangeGetTypeID() else { return nil }
+        return (value as! AXTextMarkerRange)
+    }
+
+    private static func copyAttribute(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success else { return nil }
+        return ref
+    }
+
+    fileprivate static func parameterized(_ attribute: String, _ parameter: AnyObject, of element: AXUIElement) -> AnyObject? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, attribute as CFString, parameter, &ref) == .success else {
+            return nil
+        }
+        return ref
+    }
+
     // MARK: - Probes (settable flags: the write capabilities' claims)
 
     /// Whether the element accepts AX text insertion (`kAXSelectedText`
@@ -268,6 +451,16 @@ public enum AX {
         var settable: DarwinBoolean = false
         let error = AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable)
         return error == .success && settable.boolValue
+    }
+
+    /// `rangeSettable` with a failed read as nil rather than false.
+    public static func rangeSettability(of element: AXUIElement) -> Bool? {
+        var settable: DarwinBoolean = false
+        switch AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable) {
+        case .success: return settable.boolValue
+        case .noValue, .attributeUnsupported: return false
+        default: return nil
+        }
     }
 
     // MARK: - Writes

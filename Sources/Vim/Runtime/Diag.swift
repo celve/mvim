@@ -35,6 +35,9 @@ enum Diag {
         if let report = binding.capabilityReport {
             line += " caps=\(report.traceGrid)"
         }
+        if binding.isChromium {
+            line += " chromium=1"
+        }
         if recordsText, let identifier = binding.surface.identifier {
             line += " id=\(identifier)"
         }

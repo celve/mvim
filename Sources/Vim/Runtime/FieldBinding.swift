@@ -125,6 +125,7 @@ public enum FieldProber {
         /// Web content, so worth the parent walk that finds its origin. Rides
         /// the same round trip; native fields skip the walk entirely.
         public let isWebElement: Bool
+        public let isChromium: Bool
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
 
@@ -148,7 +149,8 @@ public enum FieldProber {
             isEnabled: attributes.enabled,
             role: attributes.role,
             identifier: attributes.identifier,
-            isWebElement: attributes.isWebElement
+            isWebElement: attributes.isWebElement,
+            isChromium: attributes.isChromium
         )
     }
 }
@@ -159,21 +161,32 @@ public enum Snapshotter {
         of element: AXUIElement,
         capabilities: CapabilityProfile,
         anchor: Int?,
-        cursor: Range<Int>?
+        cursor: Range<Int>?,
+        chromium: Bool = false
     ) -> FieldSnapshot {
+        let paragraphs = chromium && hasParagraphs(element)
         // One IPC for the whole volatile half. The capabilities gate which
         // slots are *used*, not which are fetched — a batch costs the same
         // round trip either way, and branching the attribute list per profile
         // would buy nothing.
-        let reads = AX.attributes([
+        var names = [
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
-        ], of: element)
+        ]
+        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 3
+        let reads = AX.attributes(names, of: element)
         let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
         if capabilities.has(.readCaret), let range = reads.range(1) {
             selection = range.location..<(range.location + range.length)
+        }
+        var breaks: ParagraphBreaks?
+        if paragraphs {
+            breaks = ParagraphBreaks()
+            if capabilities.has(.readCaret) {
+                (selection, breaks) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(3))
+            }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
         // The drawn cursor counts only while it still IS the selection;
@@ -185,7 +198,54 @@ public enum Snapshotter {
             selection: selection,
             length: length,
             anchor: anchor,
-            cursor: stampedCursor
+            cursor: stampedCursor,
+            breaks: breaks
         )
+    }
+
+    /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.
+    static func hasParagraphs(_ element: AXUIElement) -> Bool {
+        AX.childCount(of: element).map { $0 > 0 } ?? true
+    }
+
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
+    private static func paragraphRead(
+        of element: AXUIElement, text: String?, marked selected: AnyObject?
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
+        guard let text, let marked = AX.markedSelection(of: element, selected: selected) else {
+            return (nil, ParagraphBreaks())
+        }
+        let field = marked.range
+        var breaks = ParagraphBreaks()
+        if text.contains("\n") {
+            guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
+                return (nil, breaks)
+            }
+            breaks = aligned
+        }
+        // A caret's ends share one marker, so its side is read once.
+        var caretSide: ParagraphBreaks.Side??
+        let range = breaks.valueRange(field) { end in
+            if marked.isCollapsed, let known = caretSide { return known }
+            let side = paragraphSide(of: marked, upper: end == .upper)
+            if marked.isCollapsed { caretSide = side }
+            return side
+        }
+        return (range, breaks)
+    }
+
+    /// Where typing at a boundary end would land; nil when a read fails.
+    static func paragraphSide(of marked: AX.MarkedSelection, upper: Bool) -> ParagraphBreaks.Side? {
+        switch marked.side(upper: upper) {
+        case .end?: return .end
+        case nil: return nil
+        case let side?:
+            switch marked.opening(upper: upper, editable: side == .between) {
+            case .text?: return .start(skipping: 0)
+            case .listMarker(let length)?: return .start(skipping: length)
+            case .uneditable?: return .end
+            case nil: return nil
+            }
+        }
     }
 }

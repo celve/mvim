@@ -29,13 +29,17 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// interference) means the selection is the user's, not ours.
     public let cursor: Range<Int>?
 
+    /// Non-nil when the field selects in text content; `selection` is already converted.
+    public let breaks: ParagraphBreaks?
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
         selection: Range<Int>? = nil,
         length: Int? = nil,
         anchor: Int? = nil,
-        cursor: Range<Int>? = nil
+        cursor: Range<Int>? = nil,
+        breaks: ParagraphBreaks? = nil
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -43,6 +47,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.length = length ?? text.map { $0.utf16.count }
         self.anchor = anchor
         self.cursor = cursor
+        self.breaks = breaks
     }
 
     /// The caret, when the selection is collapsed.

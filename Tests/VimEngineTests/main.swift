@@ -799,6 +799,117 @@ precondition(PhysicalPlanner.plan(
     .commit(.setCursor(nil)),
 ])
 
+// MARK: - Paragraph breaks (Chromium rich text)
+
+let paras = ParagraphBreaks(value: "ab\ncd\nef", fieldText: "abcdef")!
+precondition(paras.offsets == [2, 5])
+precondition(paras.fieldOffset(2) == 2 && paras.fieldOffset(3) == 2 && paras.fieldOffset(7) == 5)
+precondition(paras.fieldRange(1..<7) == 1..<5)
+precondition(paras.valueOffsets(2) == 2...3, "a paragraph's end and the next one's start")
+precondition(paras.valueOffsets(1) == 1...1)
+precondition(paras.valueOffsets(3) == 4...4)
+precondition(paras.valueOffsets(4) == 5...6)
+precondition(ParagraphBreaks(value: "a\nb", fieldText: "a\nb")!.offsets == [], "<br> lines are in both")
+precondition(ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!.offsets == [4], "so are list markers")
+precondition(ParagraphBreaks(value: "ab\n\ncd", fieldText: "ab\ncd")!.offsets == [2], "the break leads the text's own newline")
+precondition(ParagraphBreaks(value: "", fieldText: "")!.offsets == [])
+precondition(ParagraphBreaks(value: "ab\ncd", fieldText: "abxcd") == nil)
+precondition(ParagraphBreaks(value: "ab", fieldText: "ab ") == nil)
+precondition(ParagraphBreaks(value: "a\nb", fieldText: "a\n\nb") == nil)
+
+precondition(paras.valueRange(2..<2) { _ in .start(skipping: 0) } == 3..<3)
+precondition(paras.valueRange(2..<2) { _ in .end } == 2..<2)
+precondition(paras.valueRange(2..<2) { _ in nil } == nil, "a boundary nothing resolves is unknown")
+precondition(paras.valueRange(1..<3) { _ in preconditionFailure("unambiguous") } == 1..<4)
+precondition(paras.valueRange(2..<2) { $0 == .upper ? .start(skipping: 0) : .end } == 2..<3, "the break alone")
+precondition(paras.valueRange(2..<2) { $0 == .lower ? .start(skipping: 0) : .end } == 2..<3, "the break alone, selected backward")
+let listItems = ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!
+precondition(listItems.valueRange(4..<4) { _ in .start(skipping: 2) } == 7..<7, "a caret between items sits past the next marker")
+precondition(listItems.valueRange(0..<0) { _ in .start(skipping: 2) } == 2..<2, "and so does one before the first item")
+precondition(listItems.valueRange(0..<0) { _ in nil } == nil, "a field's start nothing resolves is unknown too")
+precondition(listItems.valueRange(0..<4) { $0 == .lower ? .start(skipping: 2) : .end } == 2..<4)
+
+precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
+precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
+precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]), "J joins the paragraphs")
+
+precondition(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd).traceFields == "sel=5..7 len=11 edge=end")
+
+/// A Chromium `<p>` editor: every `\n` is a generated paragraph break.
+func paragraphPlanning(
+    _ keys: String, text: String, caret: Int, profile: CapabilityProfile, state: VimState = .initial
+) -> PhysicalPlanner.Planning {
+    let breaks = ParagraphBreaks(offsets: text.utf16.enumerated().filter { $0.element == 10 }.map(\.offset))
+    let snapshot = FieldSnapshot(capabilities: profile, text: text, selection: caret..<caret, breaks: breaks)
+    return PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: state), snapshot: snapshot)
+}
+
+// "ab\ncd ef\ngh" reads to the field as "abcd efgh".
+let threeParagraphs = "ab\ncd ef\ngh"
+precondition(paragraphPlanning("j", text: threeParagraphs, caret: 1, profile: noCursorProfile).plan.steps == [
+    .setSelection(3..<3),
+    .settle(Expectation(selection: 3..<3, length: 11)),
+    .commit(.setCursor(nil)),
+])
+precondition(paragraphPlanning("j", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps == [
+    .setSelection(2..<2),
+    .settle(Expectation(selection: 2..<2, length: 11, edge: .paragraphStart)),
+    .commit(.setCursor(nil)),
+])
+precondition(paragraphPlanning("l", text: threeParagraphs, caret: 9, profile: readProfile).plan.steps == [
+    .press(.right, count: 1),
+    .settle(Expectation(selection: 8..<8, length: 11)),
+    .commit(.setCursor(nil)),
+])
+
+let lastWordA = paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: noCursorProfile)
+precondition(lastWordA.plan.steps == [
+    .setSelection(5..<7),
+    .press(.selectLeft, count: 1),
+    .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd)),
+    .replaceSelection(""),
+    .settle(Expectation(selection: 5..<5, length: 9, edge: .paragraphEnd)),
+    .commit(.deleted(into: nil, content: .literal("ef"), wise: .character)),
+    .commit(.setMode(.insert)),
+    .commit(.setInsertStart(6)),
+])
+precondition(lastWordA.operand == 5..<7, "the operand is compared with the field's own read")
+precondition(paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: readProfile).plan.steps == [
+    .press(.left, count: 1),
+    .press(.selectRight, count: 2),
+    .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd)),
+    .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd, selectedText: "ef")),
+    .press(.deleteBack, count: 1),
+    .softSettle(Expectation(selection: 5..<5, length: 9, edge: .paragraphEnd)),
+    .commit(.deleted(into: nil, content: .literal("ef"), wise: .character)),
+    .commit(.setMode(.insert)),
+    .commit(.setInsertStart(6)),
+])
+precondition(paragraphPlanning("A", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps == [
+    .setSelection(2..<2),
+    .press(.left, count: 1),
+    .settle(Expectation(selection: 2..<2, length: 11, edge: .paragraphEnd)),
+    .commit(.setMode(.insert)),
+    .commit(.setInsertStart(2)),
+])
+let fromParagraphEnd = LogicalPlan(.select(.span(to: .offset(5), inclusive: false)), .deleteSelection(into: nil))
+precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
+    capabilities: noCursorProfile, text: threeParagraphs, selection: 2..<2, breaks: ParagraphBreaks(offsets: [2, 8])
+)).plan.steps == [
+    .setSelection(2..<2),
+    .press(.left, count: 1),
+    .press(.selectRight, count: 3),
+    .settle(Expectation(selection: 2..<4, length: 11)),
+    .replaceSelection(""),
+    .settle(Expectation(selection: 2..<2, length: 8)),
+    .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
+])
+precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 4, profile: readProfile).plan) == ["cd ef"])
+precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("cd ef\n", at: 3..<9) == "cd ef")
+precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("b\ncd", at: 1..<5) == "bcd")
+precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(
+    .settle(Expectation(selection: nil, length: 12))
+))
 // MARK: - The selected-text check
 
 /// For each step that deletes or types, the text the settle right before it checks.

@@ -137,6 +137,7 @@ public extension Chord {
     static let lineEnd = Chord(.arrowRight, [.command])
     static let documentStart = Chord(.arrowUp, [.command])
     static let documentEnd = Chord(.arrowDown, [.command])
+    static let selectLeft = Chord(.arrowLeft, [.shift])
     static let selectRight = Chord(.arrowRight, [.shift])
     static let selectDown = Chord(.arrowDown, [.shift])
     static let selectWordRight = Chord(.arrowRight, [.shift, .option])
@@ -151,15 +152,25 @@ public extension Chord {
 /// The planner's prediction of the field after a step, checked by the
 /// settle engine. Fields are optional in the shape of what is readable.
 public struct Expectation: Equatable, Sendable {
+    /// In field offsets, while `length` counts `AXValue`.
     public let selection: Range<Int>?
     public let length: Int?
+
+    /// The boundary side the upper end must settle on, which only a marker read can tell.
+    public let edge: Edge?
+
+    public enum Edge: Equatable, Sendable {
+        case paragraphEnd
+        case paragraphStart
+    }
 
     /// `AXSelectedText`: offsets alone pass a selection Chromium read shifted (LIN-1533), its text does not.
     public let selectedText: String?
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil) {
+    public init(selection: Range<Int>? = nil, length: Int? = nil, edge: Edge? = nil, selectedText: String? = nil) {
         self.selection = selection
         self.length = length
+        self.edge = edge
         self.selectedText = selectedText
     }
 
@@ -181,8 +192,12 @@ extension Expectation {
     /// which is the same shape.
     var traceFields: String {
         let selection = selection.map { "\($0.lowerBound)..\($0.upperBound)" } ?? "nil"
-        let text = selectedText.map { " text=(\($0.utf16.count))" } ?? ""
-        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")" + text
+        var fields = "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        fields += selectedText.map { " text=(\($0.utf16.count))" } ?? ""
+        if let edge {
+            fields += edge == .paragraphStart ? " edge=start" : " edge=end"
+        }
+        return fields
     }
 }
 

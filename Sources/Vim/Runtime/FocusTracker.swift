@@ -51,6 +51,8 @@ public final class FocusTracker {
         /// Provenance behind `capabilities`, for the menu's badge rows.
         /// nil for forced bindings — empty profile, nothing resolved.
         public let capabilityReport: CapabilityReport?
+
+        public let isChromium: Bool
     }
 
     /// Fired on every change, including transitions to nil. The transition
@@ -203,7 +205,8 @@ public final class FocusTracker {
             window: Self.documentWindow(of: bound.element, profile: resolved.profile),
             surface: surface,
             appVersion: identity.version,
-            capabilityReport: resolved.report
+            capabilityReport: resolved.report,
+            isChromium: gate.isChromium
         ))
     }
 
@@ -247,7 +250,8 @@ public final class FocusTracker {
             window: Self.documentWindow(of: element, profile: resolved.profile),
             surface: surface,
             appVersion: identity.version,
-            capabilityReport: resolved.report
+            capabilityReport: resolved.report,
+            isChromium: gate.isChromium
         )
         guard transition(from: current, to: candidate) == .sameDocument else { return nil }
         publish(candidate)
@@ -318,7 +322,8 @@ public final class FocusTracker {
             window: Self.documentWindow(of: element, profile: resolved.profile),
             surface: surface,
             appVersion: identity.version,
-            capabilityReport: resolved.report
+            capabilityReport: resolved.report,
+            isChromium: gate.isChromium
         ))
         // After the publish, so it carries its own binding's epoch, not the outgoing one.
         if let walk { Diag.origin(epoch, role: gate.role, walk: walk) }
@@ -432,7 +437,8 @@ public final class FocusTracker {
             // role and nothing to resolve an origin from.
             surface: Surface(bundleID: bundleID),
             appVersion: nil,   // the learner ignores forced bindings
-            capabilityReport: nil
+            capabilityReport: nil,
+            isChromium: false
         ))
     }
 
