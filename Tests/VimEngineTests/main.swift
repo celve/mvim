@@ -833,6 +833,38 @@ precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
 precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]), "J joins the paragraphs")
 
+// MARK: - Marker text (Chromium's U+FFFC for text-less leaves)
+
+precondition(MarkerText.plain("See \u{FFFC}LIN-1234") == "See LIN-1234")
+precondition(MarkerText.plainLength("\u{FFFC}\u{FFFC}Problem") == 7)
+precondition(MarkerText.plainLength("a😀\u{FFFC}") == 3, "UTF-16 units, as the offsets are")
+precondition(MarkerText.plain("") == "" && MarkerText.plainLength("") == 0)
+
+/// `AXValue` and marker text Chrome 153 gave for a field with one text-less leaf (LIN-1573), and the plain caret past it.
+let leafShapes: [(name: String, value: String, markers: String, caret: Int, valueCaret: Int)] = [
+    ("icon chip",
+     "Heading one\nFirst paragraph with some words.\nSee \n\nLIN-1234\n here\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.See \u{FFFC}LIN-1234 here• item alpha• item betaHeading twoLast paragraph here.",
+     95, 104),
+    ("hr",
+     "Heading one\nFirst paragraph with some words.\n\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.\u{FFFC}• item alpha• item betaHeading twoLast paragraph here.",
+     78, 84),
+    ("checkbox",
+     "Heading one\nFirst paragraph with some words.\n• \ntask one\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.• \u{FFFC}task one• item alpha• item betaHeading twoLast paragraph here.",
+     88, 95),
+]
+for shape in leafShapes {
+    precondition(ParagraphBreaks(value: shape.value, fieldText: shape.markers) == nil, "\(shape.name): U+FFFC is no break")
+    let breaks = ParagraphBreaks(value: shape.value, fieldText: MarkerText.plain(shape.markers))!
+    precondition(breaks.valueRange(shape.caret..<shape.caret) { _ in preconditionFailure("unambiguous") }
+        == shape.valueCaret..<shape.valueCaret, shape.name)
+}
+let linearHeading = ParagraphBreaks(value: "\n\nProblem\nWhen", fieldText: MarkerText.plain("\u{FFFC}\u{FFFC}ProblemWhen"))!
+precondition(linearHeading.offsets == [0, 1, 9], "the heading widget's two lines are breaks")
+precondition(linearHeading.valueRange(0..<0) { _ in .start(skipping: 0) } == 2..<2, "a caret on the heading sits past them")
+
 precondition(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd).traceFields == "sel=5..7 len=11 edge=end")
 
 /// A Chromium `<p>` editor: every `\n` is a generated paragraph break.
@@ -2202,6 +2234,9 @@ precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "he
 precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "mber "), "offsets agree, text does not")
 precondition(!checkedWord.matches(selection: 4..<9, length: 15), "no answer")
 precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil, selectedText: "mber "))
+precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "he\u{FFFC}\u{FFFC}llo"), "text-less leaves inside")
+precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "\u{FFFC}ello"), "a leaf for a letter")
+precondition(Expectation(selectedText: "a\u{FFFC}b").matches(selection: nil, length: nil, selectedText: "a\u{FFFC}b"), "a native attachment")
 precondition(checkedWord.traceFields == "sel=4..9 len=15 text=(5)")
 precondition(!Expectation(selectedText: secret).traceFields.contains(secret), "traceFields leaked the selected text")
 

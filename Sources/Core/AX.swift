@@ -343,7 +343,7 @@ public enum AX {
     /// The field's `AXValue` without its paragraph breaks.
     public static func textContent(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
-        return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
+        return (parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String).map(MarkerText.plain)
     }
 
     /// The leaf after a marker, which may be anchored on a container such as a list.
@@ -361,7 +361,7 @@ public enum AX {
             while low <= high {
                 let middle = (low + high) / 2
                 guard let childStart = textStart(of: children[middle], in: field).flatMap({
-                    parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), of: field) as? Int
+                    plainLength(of: AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), in: field)
                 }) else { return nil }
                 if childStart <= offset {
                     holder = (middle, childStart)
@@ -401,7 +401,7 @@ public enum AX {
         guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else {
             return nil
         }
-        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+        return plainLength(of: range, in: element)
     }
 
     private static func fieldMarkers(of element: AXUIElement) -> (range: AXTextMarkerRange, start: AXTextMarker)? {
@@ -412,8 +412,12 @@ public enum AX {
     }
 
     private static func offset(of marker: AXTextMarker, from start: AXTextMarker, in element: AXUIElement) -> Int? {
-        let range = AXTextMarkerRangeCreate(kCFAllocatorDefault, start, marker)
-        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+        plainLength(of: AXTextMarkerRangeCreate(kCFAllocatorDefault, start, marker), in: element)
+    }
+
+    /// In `AXIndexForTextMarker`'s units, which `AXLengthForTextMarkerRange` exceeds by each U+FFFC.
+    private static func plainLength(of range: AXTextMarkerRange, in element: AXUIElement) -> Int? {
+        (parameterized("AXStringForTextMarkerRange", range, of: element) as? String).map(MarkerText.plainLength)
     }
 
     private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {

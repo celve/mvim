@@ -180,8 +180,13 @@ public struct Expectation: Equatable, Sendable {
     ) -> Bool {
         if let selection, observed != selection { return false }
         if let length, observedLength != length { return false }
-        if let selectedText, observedText != selectedText { return false }
+        if let selectedText, observedText.map(Self.plain) != Self.plain(selectedText) { return false }
         return true
+    }
+
+    /// Chromium's `AXSelectedText` holds a U+FFFC for each text-less leaf it spans, which `AXValue` leaves out.
+    private static func plain(_ text: String) -> String {
+        String(decoding: text.utf16.filter { $0 != 0xFFFC }, as: UTF16.self)
     }
 }
 
