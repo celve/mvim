@@ -294,9 +294,9 @@ Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the car
 paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
 (LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
 even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
-the caret the command starts from. An empty paragraph can be missing from `AXValue`, or read
-beside, so beside a `<br>` the field reads (a newline that is not a paragraph break) a key that
-seems to do nothing is not blamed. In such a field a yank within one line takes its register from
+the caret the command starts from. An empty paragraph can be missing from `AXValue`, and a caret
+in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
+paragraph is not blamed for seeming to do nothing. In such a field a yank within one line takes its register from
 the text the field selected.
 
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
