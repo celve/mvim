@@ -46,7 +46,8 @@ The Release build is copied to a short, stable path:
 ```
 
 Nothing is launched or installed — open it yourself. `make clean` leaves `.release/`
-alone (see [Start at login](#start-at-login)); `make distclean` removes it too.
+alone (see [Start at login](#start-at-login)); `make distclean` removes it too. Its build
+number is the commit count, which is how [updates](#updates) are ordered.
 
 ### Other targets
 
@@ -57,7 +58,9 @@ alone (see [Start at login](#start-at-login)); `make distclean` removes it too.
 | `make run`       | Build, then launch the Debug `mvim.app`        |
 | `make test`      | Run the pure Vim engine tests                  |
 | `make release`   | Build Release, copy it to `.release/mvim.app`  |
-| `make clean`     | Remove `build/` and the generated `.xcodeproj` |
+| `make dist`      | `release`, then stage its update in `dist/`    |
+| `make publish`   | `dist`, then release it on GitHub              |
+| `make clean`     | Remove `build/`, `dist/` and the `.xcodeproj`  |
 | `make distclean` | `clean`, plus remove `.release/`               |
 
 ### Manual invocation
@@ -73,8 +76,11 @@ xcodebuild -project mvim.xcodeproj -scheme mvim -configuration Debug \
 ```
 mvim/
 ├── project.yml                 # XcodeGen spec — 2 framework targets + the app
-├── Makefile                    # gen / build / run / release / clean / distclean / test
+├── Makefile                    # gen / build / run / release / dist / publish / clean / …
+├── Info.plist                  # Sparkle's feed and key, merged into the generated plist
 ├── mvim.entitlements           # intentionally empty — mvim runs non-sandboxed
+├── scripts/
+│   └── sparkle-release.sh      # stages and publishes an update (make dist / publish)
 ├── Sources/
 │   ├── Core/                   # LoomCore framework — shared, feature-agnostic:
 │   │                           #   InputHub (one shared CGEventTap), KeyEvent/Mods/Trigger,
@@ -87,7 +93,7 @@ mvim/
 │   │   │                       #   simulated host
 │   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
-│                               #   menu, the whole UI) and its AppModel
+│                               #   menu, the whole UI), its AppModel, and Updater (Sparkle)
 └── Resources/
     └── Assets.xcassets         # App icon + accent color (placeholders)
 ```
@@ -97,7 +103,8 @@ mvim/
 `mvim (app) → LoomVim → LoomCore`, one-way and compiler-enforced. The framework names keep
 their Loom heritage — they are internal targets, invisible at runtime. Vim's pure engine
 (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX dependency and is
-unit-tested standalone via `make test`.
+unit-tested standalone via `make test`. Only the app links [Sparkle](https://sparkle-project.org),
+pinned to an exact version in `project.yml`.
 
 The generated `mvim.xcodeproj` is intentionally git-ignored — it is a build artifact. Edit
 `project.yml` to change build settings, then regenerate.
@@ -106,8 +113,8 @@ The generated `mvim.xcodeproj` is intentionally git-ignored — it is a build ar
 
 mvim needs **Accessibility** (read/drive text fields via AX, post synthesized events) and
 **Input Monitoring** (its consuming `CGEventTap`). That is the whole list — by construction
-mvim contains **no microphone, network, or keychain code**, and its Info.plist carries no
-microphone usage string. After granting a permission for the first time, relaunch the app —
+mvim contains **no microphone or keychain code**, its only network traffic is the
+[update check](#updates), and its Info.plist carries no microphone usage string. After granting a permission for the first time, relaunch the app —
 an already-created event tap cannot retro-enable itself.
 
 ### Upgrading from Norm
@@ -164,6 +171,61 @@ Three consequences worth knowing:
 
 A login-launched mvim keeps its Accessibility and Input Monitoring grants: same
 bundle, same signature.
+
+## Updates
+
+Release builds update themselves with [Sparkle](https://sparkle-project.org) from this
+repository's GitHub releases: the feed is the `appcast.xml` attached to the latest one.
+
+- **Sparkle asks first.** On mvim's second launch it asks whether to check once a day, and
+  whether to install what it finds without asking. **Check for Updates Automatically** in the
+  menu changes the first answer; the checkbox in the update window changes the second.
+- **Check for Updates…** checks now. When a daily check finds an update later than right after
+  launch, the item reads **Update to mvim X…** instead: a menu-bar app has no window to bring
+  forward, so Sparkle would otherwise open its window behind your work.
+- **Grants survive an update** because every release carries the same signature — the
+  `make publish` guards below keep it that way.
+- **Debug builds never update.** `project.yml` gives the feed and key to Release only, and a
+  build missing either has no update items — as does a Release build made before the key is set.
+- **What goes out:** a request to github.com for the feed, and the download when you install.
+  Sparkle's anonymous system profiling stays off.
+
+### Publishing an update
+
+Once, on the Mac you will publish from:
+
+1. Run `make release`, which resolves Sparkle, then
+   `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`. It keeps a new private key
+   in the login keychain and prints the public one: paste that into `SPARKLE_PUBLIC_KEY` in
+   `project.yml` and commit it.
+2. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe. Every
+   installed copy trusts that key alone; lose it and they can never update again.
+3. `gh auth login`: the release is created with the GitHub CLI.
+
+For each release, from a clean checkout of `main` on a Mac holding the signing certificate:
+
+1. Bump `MARKETING_VERSION` in `project.yml` and merge it.
+2. `make dist` stages `dist/mvim-<version>.zip`, its notes (GitHub's, from the merged pull
+   requests) and `appcast.xml` without publishing anything. Allow the keychain prompt the first
+   time.
+3. `make publish` stages the same, then creates release `v<version>` holding the zip and the
+   appcast. Installed copies find it at their next check.
+
+`make publish` refuses to release when:
+
+- the app is ad-hoc signed — TCC ties Accessibility and Input Monitoring to the signature, so every
+  install would lose both;
+- the appcast item came out unsigned — the key is not the one `SUPublicEDKey` names, and every
+  install would reject the update;
+- the tree has uncommitted changes, `HEAD` is not on `main`, `v<version>` exists, or the build
+  number does not exceed the live feed's, which installs would ignore.
+
+`SPARKLE_KEY_FILE=<file>` signs with a key file instead of the keychain.
+
+Releases are not notarized: they carry the Apple Development signature, so a copy downloaded from
+GitHub in a browser opens only after **Open Anyway** in System Settings → Privacy & Security.
+Updates Sparkle installs are not quarantined. Notarizing takes a `Developer ID Application`
+certificate, the hardened runtime and `notarytool`.
 
 ## Diagnostics
 

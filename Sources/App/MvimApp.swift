@@ -9,6 +9,7 @@ import SwiftUI
 @main
 struct MvimApp: App {
     @StateObject private var model = AppModel()
+    private let updater = Updater.start()
 
     var body: some Scene {
         MenuBarExtra {
@@ -76,11 +77,31 @@ struct MvimApp: App {
             if model.loginItem == .blocked {
                 Button("Approve mvim in Login Items Settings") { model.openLoginItemsSettings() }
             }
+            if let updater {
+                Divider()
+                UpdateItems(updater: updater)
+            }
             Divider()
             Button("Quit mvim") { NSApplication.shared.terminate(nil) }
         } label: {
             Image(systemName: model.mode.symbolName)
         }
+    }
+}
+
+/// Its own view so the menu observes `Updater`, which `AppModel` does not own.
+private struct UpdateItems: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        Button(updater.pendingVersion.map { "Update to mvim \($0)…" } ?? "Check for Updates…") {
+            updater.checkForUpdates()
+        }
+        .disabled(!updater.canCheckForUpdates)
+        Toggle("Check for Updates Automatically", isOn: Binding(
+            get: { updater.automaticallyChecksForUpdates },
+            set: { updater.setAutomaticallyChecksForUpdates($0) }
+        ))
     }
 }
 
