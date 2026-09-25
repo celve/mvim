@@ -68,6 +68,9 @@ public final class Executor {
     /// The selection the last settle read, which says whether a native key did anything.
     private var lastObserved: Range<Int>?
 
+    /// The run's field reads its selection in text content (a Chromium rich-text field).
+    private var paragraphs = false
+
     /// An `AXError` worth reporting: `.success` is not one.
     private static func rejection(_ error: AXError) -> Int32? {
         error == .success ? nil : error.rawValue
@@ -95,12 +98,17 @@ public final class Executor {
     }
 
     /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
+    ///
+    /// `paragraphs` is the snapshot's word that the field reads in text content.
     @discardableResult
-    public func execute(_ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState) -> Bool {
+    public func execute(
+        _ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState, paragraphs: Bool = false
+    ) -> Bool {
         captures = [:]
         lastRun = RunEvidence()
         lastWriteError = nil
         lastObserved = nil
+        self.paragraphs = paragraphs
         var attribution: Capability?
         for (index, step) in plan.steps.enumerated() {
             let passed = perform(step, at: index, on: element, state: &state)
@@ -215,7 +223,7 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
-            let outcome = settle(expectation, on: element)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
             if record(outcome, expectation, at: index, hard: true) {
                 return true
@@ -226,7 +234,7 @@ public final class Executor {
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
-            let outcome = settle(expectation, on: element)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
             _ = record(outcome, expectation, at: index, hard: false)
             return true
@@ -242,7 +250,7 @@ public final class Executor {
     }
 
     /// The observed values ride every exit, so a timeout costs no extra round trip.
-    private struct SettleOutcome {
+    struct SettleOutcome {
         let converged: Bool
         let observedSelection: Range<Int>?
         let observedLength: Int?
@@ -260,7 +268,7 @@ public final class Executor {
     /// the rare fallback for an element that claimed `readLength` and then
     /// answered nil, and fetching it every poll would marshal the entire
     /// document 25 times per settle.
-    private func settle(_ expectation: Expectation, on element: AXUIElement) -> SettleOutcome {
+    nonisolated static func settle(_ expectation: Expectation, on element: AXUIElement, paragraphs: Bool) -> SettleOutcome {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
@@ -313,7 +321,20 @@ public final class Executor {
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            if expectation.matches(selection: selection, length: length, selectedText: text) {
+            let matched = expectation.matches(selection: selection, length: length, selectedText: text)
+            if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil {
+                // A caret the page left between elements reads as its block's start; only the markers
+                // place it, and only they tell a boundary's sides apart, so without them nothing converges.
+                if let marked = AX.markedSelection(of: element) {
+                    selection = marked.range
+                    let edge = expectation.edge.map { edge in
+                        Snapshotter.paragraphSide(of: marked, upper: true).map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
+                    } ?? true
+                    if edge, expectation.matches(selection: selection, length: length, selectedText: text) {
+                        return outcome(true)
+                    }
+                }
+            } else if matched {
                 return outcome(true)
             }
             guard Date() < deadline else { return outcome(false) }

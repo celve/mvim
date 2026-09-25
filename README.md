@@ -224,6 +224,13 @@ aborted line can read `ok=0` and `mode=normal→insert` together. Before that, t
 sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
+A Chromium rich-text field (a contenteditable in Chrome, Dia or an Electron app; its bind
+line says `chromium=1`) names its selection in text content: `AXValue` without the `\n`
+Chromium generates where a paragraph starts. mvim plans in `AXValue` offsets and converts at
+the field's edge, so a `settle` line's `want` and `got` are the field's own offsets, behind the
+planner's by the paragraph breaks before them. Where one field offset is both a paragraph's end
+and the next one's start, `edge=end` or `edge=start` says which the settle waited for.
+
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
 why:

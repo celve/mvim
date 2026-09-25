@@ -35,7 +35,7 @@ public enum PhysicalPlanner {
         public let plan: PhysicalPlan
         public let rejection: Rejection?
 
-        /// The range the plan meant to replace; nil in the blind lane, which has no offsets.
+        /// The range the plan meant to replace, in the field's own offsets; nil in the blind lane, which has no offsets.
         public let operand: Range<Int>?
 
         public init(plan: PhysicalPlan, rejection: Rejection?, operand: Range<Int>?) {
@@ -70,7 +70,7 @@ public enum PhysicalPlanner {
         // they touch nothing and the cursor stays up.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             if profile.has(.writeSelection) {
-                steps.append(.setSelection(gap..<gap))
+                steps += write(gap..<gap, context: context)
             } else {
                 // Settled, so a later AX write cannot overtake the ←.
                 steps.append(.press(.left, count: 1))
@@ -112,16 +112,23 @@ private extension PhysicalPlanner {
         /// the gap to collapse to before the plan acts.
         var cursorCollapse: Int?
 
-        /// The last predicted edit's range — the one in flight if the plan dies.
+        /// The last predicted edit's range as the field names it — the one in flight if the plan dies.
         var operand: Range<Int>?
 
         let webContent: Bool
+
+        /// The rest is in `AXValue` offsets; a range leaving for the field goes through these.
+        var breaks: ParagraphBreaks?
+
+        /// A `\n` typed into a paragraph field may have made a paragraph or a line break.
+        var breaksUncertain = false
 
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
             selection = snapshot.selection
             anchor = snapshot.anchor
             webContent = snapshot.webContent
+            breaks = snapshot.breaks
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -131,6 +138,19 @@ private extension PhysicalPlanner {
         }
 
         var model: TextModel? { text.map(TextModel.init) }
+
+        func field(_ range: Range<Int>) -> Range<Int> {
+            breaks?.fieldRange(range) ?? range
+        }
+
+        /// The side of a paragraph boundary `offset` is on, where its field offset names both.
+        func edge(_ offset: Int) -> Expectation.Edge? {
+            guard let breaks else { return nil }
+            let candidates = breaks.valueOffsets(breaks.fieldOffset(offset))
+            guard candidates.count > 1 else { return nil }
+            if offset == candidates.upperBound { return .paragraphStart }
+            return offset == candidates.lowerBound ? .paragraphEnd : nil
+        }
 
         /// The model, but only where its geography is trustworthy.
         ///
@@ -172,8 +192,12 @@ private extension PhysicalPlanner {
         /// Apply a predicted edit: text surgery, caret after the replacement.
         mutating func applyEdit(range: Range<Int>, replacement: String) {
             // An empty range is a plain insert, which replaces nothing.
-            if !range.isEmpty { operand = range }
+            if !range.isEmpty { operand = field(range) }
             text = model?.replacing(range, with: replacement)
+            if let current = breaks {
+                breaks = current.replacing(range, with: replacement)
+                breaksUncertain = breaksUncertain || replacement.contains("\n")
+            }
             let caretAfter = range.lowerBound + replacement.utf16.count
             selection = caretAfter..<caretAfter
             selectionOpaque = false
@@ -199,9 +223,36 @@ private extension PhysicalPlanner {
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
         let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
-        var expectation = Expectation(selection: selection, length: length, selectedText: selectedText)
+        var expectation = Expectation(
+            selection: context.breaksUncertain ? nil : context.field(selection),
+            length: length,
+            edge: context.breaksUncertain ? nil : context.edge(selection.upperBound),
+            selectedText: selectedText
+        )
         expectation.blame = blame
         return [hard ? .settle(expectation) : .softSettle(expectation)]
+    }
+
+    /// An AX selection write. Chromium lands a field offset at a paragraph
+    /// boundary on the next paragraph's start, so an end meant for the last
+    /// paragraph's end steps back one key, and a range starting there is
+    /// selected by keys from the caret stepped back.
+    static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
+        let field = context.field(range)
+        if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
+            return [
+                .setSelection(field.lowerBound..<field.lowerBound),
+                .press(.left, count: 1),
+                .press(.selectRight, count: model.graphemes(in: range)),
+            ]
+        }
+        let step = PhysicalStep.setSelection(field)
+        guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
+        return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+    }
+
+    static func presses(_ steps: [PhysicalStep]) -> Bool {
+        steps.contains { if case .press = $0 { return true }; return false }
     }
 
     /// Before an edit replaces a selection keys made: Chromium's misread caret puts
@@ -210,7 +261,9 @@ private extension PhysicalPlanner {
         _ text: String, context: Context, profile: CapabilityProfile
     ) -> [PhysicalStep] {
         guard !text.isEmpty, !profile.has(.writeSelection), profile.has(.readSelectedText) else { return [] }
-        return settle(context, profile: profile, selectedText: text)
+        // AXSelectedText leaves out the breaks a paragraph field's offsets do.
+        let selected = context.selection.flatMap { selection in context.breaks?.fieldText(text, at: selection) } ?? text
+        return settle(context, profile: profile, selectedText: selected)
     }
 }
 
@@ -283,7 +336,7 @@ private extension PhysicalPlanner {
             return [.commit(.setCursor(nil))]   // end of line/text: nothing to cover
         }
         context.selection = gap..<end
-        return [.setSelection(gap..<end), .commit(.setCursor(gap..<end))]
+        return write(gap..<end, context: context) + [.commit(.setCursor(gap..<end))]
     }
 }
 
@@ -418,7 +471,7 @@ private extension PhysicalPlanner {
             }
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
-                actuation = [.setSelection(target..<target)]
+                actuation = write(target..<target, context: context)
             } else {
                 actuation = keyPath(from: selection, to: target, model: model)
             }
@@ -578,7 +631,7 @@ private extension PhysicalPlanner {
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
             // Chromium's raw reads cannot tell a key that did nothing from one that had nowhere to go (LIN-1564).
-            let unmoved = context.webContent || mayStayPut(chords, from: before, in: model) ? [] : [before]
+            let unmoved = context.webContent || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
             guard !unmoved.isEmpty || leavesCaret else { return nil }
             return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
         }
@@ -719,7 +772,7 @@ private extension PhysicalPlanner {
             }
             if profile.has(.writeSelection) {
                 context.selection = range
-                return [.setSelection(range)] + settle(context, profile: profile)
+                return write(range, context: context) + settle(context, profile: profile)
             }
             var presses = keyPath(from: selection, to: range.lowerBound, model: model)
             let count = model.graphemes(in: range)
@@ -749,7 +802,7 @@ private extension PhysicalPlanner {
             guard let target = resolve(destination, model: model, from: head) else { return nil }
             let range = min(anchor, target)..<max(anchor, target)
             context.selection = range
-            return [.setSelection(range)] + settle(context, profile: profile)
+            return write(range, context: context) + settle(context, profile: profile)
         }
         // Blind: the app owns the anchor. This deliberately ignores
         // `context.anchor` — mixing a stored engine offset with a live app
@@ -783,7 +836,7 @@ private extension PhysicalPlanner {
             let towardStart = target == selection.lowerBound
             context.selection = target..<target
             if profile.has(.writeSelection) {
-                return [.setSelection(target..<target)] + settle(context, profile: profile)
+                return write(target..<target, context: context) + settle(context, profile: profile)
             }
             return [.press(towardStart ? .left : .right, count: 1)] + settle(context, profile: profile)
         }
@@ -979,7 +1032,7 @@ private extension PhysicalPlanner {
         var steps: [PhysicalStep] = []
         var settled = false
         if profile.has(.writeSelection) {
-            steps.append(.setSelection(range))
+            steps += write(range, context: context)
         } else if let keys = nativeSelect(.lines(count: count, interior: true), range: range,
                                           context: &context, profile: profile) {
             steps += keys
@@ -991,7 +1044,7 @@ private extension PhysicalPlanner {
         context.selection = range
         // Settled, so the AX replacement cannot overtake the selecting keys.
         var barrier = checkSelectedText(model.substring(range), context: context, profile: profile)
-        if barrier.isEmpty, !settled, !profile.has(.writeSelection), profile.has(.insertText) {
+        if barrier.isEmpty, !settled, presses(steps), profile.has(.insertText) {
             barrier = settle(context, profile: profile)
         }
         steps += barrier
@@ -1142,7 +1195,7 @@ private extension PhysicalPlanner {
     ) -> [PhysicalStep] {
         let steps: [PhysicalStep]
         if profile.has(.writeSelection) {
-            steps = [.setSelection(target..<target)]
+            steps = write(target..<target, context: context)
         } else if let model = context.model, let selection = context.selection {
             if let keys = nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
                 return keys

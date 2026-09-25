@@ -137,11 +137,11 @@ public extension Chord {
     static let lineEnd = Chord(.arrowRight, [.command])
     static let documentStart = Chord(.arrowUp, [.command])
     static let documentEnd = Chord(.arrowDown, [.command])
+    static let selectLeft = Chord(.arrowLeft, [.shift])
     static let selectRight = Chord(.arrowRight, [.shift])
     static let selectDown = Chord(.arrowDown, [.shift])
     static let selectWordRight = Chord(.arrowRight, [.shift, .option])
     static let selectLineEnd = Chord(.arrowRight, [.shift, .command])
-    static let selectLeft = Chord(.arrowLeft, [.shift])
     static let paragraphStart = Chord(.character("a"), [.control])
     static let paragraphEnd = Chord(.character("e"), [.control])
     static let selectAll = Chord(.character("a"), [.command])
@@ -172,9 +172,20 @@ public enum Landing: Equatable, Sendable {
 
 /// The planner's prediction of the field after a step, checked by the
 /// settle engine. Fields are optional in the shape of what is readable.
+///
+/// `selection` is in the field's own offsets; `length` is always `AXValue`'s.
 public struct Expectation: Equatable, Sendable {
     public let landing: Landing?
     public let length: Int?
+
+    /// Which side of a paragraph boundary the selection's upper end is on,
+    /// where its field offset names both; only a text-marker read can tell.
+    public let edge: Edge?
+
+    public enum Edge: Equatable, Sendable {
+        case paragraphEnd
+        case paragraphStart
+    }
 
     /// `AXSelectedText`: offsets alone pass a selection Chromium read shifted (LIN-1533), its text does not.
     public let selectedText: String?
@@ -196,13 +207,16 @@ public struct Expectation: Equatable, Sendable {
         }
     }
 
-    public init(selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil) {
-        self.init(landing: selection.map(Landing.exact), length: length, selectedText: selectedText)
+    public init(selection: Range<Int>? = nil, length: Int? = nil, edge: Edge? = nil, selectedText: String? = nil) {
+        self.init(landing: selection.map(Landing.exact), length: length, edge: edge, selectedText: selectedText)
     }
 
-    public init(landing: Landing?, length: Int? = nil, blame: Blame? = nil, selectedText: String? = nil) {
+    public init(
+        landing: Landing?, length: Int? = nil, edge: Edge? = nil, blame: Blame? = nil, selectedText: String? = nil
+    ) {
         self.landing = landing
         self.length = length
+        self.edge = edge
         self.blame = blame
         self.selectedText = selectedText
     }
@@ -239,8 +253,12 @@ extension Expectation {
     /// same shape.
     var traceFields: String {
         let selection = landing.map(\.traceName) ?? "nil"
-        let text = selectedText.map { " text=(\($0.utf16.count))" } ?? ""
-        return "sel=\(selection) len=\(length.map(String.init) ?? "nil")" + text
+        var fields = "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
+        fields += selectedText.map { " text=(\($0.utf16.count))" } ?? ""
+        if let edge {
+            fields += edge == .paragraphStart ? " edge=start" : " edge=end"
+        }
+        return fields
     }
 }
 
