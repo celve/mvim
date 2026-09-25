@@ -937,6 +937,10 @@ precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
 ])
 precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 4, profile: readProfile).plan) == ["cd ef"])
+// "ab\n\ncd": the empty line is one Chromium makes for a text-less leaf, so no caret stops there.
+let pastPhantom = Expectation(selection: 0..<2, length: 6, edge: .paragraphStart, selectedText: "ab")
+precondition(paragraphPlanning("dd", text: "ab\n\ncd", caret: 0, profile: readProfile).plan.steps.contains(.settle(pastPhantom)),
+             "keys that stop before the break read the paragraph's end and fail it")
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("cd ef\n", at: 3..<9) == "cd ef")
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("b\ncd", at: 1..<5) == "bcd")
 precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(
@@ -2234,9 +2238,7 @@ precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "he
 precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "mber "), "offsets agree, text does not")
 precondition(!checkedWord.matches(selection: 4..<9, length: 15), "no answer")
 precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil, selectedText: "mber "))
-precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "he\u{FFFC}\u{FFFC}llo"), "text-less leaves inside")
-precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "\u{FFFC}ello"), "a leaf for a letter")
-precondition(Expectation(selectedText: "a\u{FFFC}b").matches(selection: nil, length: nil, selectedText: "a\u{FFFC}b"), "a native attachment")
+precondition(!Expectation(selectedText: "a\u{FFFC}b").matches(selection: nil, length: nil, selectedText: "ab"), "an attachment counts")
 precondition(checkedWord.traceFields == "sel=4..9 len=15 text=(5)")
 precondition(!Expectation(selectedText: secret).traceFields.contains(secret), "traceFields leaked the selected text")
 

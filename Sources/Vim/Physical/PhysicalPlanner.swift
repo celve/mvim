@@ -145,8 +145,8 @@ private extension PhysicalPlanner {
             guard let breaks else { return nil }
             let candidates = breaks.valueOffsets(breaks.fieldOffset(offset))
             guard candidates.count > 1 else { return nil }
-            if offset == candidates.upperBound { return .paragraphStart }
-            return offset == candidates.lowerBound ? .paragraphEnd : nil
+            // Between two breaks is a line Chromium makes for a text-less or uneditable element, past the paragraph's end.
+            return offset == candidates.lowerBound ? .paragraphEnd : .paragraphStart
         }
 
         /// The model, but only where its geography is trustworthy.
