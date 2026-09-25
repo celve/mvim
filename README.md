@@ -299,6 +299,42 @@ at the line's start reads like one mid-line), so in web content only a caret key
 selection is blamed until the reads are corrected. In such a field a yank within one line takes
 its register from the text the field selected.
 
+## Native word, paragraph and page keys
+
+Off by default. **Capabilities in <app> › App's word, paragraph & page keys** turns it on for one
+field, fields like it, a site or the whole app. With it on, mvim presses the app's own keys
+instead of counting arrows or ringing, and the app decides where they land:
+
+| Vim | Keys |
+|---|---|
+| `w` `e` / `b` | ⌥→ / ⌥← |
+| `iw` (`ciw` `diw` `yiw` `viw`) | ⌥→ ⌥← to the word's start, then ⌥→ ⇧⌥← over it, then ⌘X or ⌘C |
+| `dw` `de` `cw` `ce` `yw` / `db` `cb` `yb` | ⇧⌥→ / ⇧⌥←, then ⌘X or ⌘C. From a word's edge, and in Chinese, Japanese or Thai, ⌥→ and ⌥← go out and back first |
+| `{` `}` | ⌥↑ / ⌥↓ |
+| `gj` `gk` | ↓ / ↑ |
+| `j` `k` | ↓ / ↑, only where ⌃E/⌃A are demoted and mvim cannot land them on a line |
+| `^F` `^B` | ⌥PgDn / ⌥PgUp. Without the option, ⌃F and ⌃B stay the app's |
+
+- **Where it applies.** Words switch only in fields mvim can read but not select in, such as
+  Chromium and Electron editors. A field that sets its selection exactly keeps vim's words; the
+  paragraph, row and page keys work in every field.
+- **`j` and `k`** keep moving by line wherever mvim can land them on one: exact writes, or the
+  ⌃E/⌃A hops in a field it reads but cannot select in. Only where those keys are demoted do they
+  move by screen row.
+- **What changes.** The semantics are the app's, not vim's:
+  - words skip runs of punctuation and split Chinese and Japanese by dictionary;
+  - ⌥→ stops at a word's end, so `w` lands where `e` does, and `dw` leaves the blank after the word;
+  - ⌥↑ and ⌥↓ go to a paragraph's start and end, not to blank lines;
+  - `ciw` on a blank selects the word before it, and rings where no word ends there.
+- **What stays vim's.** `aw`, counted `iw`, `W` `B` `E` `ge`, and `{` `}` `gj` `^F` as operator
+  targets or in Visual mode are unchanged.
+- **Checks.** Where mvim can read the caret, each landing is checked against the caret the key
+  started from. A word selection must be exactly what ⌥← and ⌥→ delimited or, mid-word, what the
+  text says is left of the word; where neither can be known, as inside `foo,bar`, the command
+  rings. If a key leaves the field unmoved when it should have moved, or selects more than that,
+  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then reads `✗ learned`. Words go
+  back to counting and paragraphs to ringing until you override it or the app updates.
+
 ## Running alongside Vibe
 
 - **`SynthTag.magic` is a cross-app ABI.** Both apps tag their synthesized CGEvents with the

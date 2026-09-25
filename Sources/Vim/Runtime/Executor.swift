@@ -67,6 +67,8 @@ public final class Executor {
 
     /// The selection the last settle read, which says whether a native key did anything.
     private var lastObserved: Range<Int>?
+    /// Carets this run's settles kept, for `.between` landings.
+    private var kept: [Int: Int] = [:]
 
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
@@ -107,9 +109,15 @@ public final class Executor {
         lastWriteError = nil
         lastObserved = nil
         self.paragraphs = paragraphs
+        kept = [:]
         var attribution: Capability?
-        for (index, step) in plan.steps.enumerated() {
+        for (index, next) in plan.steps.enumerated() {
+            var step = next
+            if case .settle(let expectation) = next { step = .settle(expectation.resolving(kept)) }
             let passed = perform(step, at: index, on: element, state: &state)
+            if passed, case .settle(let expectation) = step, let slot = expectation.keeps, let caret = lastObserved?.lowerBound {
+                kept[slot] = caret
+            }
             switch step {
             case .setSelection:
                 attribution = .writeSelection
@@ -347,6 +355,8 @@ public final class Executor {
         case .arrowRight: return 124
         case .arrowDown: return 125
         case .arrowUp: return 126
+        case .pageUp: return 116
+        case .pageDown: return 121
         case .delete: return 51
         case .forwardDelete: return 117
         case .enter: return 36

@@ -215,7 +215,10 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        guard profile.has(.writeSelection), !swallowsSelect else { return false }
+        guard profile.has(.writeSelection), !swallowsSelect else {
+            guard profile.has(.nativeMotions), !ignoredChords.contains(.left), press(reboundChords[.left] ?? .left) else { return false }
+            return selection.isEmpty
+        }
         selection = selection.lowerBound..<selection.lowerBound
         return true
     }
@@ -294,6 +297,7 @@ private extension Sim {
 private extension Sim {
     /// The index of the step that ended the run, nil when every step ran.
     mutating func execute(_ plan: PhysicalPlan) -> Int? {
+        var kept: [Int: Int] = [:]
         for (index, step) in plan.steps.enumerated() {
             switch step {
             case .setSelection(let range):
@@ -329,7 +333,8 @@ private extension Sim {
             case .captureSelectedText(let slot):
                 captures[slot] = readSelectedText
 
-            case .settle(let expectation):
+            case .settle(let planned):
+                let expectation = planned.resolving(kept)
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
                 if !expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText) {
@@ -338,6 +343,7 @@ private extension Sim {
                     drainResidency(of: plan, after: index)
                     return index   // the rest dies, like the real executor
                 }
+                if let slot = expectation.keeps, let caret = observed?.lowerBound { kept[slot] = caret }
 
             case .softSettle:
                 // Best-effort barrier: never aborts. In this synchronous host

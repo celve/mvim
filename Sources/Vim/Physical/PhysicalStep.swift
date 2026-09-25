@@ -94,7 +94,7 @@ public struct Chord: Equatable, Hashable, Sendable {
             return true
         case .character:
             return modifiers.subtracting(.shift).isEmpty
-        case .arrowLeft, .arrowRight, .arrowUp, .arrowDown, .escape:
+        case .arrowLeft, .arrowRight, .arrowUp, .arrowDown, .pageUp, .pageDown, .escape:
             return false
         }
     }
@@ -105,6 +105,8 @@ public enum Key: Equatable, Hashable, Sendable {
     case arrowRight
     case arrowUp
     case arrowDown
+    case pageUp
+    case pageDown
     case delete
     case forwardDelete
     case enter
@@ -141,6 +143,13 @@ public extension Chord {
     static let selectRight = Chord(.arrowRight, [.shift])
     static let selectDown = Chord(.arrowDown, [.shift])
     static let selectWordRight = Chord(.arrowRight, [.shift, .option])
+    static let selectWordLeft = Chord(.arrowLeft, [.shift, .option])
+    /// Cocoa: `moveBackward:` + `moveToBeginningOfParagraph:`, and the forward pair.
+    static let paragraphBackward = Chord(.arrowUp, [.option])
+    static let paragraphForward = Chord(.arrowDown, [.option])
+    /// `pageUp:`/`pageDown:` carry the caret; bare PgUp/PgDn only scroll.
+    static let pageBackward = Chord(.pageUp, [.option])
+    static let pageForward = Chord(.pageDown, [.option])
     static let selectLineEnd = Chord(.arrowRight, [.shift, .command])
     static let paragraphStart = Chord(.character("a"), [.control])
     static let paragraphEnd = Chord(.character("e"), [.control])
@@ -157,6 +166,8 @@ public enum Landing: Equatable, Sendable {
     case exact(Range<Int>)
     case caretAfter(Int, strict: Bool)
     case caretBefore(Int, strict: Bool)
+    /// The span between two kept carets (`Expectation.keeps`).
+    case between(Int, Int)
 
     public func matches(_ observed: Range<Int>) -> Bool {
         switch self {
@@ -166,6 +177,8 @@ public enum Landing: Equatable, Sendable {
             return observed.isEmpty && (strict ? observed.lowerBound > offset : observed.lowerBound >= offset)
         case .caretBefore(let offset, let strict):
             return observed.isEmpty && (strict ? observed.lowerBound < offset : observed.lowerBound <= offset)
+        case .between:
+            return false
         }
     }
 }
@@ -190,6 +203,15 @@ public struct Expectation: Equatable, Sendable {
 
     /// The native key this settle checks.
     public var blame: Blame?
+
+    /// The widest selection `landing` may read.
+    public var longest: Int?
+
+    /// Slot for this settle's caret, for a later `.between`.
+    public var keeps: Int?
+
+    /// Where a `.between` span must lie.
+    public var within: Range<Int>?
 
     /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
     /// nothing), or when a key that only ever leaves a caret left a selection.
@@ -231,15 +253,33 @@ public struct Expectation: Equatable, Sendable {
         if let landing {
             guard let observed, landing.matches(observed) else { return false }
         }
+        if let longest, (observed?.count ?? 0) > longest { return false }
         if let length, observedLength != length { return false }
         if let selectedText, observedText != selectedText { return false }
         return true
     }
 
+    /// `.between` made exact from kept carets; a key left at either end is blamed.
+    public func resolving(_ kept: [Int: Int]) -> Expectation {
+        guard case .between(let from, let to)? = landing, let lower = kept[from], let upper = kept[to], lower <= upper,
+              within.map({ $0.lowerBound <= lower && upper <= $0.upperBound }) ?? true else {
+            return self
+        }
+        let widened = blame.map {
+            Blame(capability: $0.capability, unmoved: $0.unmoved + [lower..<lower, upper..<upper], leavesCaret: $0.leavesCaret)
+        }
+        var resolved = Expectation(landing: .exact(lower..<upper), length: length, edge: edge, blame: widened, selectedText: selectedText)
+        resolved.longest = longest
+        resolved.keeps = keeps
+        resolved.within = within
+        return resolved
+    }
+
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
         guard let blame, let observed,
-              blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty) else { return nil }
+              blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty)
+                || longest.map({ observed.count > $0 }) == true else { return nil }
         return blame.capability
     }
 }
@@ -256,6 +296,9 @@ extension Expectation {
         if let edge {
             fields += edge == .paragraphStart ? " edge=start" : " edge=end"
         }
+        if let longest { fields += " max=\(longest)" }
+        if let keeps { fields += " keep=\(keeps)" }
+        if let within { fields += " in=\(within.lowerBound)..\(within.upperBound)" }
         return fields
     }
 }
@@ -266,6 +309,7 @@ extension Landing {
         case .exact(let range): return "\(range.lowerBound)..\(range.upperBound)"
         case .caretAfter(let offset, let strict): return (strict ? ">" : ">=") + "\(offset)"
         case .caretBefore(let offset, let strict): return (strict ? "<" : "<=") + "\(offset)"
+        case .between(let from, let to): return "k\(from)..k\(to)"
         }
     }
 }

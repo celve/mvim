@@ -47,12 +47,48 @@ struct KeyModel {
             moved = vertical(from: shift ? focus : selection.upperBound, by: 1, in: model)
         case .up:
             moved = vertical(from: shift ? focus : selection.lowerBound, by: -1, in: model)
+        case .wordRight:
+            moved = wordEnd(from: shift ? focus : selection.upperBound, in: model)
+        case .wordLeft:
+            moved = wordStart(from: shift ? focus : selection.lowerBound, in: model)
+        case .paragraphForward where !shift:
+            let from = selection.upperBound
+            moved = from < model.length ? model.lineEnd(of: model.advance(from, byGraphemes: 1)) : from
+        case .paragraphBackward where !shift:
+            let from = selection.lowerBound
+            moved = from > 0 ? model.lineStart(of: model.advance(from, byGraphemes: -1)) : 0
+        case .pageForward where !shift:
+            moved = (0..<Self.pageRows).reduce(selection.upperBound) { at, _ in vertical(from: at, by: 1, in: model) }
+        case .pageBackward where !shift:
+            moved = (0..<Self.pageRows).reduce(selection.lowerBound) { at, _ in vertical(from: at, by: -1, in: model) }
         default:
             return false
         }
         focus = moved
         if !shift { anchor = moved }
         return true
+    }
+
+    static let pageRows = 10
+
+    /// Letter, digit and underscore runs; real apps also split Chinese by dictionary.
+    private func wordEnd(from offset: Int, in model: TextModel) -> Int {
+        var at = offset
+        while at < model.length, !isWord(at, in: model) { at = model.advance(at, byGraphemes: 1) }
+        while at < model.length, isWord(at, in: model) { at = model.advance(at, byGraphemes: 1) }
+        return at
+    }
+
+    private func wordStart(from offset: Int, in model: TextModel) -> Int {
+        var at = offset
+        while at > 0, !isWord(model.advance(at, byGraphemes: -1), in: model) { at = model.advance(at, byGraphemes: -1) }
+        while at > 0, isWord(model.advance(at, byGraphemes: -1), in: model) { at = model.advance(at, byGraphemes: -1) }
+        return at
+    }
+
+    private func isWord(_ offset: Int, in model: TextModel) -> Bool {
+        guard let character = model.substring(offset..<model.advance(offset, byGraphemes: 1)).first else { return false }
+        return character.isLetter || character.isNumber || character == "_"
     }
 
     /// The visual row holding `offset`: a line's graphemes cut every `wrap`, the caret on a cut starting the next row.
