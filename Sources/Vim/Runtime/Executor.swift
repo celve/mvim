@@ -15,10 +15,21 @@ public final class Executor {
     public init() {}
 
     /// How long a literal clipboard insert keeps its transient content
-    /// before the saved string is restored (guarded by changeCount).
+    /// before the saved contents are restored (guarded by changeCount).
     private static let restoreDelay: TimeInterval = 0.2
 
     private var captures: [CaptureSlot: String] = [:]
+
+    /// Every item in every type it holds, so the restore also gives back a copied image or file.
+    private static func items(of pasteboard: NSPasteboard) -> [NSPasteboardItem] {
+        (pasteboard.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+    }
 
     /// What the most recent `execute()` did — the lazy write probe's raw
     /// readings, plus what the recorder needs to explain them. Only the two
@@ -202,7 +213,7 @@ public final class Executor {
                 // processes the ⌘V, which the event queue orders after the
                 // write. The restore is deferred hygiene, not a wait.
                 let pasteboard = NSPasteboard.general
-                let saved = pasteboard.string(forType: .string)
+                let saved = Self.items(of: pasteboard)
                 pasteboard.clearContents()
                 pasteboard.setString(content, forType: .string)
                 let stamp = pasteboard.changeCount
@@ -213,7 +224,7 @@ public final class Executor {
                     // decline to write, never clobber.
                     guard pasteboard.changeCount == stamp else { return }
                     pasteboard.clearContents()
-                    if let saved { pasteboard.setString(saved, forType: .string) }
+                    pasteboard.writeObjects(saved)
                 }
             } else {
                 Synth.commandV()   // registers +/* and pasteboard markers: paste as-is
