@@ -219,11 +219,14 @@ public struct Expectation: Equatable, Sendable {
         public let capability: Capability
         public let unmoved: [Range<Int>]
         public let leavesCaret: Bool
+        /// A landing anywhere but the prediction is the key's too, where the field's lines are the model's.
+        public let offTarget: Bool
 
-        public init(capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false) {
+        public init(capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false, offTarget: Bool = false) {
             self.capability = capability
             self.unmoved = unmoved
             self.leavesCaret = leavesCaret
+            self.offTarget = offTarget
         }
     }
 
@@ -278,7 +281,7 @@ public struct Expectation: Equatable, Sendable {
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
         guard let blame, let observed,
-              blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty)
+              blame.offTarget || blame.unmoved.contains(observed) || (blame.leavesCaret && !observed.isEmpty)
                 || longest.map({ observed.count > $0 }) == true else { return nil }
         return blame.capability
     }

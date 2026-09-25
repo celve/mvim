@@ -283,18 +283,19 @@ delete first and join lines at a line end.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
-and caret mvim can read. A caret key that leaves a selection (as a select-all binding would),
-or a key that does nothing where it had somewhere to go, is learned off for that surface like a write
-that lies, and mvim counts arrows there again; switch it back on from the menu. A key that lands somewhere else
-aborts the command without learning, because Chromium's reads can put a correct landing there;
-turn such a key off for the surface from the menu.
+and caret mvim can read. A key that lands anywhere but where it
+should, including a caret key that leaves a selection (as a select-all binding would) or a key that does
+nothing where it had somewhere to go, is learned off for that surface like a write that lies, and mvim
+counts arrows there again; switch it back on from the menu. In Chromium's rich text a key that lands
+somewhere else only aborts the command, because one paragraph can be several `AXValue` lines there (a
+mention chip) and a working key lands off the model's line; turn such a key off from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
 paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
 (LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
 even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
 the caret the command starts from. An empty paragraph can be missing from `AXValue`, or read
-beside, so where the field reads a `<br>` (a newline that is not a paragraph break) a key that
+beside, so beside a `<br>` the field reads (a newline that is not a paragraph break) a key that
 seems to do nothing is not blamed. In such a field a yank within one line takes its register from
 the text the field selected.
 

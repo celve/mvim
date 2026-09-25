@@ -2712,10 +2712,12 @@ precondition(Array(keyedDD.steps[0...6]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
         landing: .exact(4..<4), length: 13,
-        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true)
+        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true, offTarget: true)
     )),
     .press(Chord.paragraphEnd.shifted, count: 1),
-    .settle(Expectation(landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4]))),
+    .settle(Expectation(
+        landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4], offTarget: true)
+    )),
     .press(.selectRight, count: 1),
     .settle(Expectation(selection: 4..<8, length: 13)),
     .settle(Expectation(selection: 4..<8, length: 13, selectedText: "two\n")),
@@ -2867,13 +2869,12 @@ for profile in [axProfile, keyProfile] {
     precondition(sim.text == "alpha\nbeta\nbeta\nbeta")
 }
 
-// Past paragraph 1 Chromium reads one low per break, so until reads are corrected (LIN-1564) the first key's
-// settle stops `j`.
+// Past paragraph 1 Chromium's raw reads are one low per break, and the first key's settle stops `j`.
 sim = Sim(text: "ab\ncdef\nghij", caret: 5, profile: keyProfile)
 sim.emulatesKeys = true
 sim.reads = omitsBreaks
 sim.type("j")
-precondition(sim.settleFailures == 1 && sim.blamed.isEmpty)
+precondition(sim.settleFailures == 1 && sim.text == "ab\ncdef\nghij")
 
 // Wrapped paragraphs: ↓ and ⌘← move by visual row; ⌃E→ by logical line.
 let wrapped = "alpha beta gamma delta\nnext line"
@@ -2888,7 +2889,7 @@ sim.wrapWidth = 8
 sim.type("j")
 precondition(sim.settleFailures == 1 && TextModel(wrapped).lineStart(of: sim.caret) == 0)
 
-// A key that does nothing is blamed; one that lands elsewhere is not.
+// A key that does nothing is blamed, and so is one that lands elsewhere.
 for (ignored, blamed) in [(Chord.paragraphStart, Capability.lineStartKey), (Chord.paragraphEnd.shifted, .lineEndKey)] {
     sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
     sim.emulatesKeys = true
@@ -2901,6 +2902,14 @@ sim.emulatesKeys = true
 sim.reboundChords = [.paragraphStart: .selectAll]
 sim.type("dd")
 precondition(sim.blamed == [.lineStartKey] && sim.text == "one\ntwo")
+for web in [false, true] {
+    sim = Sim(text: "the cat", caret: 4, profile: keyProfile)
+    sim.emulatesKeys = true
+    sim.webContent = web
+    sim.reboundChords = [.paragraphStart: .paragraphEnd]
+    sim.type("0")
+    precondition(sim.blamed == [.lineStartKey] && sim.caret == 7, "a ⌃A that acts as ⌃E, web \(web)")
+}
 // In web content a key that did nothing is blamed where the reads are exact, as in a textarea.
 sim = Sim(text: "the cat", caret: 4, profile: keyProfile)
 sim.emulatesKeys = true
@@ -2908,15 +2917,23 @@ sim.webContent = true
 sim.ignoredChords = [.paragraphStart]
 sim.type("0")
 precondition(sim.settleFailures == 1 && sim.blamed == [.lineStartKey] && sim.text == "the cat")
-func webLineStartBlame(text: String, breaks: ParagraphBreaks) -> Expectation.Blame? {
-    webPhysical("0", text: text, caret: 5, profile: keyProfile, breaks: breaks).steps.lazy.compactMap {
+func webBlame(_ keys: String, caret: Int, breaks: ParagraphBreaks) -> Expectation.Blame? {
+    webPhysical(keys, text: "ab\ncdef", caret: caret, profile: keyProfile, breaks: breaks).steps.lazy.compactMap {
         guard case .settle(let expectation) = $0 else { return nil }
         return expectation.blame
     }.first
 }
-// With paragraph reads too, unless a newline the markers also read (a `<br>`) says an empty paragraph may be hidden.
-precondition(webLineStartBlame(text: "ab\ncdef", breaks: ParagraphBreaks(offsets: [2]))?.unmoved == [4..<4])
-precondition(webLineStartBlame(text: "ab\ncdef", breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
+// With paragraph reads too, except beside a newline the markers also read (a `<br>`), where an empty paragraph hides.
+precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: [2]))?.unmoved == [4..<4])
+precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: []))?.unmoved == [5..<5])
+precondition(webBlame("0", caret: 2, breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
+precondition(webBlame("$", caret: 3, breaks: ParagraphBreaks(offsets: []))?.unmoved == [])
+// Rich text is where a working key lands off the model's line, so only there a landing elsewhere teaches nothing.
+precondition(webBlame("0", caret: 5, breaks: ParagraphBreaks(offsets: [2]))?.offTarget == false)
+precondition(webPhysical("0", text: "the cat", caret: 4, profile: keyProfile).steps.contains {
+    guard case .settle(let expectation) = $0 else { return false }
+    return expectation.blame?.offTarget == true
+})
 sim = Sim(text: "one\ntwo", caret: 5, profile: keyProfile)
 sim.emulatesKeys = true
 sim.webContent = true

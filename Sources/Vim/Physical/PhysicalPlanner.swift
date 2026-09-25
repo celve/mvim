@@ -147,10 +147,13 @@ private extension PhysicalPlanner {
         }
 
         /// A newline the markers also read is a `<br>`, often an empty paragraph's, which Chromium leaves out of
-        /// `AXValue` or reads beside, so a caret key there can seem to do nothing when it did.
-        var mayHideParagraphs: Bool {
-            guard webContent, let breaks, let model else { return false }
-            return breaks.offsets.count < model.newlineCount(in: 0..<model.length)
+        /// `AXValue` and reads beside, so a caret key read there can seem to do nothing when it did.
+        func besideHiddenParagraph(_ offset: Int) -> Bool {
+            guard webContent, let breaks, let text else { return false }
+            let units = Array(text.utf16)
+            return [offset - 1, offset].contains {
+                $0 >= 0 && $0 < units.count && units[$0] == 10 && !breaks.offsets.contains($0)
+            }
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -638,9 +641,12 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            let unmoved = context.mayHideParagraphs || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
-            guard !unmoved.isEmpty || leavesCaret else { return nil }
-            return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret)
+            let unmoved = context.besideHiddenParagraph(before.lowerBound) || mayStayPut(chords, from: before, in: model)
+                ? [] : [context.field(before)]
+            // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
+            let offTarget = context.breaks == nil
+            guard !unmoved.isEmpty || leavesCaret || offTarget else { return nil }
+            return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget)
         }
         var steps: [PhysicalStep] = []
         for chord in chords {
