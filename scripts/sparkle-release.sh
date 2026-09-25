@@ -30,7 +30,7 @@ http_status() { { gh api --include "$1" 2>/dev/null || true; } | sed -n '1s|^HTT
 
 # Every install updates from the latest release: outnumber its build and keep its signing identity.
 check_latest() {
-    local latest previous requirement
+    local latest previous key requirement
     latest=$(gh api "repos/$repo/releases/latest" --jq .tag_name) || die "could not read $repo's latest release"
     live=$(mktemp -d)
     trap 'rm -rf "$live"' EXIT
@@ -41,6 +41,12 @@ check_latest() {
     case $previous in '' | *[!0-9]*) die "$latest's appcast.xml names no numeric build" ;; esac
     [ "$build" -gt "$previous" ] || die "build $build does not exceed $latest's $previous: installs would ignore it"
     ditto -x -k "$live"/mvim-*.zip "$live/app"
+    # Installs verify an update with the EdDSA key they shipped with, so a new one strands them all.
+    key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$live/app/mvim.app/Contents/Info.plist") ||
+        die "could not read the SUPublicEDKey of $latest's app"
+    [ "$(info SUPublicEDKey)" = "$key" ] ||
+        die "$app's SUPublicEDKey is not the one $latest shipped: every install would reject the update" \
+            "(generate_keys -f imports the original private key)"
     requirement=$(codesign -d -r- "$live/app/mvim.app" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')
     [ -n "$requirement" ] || die "could not read the designated requirement of $latest's app"
     # TCC holds each install's grants against that requirement, so an app failing it starts over.

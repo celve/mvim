@@ -218,8 +218,10 @@ For each release, from a clean checkout of `main` on a Mac holding the signing c
   install would lose both. An Apple Development requirement names the certificate's holder, so
   publish from the same person's certificate; for a deliberate change, such as moving to
   Developer ID, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
-- the appcast item came out unsigned — the key is not the one `SUPublicEDKey` names, and every
-  install would reject the update;
+- the appcast item came out unsigned — the key is not the one `SUPublicEDKey` names — or
+  `SUPublicEDKey` is not the latest release's: installs verify with the key they shipped with, so
+  either way every install would reject the update. On a new Mac, import the original key with
+  `generate_keys -f <backup>`; never paste a freshly generated one into `project.yml`;
 - the tree has uncommitted changes, `HEAD` is not on `main`, `v<version>` exists, or the build
   number does not exceed the one the latest release offers, which installs would ignore;
 - GitHub cannot answer any of those questions: a failed read refuses rather than guesses.
