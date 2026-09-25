@@ -203,9 +203,12 @@ X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSele
 ! settle         ? softSettle         C commit                     B bell
 ```
 
-Order is the diagnostic — a `!` directly after a `P` is a hard settle verifying a blind
-keypress, which can never name the capability it failed, so it rings without teaching the
-learner anything.
+Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
+a blind keypress, which can never name the capability it failed, so it rings without teaching
+the learner anything. A `!` after a native key names that key, and a failure blames it
+(`fail=lineStartKey`) when a caret key left a selection, or, outside web content, when the field
+still reads as it did before the key although the key had somewhere to go. A landing somewhere
+else aborts without learning.
 
 When keys made the selection an edit is about to delete or type over, the edit first checks
 the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
@@ -267,6 +270,74 @@ defaults delete com.loom.mvim mvimRecordText
 **Both edges need a relaunch.** The flag is read once per process, deliberately — re-reading
 it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
 does not stop an mvim that is already running.
+
+## Native keys
+
+When a field can be read but not written, mvim moves by line and document with the standard
+Cocoa bindings instead of counting arrow presses: ⌃A/⌃E to the start and end of the caret's
+paragraph, which is mvim's line, ⇧⌃A/⇧⌃E to select there, and ⌘↑/⌘↓ (⇧ to select) for the
+document. `dd` is ⌃A, ⇧⌃E, ⇧→; `j` is ⌃E, → and then the column counted on the new line; `0`,
+`$`, `gg`, `G`, `D`, `C`, `cc`, `yy`, `o`, `O`, `J` and linewise puts follow the same pattern.
+`x` and `X` still select one character and check it before deleting, because ⌦ and ⌫ would
+delete first and join lines at a line end.
+
+Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
+**Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
+and caret mvim can read. A key that lands anywhere but where it
+should, including a caret key that leaves a selection (as a select-all binding would) or a key that does
+nothing where it had somewhere to go, is learned off for that surface like a write that lies, and mvim
+counts arrows there again; switch it back on from the menu. In Chromium's rich text a key that lands
+somewhere else only aborts the command, because one paragraph can be several `AXValue` lines there (a
+mention chip) and a working key lands off the model's line; turn such a key off from the menu.
+
+Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
+paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
+(LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
+even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
+the caret the command starts from. An empty paragraph can be missing from `AXValue`, and a caret
+in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
+paragraph is not blamed for seeming to do nothing. In such a field a yank within one line takes its register from
+the text the field selected.
+
+`o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
+text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
+until it holds text, so the settles after it do not check the length.
+
+## Native word, paragraph and page keys
+
+Off by default. **Capabilities in <app> › App's word, paragraph & page keys** turns it on for one
+field, fields like it, a site or the whole app. With it on, mvim presses the app's own keys
+instead of counting arrows or ringing, and the app decides where they land:
+
+| Vim | Keys |
+|---|---|
+| `w` `e` / `b` | ⌥→ / ⌥← |
+| `iw` (`ciw` `diw` `yiw` `viw`) | ⌥→ ⌥← to the word's start, then ⌥→ ⇧⌥← over it, then ⌘X or ⌘C |
+| `dw` `de` `cw` `ce` `yw` / `db` `cb` `yb` | ⇧⌥→ / ⇧⌥←, then ⌘X or ⌘C. From a word's edge, and in Chinese, Japanese or Thai, ⌥→ and ⌥← go out and back first |
+| `{` `}` | ⌥↑ / ⌥↓ |
+| `gj` `gk` | ↓ / ↑ |
+| `j` `k` | ↓ / ↑, only where ⌃E/⌃A are demoted and mvim cannot land them on a line |
+| `^F` `^B` | ⌥PgDn / ⌥PgUp. Without the option, ⌃F and ⌃B stay the app's |
+
+- **Where it applies.** Words switch only in fields mvim can read but not select in, such as
+  Chromium and Electron editors. A field that sets its selection exactly keeps vim's words; the
+  paragraph, row and page keys work in every field.
+- **`j` and `k`** keep moving by line wherever mvim can land them on one: exact writes, or the
+  ⌃E/⌃A hops in a field it reads but cannot select in. Only where those keys are demoted do they
+  move by screen row.
+- **What changes.** The semantics are the app's, not vim's:
+  - words skip runs of punctuation and split Chinese and Japanese by dictionary;
+  - ⌥→ stops at a word's end, so `w` lands where `e` does, and `dw` leaves the blank after the word;
+  - ⌥↑ and ⌥↓ go to a paragraph's start and end, not to blank lines;
+  - `ciw` on a blank selects the word before it, and rings where no word ends there.
+- **What stays vim's.** `aw`, counted `iw`, `W` `B` `E` `ge`, and `{` `}` `gj` `^F` as operator
+  targets or in Visual mode are unchanged.
+- **Checks.** Where mvim can read the caret, each landing is checked against the caret the key
+  started from. A word selection must be exactly what ⌥← and ⌥→ delimited or, mid-word, what the
+  text says is left of the word; where neither can be known, as inside `foo,bar`, the command
+  rings. If a key leaves the field unmoved when it should have moved, or selects more than that,
+  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then reads `✗ learned`. Words go
+  back to counting and paragraphs to ringing until you override it or the app updates.
 
 ## Running alongside Vibe
 

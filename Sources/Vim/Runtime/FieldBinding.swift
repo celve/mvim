@@ -23,6 +23,8 @@ public enum FieldProber {
         if reads.string(3) != nil { available.insert(.readSelectedText) }
         if AX.rangeSettable(element) { available.insert(.writeSelection) }
         if AX.isInsertable(element) { available.insert(.insertText) }
+        // No read can try a key; the settle after one is its trial.
+        if available.contains(.readText), available.contains(.readCaret) { available.formUnion(Capability.nativeKeys) }
         return CapabilityProfile(available: available)
     }
 
@@ -173,8 +175,9 @@ public enum Snapshotter {
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
+            "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
         ]
-        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 3
+        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 4
         let reads = AX.attributes(names, of: element)
         let text = capabilities.has(.readText) ? reads.string(0) : nil
         var selection: Range<Int>?
@@ -182,10 +185,11 @@ public enum Snapshotter {
             selection = range.location..<(range.location + range.length)
         }
         var breaks: ParagraphBreaks?
+        var emptyParagraph = false
         if paragraphs {
             breaks = ParagraphBreaks()
             if capabilities.has(.readCaret) {
-                (selection, breaks) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(3))
+                (selection, breaks, emptyParagraph) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
             }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
@@ -199,7 +203,9 @@ public enum Snapshotter {
             length: length,
             anchor: anchor,
             cursor: stampedCursor,
-            breaks: breaks
+            webContent: reads.string(3) != nil,
+            breaks: breaks,
+            caretInEmptyParagraph: emptyParagraph
         )
     }
 
@@ -208,18 +214,19 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets, nil if unplaceable, and the breaks it used.
+    /// The marker selection in `AXValue` offsets, nil if unplaceable, the breaks it used, and whether a caret is in an
+    /// empty paragraph.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
-    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks) {
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool) {
         guard let text, let marked = AX.markedSelection(of: element, selected: selected) else {
-            return (nil, ParagraphBreaks())
+            return (nil, ParagraphBreaks(), false)
         }
         let field = marked.range
         var breaks = ParagraphBreaks()
         if text.contains("\n") {
             guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
-                return (nil, breaks)
+                return (nil, breaks, false)
             }
             breaks = aligned
         }
@@ -231,7 +238,7 @@ public enum Snapshotter {
             if marked.isCollapsed { caretSide = side }
             return side
         }
-        return (range, breaks)
+        return (range, breaks, marked.inEmptyParagraph)
     }
 
     /// Where typing at a boundary end would land; nil when a read fails.

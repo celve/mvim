@@ -29,8 +29,14 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// interference) means the selection is the user's, not ours.
     public let cursor: Range<Int>?
 
+    /// The field is web content, where a native key that seems to do nothing may have had nowhere to go (LIN-1559).
+    public let webContent: Bool
+
     /// Non-nil when the field selects in text content; `selection` is already converted.
     public let breaks: ParagraphBreaks?
+
+    /// The caret is in an empty paragraph that `AXValue` may leave out, so its read is a neighbour's.
+    public let caretInEmptyParagraph: Bool
 
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
@@ -39,7 +45,9 @@ public struct FieldSnapshot: Equatable, Sendable {
         length: Int? = nil,
         anchor: Int? = nil,
         cursor: Range<Int>? = nil,
-        breaks: ParagraphBreaks? = nil
+        webContent: Bool = false,
+        breaks: ParagraphBreaks? = nil,
+        caretInEmptyParagraph: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -47,7 +55,9 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.length = length ?? text.map { $0.utf16.count }
         self.anchor = anchor
         self.cursor = cursor
+        self.webContent = webContent
         self.breaks = breaks
+        self.caretInEmptyParagraph = caretInEmptyParagraph
     }
 
     /// The caret, when the selection is collapsed.

@@ -15,10 +15,21 @@ public final class Executor {
     public init() {}
 
     /// How long a literal clipboard insert keeps its transient content
-    /// before the saved string is restored (guarded by changeCount).
+    /// before the saved contents are restored (guarded by changeCount).
     private static let restoreDelay: TimeInterval = 0.2
 
     private var captures: [CaptureSlot: String] = [:]
+
+    /// Every item in every type it holds, so the restore also gives back a copied image or file.
+    private static func items(of pasteboard: NSPasteboard) -> [NSPasteboardItem] {
+        (pasteboard.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+    }
 
     /// What the most recent `execute()` did — the lazy write probe's raw
     /// readings, plus what the recorder needs to explain them. Only the two
@@ -28,6 +39,7 @@ public final class Executor {
     /// clears it), and each settle consumes it. A planner shape that ever
     /// interleaves other steps between write and settle fails toward NO
     /// evidence — never a false strike. Zero-settle plans say nothing.
+    /// A settle that names a native key (`Expectation.blame`) attributes to it instead.
     /// Callers must copy this immediately after their execute: hygiene
     /// plans (cursor collapse, stranded-selection repair) reuse this
     /// executor and reset it.
@@ -63,6 +75,11 @@ public final class Executor {
 
     /// From the write a following settle verifies; cleared where attribution is.
     private var lastWriteError: Int32?
+
+    /// The selection the last settle read, which says whether a native key did anything.
+    private var lastObserved: Range<Int>?
+    /// Carets this run's settles kept, for `.between` landings.
+    private var kept: [Int: Int] = [:]
 
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
@@ -101,20 +118,28 @@ public final class Executor {
         captures = [:]
         lastRun = RunEvidence()
         lastWriteError = nil
+        lastObserved = nil
         self.paragraphs = paragraphs
+        kept = [:]
         var attribution: Capability?
-        for (index, step) in plan.steps.enumerated() {
+        for (index, next) in plan.steps.enumerated() {
+            var step = next
+            if case .settle(let expectation) = next { step = .settle(expectation.resolving(kept)) }
             let passed = perform(step, at: index, on: element, state: &state)
+            if passed, case .settle(let expectation) = step, let slot = expectation.keeps, let caret = lastObserved?.lowerBound {
+                kept[slot] = caret
+            }
             switch step {
             case .setSelection:
                 attribution = .writeSelection
             case .replaceSelection:
                 attribution = .insertText
-            case .settle:
-                if passed, let attributed = attribution {
+            case .settle(let expectation):
+                if passed, let attributed = expectation.blame?.capability ?? attribution {
                     lastRun.settledCapabilities.insert(attributed)
                 } else if !passed {
-                    lastRun.failedCapability = attribution
+                    lastRun.failedCapability = expectation.blame == nil
+                        ? attribution : expectation.blamed(observed: lastObserved)
                 }
                 attribution = nil
                 lastWriteError = nil
@@ -188,7 +213,7 @@ public final class Executor {
                 // processes the ⌘V, which the event queue orders after the
                 // write. The restore is deferred hygiene, not a wait.
                 let pasteboard = NSPasteboard.general
-                let saved = pasteboard.string(forType: .string)
+                let saved = Self.items(of: pasteboard)
                 pasteboard.clearContents()
                 pasteboard.setString(content, forType: .string)
                 let stamp = pasteboard.changeCount
@@ -199,7 +224,7 @@ public final class Executor {
                     // decline to write, never clobber.
                     guard pasteboard.changeCount == stamp else { return }
                     pasteboard.clearContents()
-                    if let saved { pasteboard.setString(saved, forType: .string) }
+                    pasteboard.writeObjects(saved)
                 }
             } else {
                 Synth.commandV()   // registers +/* and pasteboard markers: paste as-is
@@ -215,7 +240,9 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
-            if record(Self.settle(expectation, on: element, paragraphs: paragraphs), expectation, at: index, hard: true) {
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            lastObserved = outcome.observedSelection
+            if record(outcome, expectation, at: index, hard: true) {
                 return true
             }
             NSSound.beep()
@@ -224,7 +251,9 @@ public final class Executor {
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
-            _ = record(Self.settle(expectation, on: element, paragraphs: paragraphs), expectation, at: index, hard: false)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            lastObserved = outcome.observedSelection
+            _ = record(outcome, expectation, at: index, hard: false)
             return true
 
         case .commit(let effect):
@@ -261,7 +290,7 @@ public final class Executor {
         var selectionSlot: Int?
         var lengthSlot: Int?
         var textSlot: Int?
-        if expectation.selection != nil {
+        if expectation.landing != nil {
             selectionSlot = names.count
             names.append(kAXSelectedTextRangeAttribute)
         }
@@ -337,12 +366,16 @@ public final class Executor {
         case .arrowRight: return 124
         case .arrowDown: return 125
         case .arrowUp: return 126
+        case .pageUp: return 116
+        case .pageDown: return 121
         case .delete: return 51
         case .forwardDelete: return 117
         case .enter: return 36
         case .escape: return 53
         case .character(let character):
             switch character {
+            case "a": return 0    // kVK_ANSI_A (⌃A)
+            case "e": return 14   // kVK_ANSI_E (⌃E)
             case "z": return 6    // kVK_ANSI_Z (undo/redo)
             case "v": return 9    // kVK_ANSI_V
             default: return nil

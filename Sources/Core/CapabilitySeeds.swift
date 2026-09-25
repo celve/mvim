@@ -30,5 +30,6 @@ public enum CapabilitySeeds {
     public static let denied: [String: Set<String>] = [
         "notion.id": ["drawCursor", "wholeDocument", "fieldIsSession"],
         "web:notion.so": ["drawCursor", "wholeDocument", "fieldIsSession"],
+        Surface.everywhere: ["nativeMotions"],
     ]
 }

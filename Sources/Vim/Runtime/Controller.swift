@@ -111,7 +111,8 @@ public final class Controller {
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
         guard enabled, event.kind == .keyDown else { return false }
-        guard let token = KeyNotation.token(for: event) else {
+        // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
+        guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive
             // it: the app may move the caret, and a later key would complete
             // the command against a position the user never aimed at (`d`,
@@ -150,6 +151,10 @@ public final class Controller {
         case .passthrough:
             return false
         case .pending, .cancelled:
+            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+                monitor.cancelPending()
+                return false
+            }
             return true
         case .command(let completed):
             // Numbered here, not in `run`, so the three silent drops below are too.
@@ -190,6 +195,10 @@ public final class Controller {
                     }
                 }
             }
+            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+                Diag.dropped(tracker.epoch, commandSeq, command: completed.command, reason: "app-key")
+                return false
+            }
             run(completed, on: binding, seq: commandSeq)
             // Publish even on mid-plan aborts: a .setMode commit may have
             // landed before a later step failed.
@@ -197,6 +206,8 @@ public final class Controller {
             return true
         }
     }
+
+    private static let readsAppKeys = CapabilityProfile(available: [.nativeMotions])
 
     /// A completed command verify-before-run threw away, then handed to its reverify.
     private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
@@ -305,7 +316,7 @@ public final class Controller {
         guard executed else {
             if planned.abortedAtTextCheck(evidence.abortedAt) {
                 // Only lane B checks text, and ← is its one way to collapse; the mode the plan asked for goes too.
-                if let range = selection(of: binding.element, paragraphs: paragraphs), !range.isEmpty {
+                if let read = selection(of: binding.element, paragraphs: paragraphs), !read.caret {
                     executor.execute(PhysicalPlan(.press(.left, count: 1)), on: binding.element, state: &state)
                 }
                 if state.field.mode.isInserting {
@@ -362,10 +373,10 @@ public final class Controller {
 
     /// Fold one command's settle verdicts into the write probe's tally.
     ///
-    /// Only hard settles produce evidence, and only an AX write is ever
-    /// attributed — so this speaks exclusively about `writeSelection` and
-    /// `insertText`, the two capabilities a field can *claim* and then fail to
-    /// deliver. Reads were proven at bind; policies have no settle signal.
+    /// Only hard settles produce evidence, and only an AX write or a native
+    /// key is ever attributed — so this speaks exclusively about the claims a
+    /// field can make and then fail to deliver: `writeSelection`, `insertText`
+    /// and the keys. Reads were proven at bind; policies have no settle signal.
     ///
     /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), persisted and applied
     /// at once, so the next command routes around the lie. The re-resolve is
@@ -374,9 +385,9 @@ public final class Controller {
         from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64
     ) {
-        // A command that issued no AX write — the whole blind lane, and any plan
-        // whose steps were all commits — teaches nothing and should not pay for
-        // the config lookups below. Already on the command's line as `fail=nil`.
+        // A command that issued no AX write or native key — the whole blind lane,
+        // and any plan whose steps were all commits — teaches nothing and should
+        // not pay for the config lookups below. Already on the line as `fail=nil`.
         guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
             return
         }
@@ -425,24 +436,36 @@ public final class Controller {
         on binding: FocusTracker.Binding, operand: Range<Int>?, paragraphs: Bool
     ) -> Bool {
         // Unknown is not empty: a settle can fail *because* the read went dark.
-        guard let range = selection(of: binding.element, paragraphs: paragraphs) else { return false }
-        guard !range.isEmpty else { return true }
+        guard let read = selection(of: binding.element, paragraphs: paragraphs) else { return false }
+        guard !read.caret else { return true }
+        let range = read.range
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, range == operand { return true }
-        guard binding.capabilities.has(.writeSelection) else { return false }
-        executor.execute(
-            PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
-            on: binding.element,
-            state: &state
-        )
+        if binding.capabilities.has(.writeSelection) {
+            executor.execute(
+                PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
+                on: binding.element,
+                state: &state
+            )
+        } else {
+            // ← collapses a selection to its start in every host measured (LIN-1532).
+            guard binding.capabilities.has(.nativeMotions) else { return false }
+            executor.execute(
+                PhysicalPlan(steps: [.press(.left, count: 1), .settle(Expectation(selection: range.lowerBound..<range.lowerBound))]),
+                on: binding.element,
+                state: &state,
+                paragraphs: paragraphs
+            )
+        }
         // The write that stranded this may be the one that lies, so confirm.
-        return selection(of: binding.element, paragraphs: paragraphs).map(\.isEmpty) ?? false
+        return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false
     }
 
-    /// In field offsets, through the markers for a text-content field.
-    private func selection(of element: AXUIElement, paragraphs: Bool) -> Range<Int>? {
-        if paragraphs, let marked = AX.markedSelection(of: element) { return marked.range }
-        return AX.selectedRange(of: element).map { $0.location..<($0.location + $0.length) }
+    /// In field offsets, through the markers for a text-content field, where a selection of one paragraph break is
+    /// empty in offsets but no caret.
+    private func selection(of element: AXUIElement, paragraphs: Bool) -> (range: Range<Int>, caret: Bool)? {
+        if paragraphs, let marked = AX.markedSelection(of: element) { return (marked.range, marked.isCollapsed) }
+        return AX.selectedRange(of: element).map { ($0.location..<($0.location + $0.length), $0.length == 0) }
     }
 
     /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.
