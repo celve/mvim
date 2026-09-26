@@ -140,26 +140,42 @@ public enum OffsetsSource: String, Equatable, Sendable {
     case learned
     /// A `readCaret` override retired the belief.
     case user
+    /// The field has no AX children, so no generated breaks: both counts are `AXValue`'s, whatever its rung learned.
+    case plain
+
+    /// Whether the field's reads teach its rung's read model.
+    public var observes: Bool { self == .start || self == .learned }
 }
 
 /// How a binding reads offsets, and what the movement rule needs to move it.
 public struct ReadModel: Equatable, Sendable {
+    /// At bind, where the profile was resolved.
     public var answer: OffsetsAnswer
     public var source: OffsetsSource
-    /// The stored belief, in force or from another engine.
+    /// The rung's learned answer, in force at this engine.
+    public var learned: OffsetsAnswer?
+    public var pinned: Bool
+    /// The stored belief, in force or not.
     public var belief: Belief?
     public var newEngine: Bool
 
-    public init(answer: OffsetsAnswer, source: OffsetsSource = .start, belief: Belief? = nil, newEngine: Bool = false) {
+    public init(
+        answer: OffsetsAnswer, source: OffsetsSource = .start, learned: OffsetsAnswer? = nil, pinned: Bool = false,
+        belief: Belief? = nil, newEngine: Bool = false
+    ) {
         self.answer = answer
         self.source = source
+        self.learned = learned
+        self.pinned = pinned
         self.belief = belief
         self.newEngine = newEngine
     }
 
-    /// The engine rule for a field that has learned nothing.
-    public static func starting(chromiumWithChildren: Bool) -> OffsetsAnswer {
-        chromiumWithChildren ? .textContent : .value
+    /// One snapshot's answer, since a field gains children as it fills.
+    public func reading(chromium: Bool, children: Bool) -> (answer: OffsetsAnswer, source: OffsetsSource) {
+        guard children else { return (.value, .plain) }
+        if let learned { return (learned, .learned) }
+        return (chromium ? .textContent : .value, pinned ? .user : .start)
     }
 }
 
@@ -176,24 +192,20 @@ public struct ResolvedBeliefs: Equatable, Sendable {
 public extension BeliefStore {
     /// Trial verdicts hold across the whole ladder, as curation's do; the read model lives at `rung` alone.
     func resolve(
-        rungs: [String], rung: String?, versions: Versions, starting: OffsetsAnswer, userPinsOffsets: Bool
+        rungs: [String], rung: String?, versions: Versions, chromium: Bool, children: Bool, userPinsOffsets: Bool
     ) -> ResolvedBeliefs {
         let stored = rung.flatMap { offsetsBelief(at: $0) }
-        var model = ReadModel(answer: starting, belief: stored, newEngine: stored.map { $0.engineKey != versions.engineKey } ?? false)
-        if userPinsOffsets {
-            model.source = .user
-        } else if let stored, !model.newEngine, stored.anchor != true, let answer = stored.offsetsAnswer {
-            model.answer = answer
-            model.source = .learned
-        }
+        let newEngine = stored.map { $0.engineKey != versions.engineKey } ?? false
+        var model = ReadModel(answer: .value, pinned: userPinsOffsets, belief: stored, newEngine: newEngine)
+        if !userPinsOffsets, !newEngine, stored?.anchor != true { model.learned = stored?.offsetsAnswer }
+        (model.answer, model.source) = model.reading(chromium: chromium, children: children)
         let app = versions.app ?? ""
         var broken: Set<Capability> = []
         var inForce: [Belief] = []
         var reopened: [Belief] = []
         for belief in beliefs where rungs.contains(belief.rung) && belief.answer == Belief.broken && belief.appVersion == app {
             guard let capability = belief.capability else { continue }
-            // Without reads nothing can re-judge a verdict, so the blind lane keeps them all.
-            if model.answer == .untrusted || (belief.judgedUnder ?? .value) == model.answer {
+            if (belief.judgedUnder ?? .value) == model.answer {
                 broken.insert(capability)
                 inForce.append(belief)
             } else {
@@ -303,8 +315,8 @@ extension ResolvedBeliefs {
         var lines = inForce.map { "belief \($0.traceFields) in-force" }
         lines += reopened.map { "belief \($0.traceFields) reopened offsets=\(readModel.answer.rawValue)" }
         if let belief = readModel.belief {
-            let state = readModel.source == .learned ? "in-force" : readModel.newEngine ? "stale"
-                : readModel.source == .user ? "retired" : "dates-engine"
+            let state = readModel.newEngine ? "stale" : readModel.pinned ? "retired" : belief.anchor == true ? "dates-engine"
+                : readModel.source == .plain ? "not-this-field" : "in-force"
             lines.append("belief \(belief.traceFields) \(state)")
         }
         return lines

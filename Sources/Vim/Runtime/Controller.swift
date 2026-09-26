@@ -294,7 +294,10 @@ public final class Controller {
             model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
             sampling: sampling
         )
-        sampling.sampled(under: reading.before, markers: reading.markers, evidence: reading.evidence)
+        if reading.sampled {
+            sampling.sampled(markers: reading.markers, evidence: reading.observed.evidence, text: reading.reads.text,
+                             plain: reading.reads.plain)
+        }
         let snapshot = reading.snapshot
         fieldBreaks = snapshot.breaks
         let paragraphs = snapshot.breaks != nil
@@ -393,27 +396,27 @@ public final class Controller {
         epoch: UInt64, seq: UInt64
     ) {
         let run = evidence.attribution
+        let observed = reading.observed
         if let neutral = run.neutral { Diag.neutral(epoch, seq, neutral) }
         // A forced binding resolves nothing to learn against.
         guard let beliefs = binding.beliefs else { return }
         let model = beliefs.readModel
-        let teaches = reading.evidence?.informative == true || run.textMismatch || run.failed != nil
+        let teaches = observed.evidence?.informative == true || run.textMismatch || run.failed != nil
         // No role means no stable key to accumulate against.
         guard let rung = binding.surface.roleRung else {
             if teaches { Diag.notLearned(epoch, seq, reason: "no-rung", failed: run.failed) }
             return
         }
-        if let observed = reading.evidence {
-            tallies[rung, default: Tally()].count(observed)
-            Diag.observed(epoch, seq, observed, under: reading.before)
+        if let evidence = observed.evidence {
+            tallies[rung, default: Tally()].count(evidence)
+            Diag.observed(epoch, seq, evidence, under: observed.before)
         }
-        if run.textMismatch { tallies[rung, default: Tally()].count(.misfit(.textCheck)) }
-        guard teaches || reading.answer != model.answer else { return }
+        if run.textMismatch, observed.source.observes { tallies[rung, default: Tally()].count(.misfit(.textCheck)) }
+        guard teaches || observed.after != model.answer else { return }
         var store = Beliefs.load()
         let stored = store
         let lesson = Learning.learn(
-            store: &store, rung: rung, versions: binding.versions, model: model,
-            snapshot: (reading.before, reading.evidence, reading.answer), run: run,
+            store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
             // The user has the last word: once they set an atom, stop inferring about it.
             overridden: { CapabilityConfig.resolve(binding.surface, capability: $0.rawValue).override != nil },
             provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()

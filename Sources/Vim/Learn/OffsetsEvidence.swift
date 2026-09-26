@@ -129,7 +129,7 @@ public extension FieldReads {
     }
 }
 
-/// Under `value` the markers are read only on a binding's first snapshots, until one is informative.
+/// Under `value` a binding reads the markers only while they could say something, a few times, until they do.
 public struct OffsetsSampling: Equatable, Sendable {
     public static let budget = 3
 
@@ -137,13 +137,20 @@ public struct OffsetsSampling: Equatable, Sendable {
 
     public init() {}
 
-    public func readsMarkers(under answer: OffsetsAnswer) -> Bool {
-        answer != .value || remaining > 0
+    /// A plain read before the first `\n` is in the first paragraph under any count, so no marker read tells anything.
+    public func samples(text: String?, plain: Range<Int>?) -> Bool {
+        guard remaining > 0, let text, let plain else { return false }
+        return text.utf16.prefix(plain.upperBound + 1).contains(10)
     }
 
-    public mutating func sampled(under answer: OffsetsAnswer, markers: Bool, evidence: OffsetsEvidence?) {
-        guard answer == .value, remaining > 0 else { return }
-        remaining = !markers || evidence?.informative == true ? 0 : remaining - 1
+    /// After a sample: a field without markers, or one that has spoken, is sampled no more, and a silence counts only
+    /// from past a newline, where the markers had something to compare.
+    public mutating func sampled(markers: Bool, evidence: OffsetsEvidence?, text: String?, plain: Range<Int>?) {
+        if !markers || evidence?.informative == true {
+            remaining = 0
+        } else if let text, let plain, text.utf16.prefix(plain.lowerBound).contains(10) {
+            remaining = max(0, remaining - 1)
+        }
     }
 }
 

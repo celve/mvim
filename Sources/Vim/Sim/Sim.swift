@@ -58,6 +58,9 @@ public struct Sim {
     /// AX selection writes land in `reads`' coordinates, as Chromium's do (rule 1).
     public var writesInReadOffsets = false
 
+    /// The field has AX children, as a rich-text editor's paragraphs are; a `<textarea>` has none.
+    public var hasChildren = true
+
     /// The read model snapshots are taken under when no learner runs.
     public var readModel: OffsetsAnswer = .value
 
@@ -450,8 +453,8 @@ public extension Sim {
         public var store: BeliefStore
         public var rung: String
         public var versions: Versions
-        /// The engine rule's answer for this field.
-        public var starting: OffsetsAnswer
+        /// Whether the engine rule sees Chromium, which starts a field with children at `textContent`.
+        public var chromium: Bool
         /// The profile before beliefs.
         public var probed: CapabilityProfile
         public var config: [Capability: ConfigChoice] = [:]
@@ -463,12 +466,12 @@ public extension Sim {
 
         public init(
             store: BeliefStore = BeliefStore(), rung: String = "sim|role:AXTextArea", versions: Versions = Versions(app: "1"),
-            starting: OffsetsAnswer = .value, probed: CapabilityProfile
+            chromium: Bool = false, probed: CapabilityProfile
         ) {
             self.store = store
             self.rung = rung
             self.versions = versions
-            self.starting = starting
+            self.chromium = chromium
             self.probed = probed
             // A policy the profile leaves out stands for curation's seed, as `nativeMotions` is seeded off everywhere.
             for policy in Capability.allCases where policy.species == .policy && !probed.has(policy) {
@@ -476,7 +479,7 @@ public extension Sim {
             }
         }
 
-        public var model: ReadModel { resolved?.readModel ?? ReadModel(answer: starting) }
+        public var model: ReadModel { resolved?.readModel ?? ReadModel(answer: chromium ? .textContent : .value) }
     }
 
     /// What a snapshot read, and the answer it was taken under.
@@ -485,40 +488,39 @@ public extension Sim {
         let breaks: ParagraphBreaks?
         let emptyParagraph: Bool
         let textlessLeaves: Bool
-        let before: OffsetsAnswer
-        let evidence: OffsetsEvidence?
-        let answer: OffsetsAnswer
+        let observed: Learning.Observation
     }
 }
 
 extension Sim {
     /// The snapshot's reads under the current read model; a learner learns from them before they are interpreted.
     mutating func read() -> Reading {
-        let current = learner.map { Learning.current($0.model, starting: $0.starting) } ?? readModel
-        let readsMarkers = markers && (learner?.sampling.readsMarkers(under: current) ?? (current != .value))
+        let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
+            ?? (readModel, .start)
+        let plain = unreadableSelection ? nil : readSelection
+        let sampled = current == .value && source.observes && learner?.sampling.samples(text: text, plain: plain) == true
         let reads = FieldReads(
             text: text,
-            plain: unreadableSelection ? nil : readSelection,
+            plain: plain,
             selectedText: readSelectedText,
-            markers: readsMarkers ? markerReads : nil
+            markers: markers && (current != .value || sampled) ? markerReads : nil
         )
-        var answer = current
-        var evidence: OffsetsEvidence?
+        var observed = Learning.Observation(before: current, source: source)
         if var learner {
-            (evidence, answer) = Learning.observe(reads, current: current, model: learner.model)
-            learner.sampling.sampled(under: current, markers: markers, evidence: evidence)
-            if let evidence {
+            observed = Learning.observe(reads, before: current, source: source, newEngine: learner.model.newEngine)
+            if sampled { learner.sampling.sampled(markers: markers, evidence: observed.evidence, text: text, plain: plain) }
+            if let evidence = observed.evidence {
                 learner.tally.count(evidence)
                 learner.evidence.append(evidence)
             }
             self.learner = learner
         }
-        let interpreted = reads.interpreted(under: answer)
+        let interpreted = reads.interpreted(under: observed.after)
         return Reading(
             // A snapshot takes the plain read even when a settle would find none, as it always has.
-            selection: answer == .value ? readSelection : interpreted.selection,
+            selection: observed.after == .value ? readSelection : interpreted.selection,
             breaks: interpreted.breaks, emptyParagraph: interpreted.emptyParagraph, textlessLeaves: interpreted.textlessLeaves,
-            before: current, evidence: evidence, answer: answer
+            observed: observed
         )
     }
 
@@ -529,11 +531,11 @@ extension Sim {
 
     mutating func learn(from reading: Reading) {
         guard var learner else { return }
-        if attribution.textMismatch { learner.tally.count(.misfit(.textCheck)) }
+        if attribution.textMismatch, reading.observed.source.observes { learner.tally.count(.misfit(.textCheck)) }
         let config = learner.config
         let lesson = Learning.learn(
             store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
-            snapshot: (reading.before, reading.evidence, reading.answer), run: attribution,
+            observed: reading.observed, run: attribution,
             overridden: { config[$0]?.override != nil }, provenance: Provenance(), tally: learner.tally
         )
         learner.lessons.append(lesson)
@@ -544,8 +546,8 @@ extension Sim {
     mutating func resolveBeliefs() {
         guard var learner else { return }
         let resolved = learner.store.resolve(
-            rungs: [learner.rung], rung: learner.rung, versions: learner.versions, starting: learner.starting,
-            userPinsOffsets: learner.config[.readCaret]?.override != nil
+            rungs: [learner.rung], rung: learner.rung, versions: learner.versions, chromium: learner.chromium,
+            children: hasChildren, userPinsOffsets: learner.config[.readCaret]?.override != nil
         )
         learner.resolved = resolved
         profile = CapabilityResolver.resolve(probed: learner.probed, config: learner.config, beliefs: resolved).profile

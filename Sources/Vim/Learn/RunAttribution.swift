@@ -26,8 +26,9 @@ public struct RunAttribution: Equatable, Sendable {
         case .settle(let expectation):
             if passed {
                 if let attributed = expectation.checkedKey ?? pending { settled.insert(attributed) }
-            } else if expectation.failedOnTextOnly(selection: selection, length: length, selectedText: selectedText) {
-                textMismatch = true
+            } else if let expected = expectation.selectedText, expectation.rangeHeld(selection: selection, length: length) {
+                // The range held, so no write is at fault; only a text read back, and different, contradicts the offsets.
+                if let selectedText, !Expectation.sameText(expected, selectedText) { textMismatch = true }
             } else if expectation.blame == nil {
                 failed = pending
             } else {

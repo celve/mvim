@@ -1,17 +1,29 @@
 /// The learner's two rules for one command, shared by the controller and the Sim.
 public enum Learning {
-    /// The snapshot's evidence, and the answer it is read under: a move toward safety takes effect at once.
-    public static func observe(
-        _ reads: FieldReads, current: OffsetsAnswer, model: ReadModel
-    ) -> (evidence: OffsetsEvidence?, answer: OffsetsAnswer) {
-        // A user override pins the answer and retires the belief.
-        guard model.source != .user, let evidence = reads.evidence(current: current) else { return (nil, current) }
-        return (evidence, current.next(evidence, newEngine: model.newEngine))
+    /// What a snapshot read about the offsets: the answer it started from, and the one it was taken under.
+    public struct Observation: Equatable, Sendable {
+        public var before: OffsetsAnswer
+        public var source: OffsetsSource
+        public var evidence: OffsetsEvidence?
+        public var after: OffsetsAnswer
+
+        public init(before: OffsetsAnswer, source: OffsetsSource, evidence: OffsetsEvidence? = nil, after: OffsetsAnswer? = nil) {
+            self.before = before
+            self.source = source
+            self.evidence = evidence
+            self.after = after ?? before
+        }
     }
 
-    /// The answer a snapshot starts from: a learned one, or the engine rule's for this snapshot.
-    public static func current(_ model: ReadModel, starting: OffsetsAnswer) -> OffsetsAnswer {
-        model.source == .learned ? model.answer : starting
+    /// A move toward safety takes effect on the snapshot that saw it.
+    public static func observe(
+        _ reads: FieldReads, before: OffsetsAnswer, source: OffsetsSource, newEngine: Bool
+    ) -> Observation {
+        // A user override pins the answer, and a field with no children has no breaks to count.
+        guard source.observes, let evidence = reads.evidence(current: before) else {
+            return Observation(before: before, source: source)
+        }
+        return Observation(before: before, source: source, evidence: evidence, after: before.next(evidence, newEngine: newEngine))
     }
 
     public struct Move: Equatable, Sendable {
@@ -37,17 +49,14 @@ public enum Learning {
     }
 
     /// The trial rule for writes and keys, and the observation rule for offsets, applied to `store`.
-    ///
-    /// `snapshot` is the answer the snapshot started from and the one the command ran under.
     public static func learn(
-        store: inout BeliefStore, rung: String, versions: Versions, model: ReadModel,
-        snapshot: (before: OffsetsAnswer, evidence: OffsetsEvidence?, after: OffsetsAnswer),
+        store: inout BeliefStore, rung: String, versions: Versions, model: ReadModel, observed snapshot: Observation,
         run: RunAttribution, overridden: (Capability) -> Bool, provenance: Provenance, tally: Tally
     ) -> Lesson {
         var lesson = Lesson(neutral: run.neutral)
         var answer = snapshot.after
         var why = snapshot.evidence?.why
-        if model.source != .user {
+        if snapshot.source.observes {
             if run.textMismatch {
                 let next = answer.next(.misfit(.textCheck), newEngine: model.newEngine)
                 if next != answer { (answer, why) = (next, .textCheck) }
@@ -55,7 +64,7 @@ public enum Learning {
             let moved = answer != snapshot.before
             if moved {
                 lesson.recorded = store.record(offsets: answer, at: rung, versions: versions, provenance: provenance, tally: tally)
-            } else if model.source != .learned, answer != .value, snapshot.evidence?.informative == true {
+            } else if snapshot.source == .start, answer != .value, snapshot.evidence?.informative == true {
                 // Dates the engine a starting answer was confirmed under, so a later engine can restore `value`.
                 lesson.recorded = store.record(
                     offsets: answer, at: rung, anchor: true, versions: versions, provenance: provenance, tally: tally

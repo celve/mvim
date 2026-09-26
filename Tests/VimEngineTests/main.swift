@@ -2557,9 +2557,8 @@ var trials = BeliefStore()
 precondition(committing(&trials, .insertText))
 // ...and says so exactly once, so a stray strike never re-fires the republish.
 precondition(!committing(&trials, .insertText) && !committing(&trials, .insertText))
-func broken(_ store: BeliefStore, rung: String = learnRung, versions: Versions = learnVersions,
-            starting: OffsetsAnswer = .value) -> Set<Capability> {
-    store.resolve(rungs: [rung], rung: rung, versions: versions, starting: starting, userPinsOffsets: false).broken
+func broken(_ store: BeliefStore, rung: String = learnRung, versions: Versions = learnVersions) -> Set<Capability> {
+    store.resolve(rungs: [rung], rung: rung, versions: versions, chromium: false, children: true, userPinsOffsets: false).broken
 }
 precondition(broken(trials) == [.insertText])
 
@@ -2572,7 +2571,8 @@ for start in [BeliefStore(), trials] {
     var store = start
     let lesson = Learning.learn(
         store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        snapshot: (.value, nil, .value), run: passed, overridden: { _ in false }, provenance: Provenance(), tally: Tally()
+        observed: Learning.Observation(before: .value, source: .start), run: passed, overridden: { _ in false },
+        provenance: Provenance(), tally: Tally()
     )
     precondition(store == start && !lesson.republish && lesson.committed == nil)
 }
@@ -2598,7 +2598,8 @@ for overridden in [true, false] {
     var store = BeliefStore()
     let lesson = Learning.learn(
         store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        snapshot: (.value, nil, .value), run: struck, overridden: { _ in overridden }, provenance: Provenance(), tally: Tally()
+        observed: Learning.Observation(before: .value, source: .start), run: struck, overridden: { _ in overridden },
+        provenance: Provenance(), tally: Tally()
     )
     precondition(overridden ? lesson.skip == .userOverride && store.beliefs.isEmpty
                  : lesson.committed == .writeSelection && lesson.republish && broken(store) == [.writeSelection])
@@ -3098,24 +3099,31 @@ precondition(FieldReads(text: "ab", plain: 0..<1, selectedText: "a", markers: Ma
     .interpreted(under: .textContent) == (nil, ParagraphBreaks(), false, false))
 precondition(FieldReads(text: "ab", plain: 0..<1).interpreted(under: .untrusted) == (nil, nil, false, false))
 
-// Under `value` the markers are sampled on a binding's first snapshots, until one says something or the field has none.
+// Under `value` the markers are sampled only where they could say something, a few times, until they do.
 var sampling = OffsetsSampling()
+precondition(!sampling.samples(text: "ab", plain: 1..<1) && !sampling.samples(text: "ab\ncd", plain: nil))
+precondition(!sampling.samples(text: "ab\ncd", plain: 1..<1), "a plain read before the first newline is paragraph 1's under any count")
+precondition(sampling.samples(text: "ab\ncd", plain: 2..<2) && sampling.samples(text: "ab\ncd", plain: 0..<2))
+sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 0..<2)
+precondition(sampling.remaining == OffsetsSampling.budget, "a silence at paragraph 1's end costs nothing")
 for _ in 1..<OffsetsSampling.budget {
-    sampling.sampled(under: .value, markers: true, evidence: .neutral(.noBreaks))
-    precondition(sampling.readsMarkers(under: .value))
+    sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 3..<3)
+    precondition(sampling.samples(text: "ab\ncd", plain: 3..<3))
 }
-sampling.sampled(under: .value, markers: true, evidence: nil)
-precondition(!sampling.readsMarkers(under: .value) && sampling.readsMarkers(under: .textContent) && sampling.readsMarkers(under: .untrusted))
+sampling.sampled(markers: true, evidence: nil, text: "ab\ncd", plain: 4..<4)
+precondition(!sampling.samples(text: "ab\ncd", plain: 3..<3))
 var informed = OffsetsSampling()
-informed.sampled(under: .value, markers: true, evidence: supportsValue)
+informed.sampled(markers: true, evidence: supportsValue, text: nil, plain: nil)
 var markerless = OffsetsSampling()
-markerless.sampled(under: .value, markers: false, evidence: nil)
-precondition(!informed.readsMarkers(under: .value) && !markerless.readsMarkers(under: .value))
+markerless.sampled(markers: false, evidence: nil, text: nil, plain: nil)
+precondition(!informed.samples(text: "ab\ncd", plain: 3..<3) && !markerless.samples(text: "ab\ncd", plain: 3..<3))
 
 // The dependency: a trial verdict holds only under the offsets answer it was judged under.
+/// `starting: .textContent` is a Chromium field with children.
 func resolving(_ store: BeliefStore, starting: OffsetsAnswer = .value, versions: Versions = learnVersions,
-               pins: Bool = false) -> ResolvedBeliefs {
-    store.resolve(rungs: diaPageField.rungs, rung: learnRung, versions: versions, starting: starting, userPinsOffsets: pins)
+               pins: Bool = false, children: Bool = true) -> ResolvedBeliefs {
+    store.resolve(rungs: diaPageField.rungs, rung: learnRung, versions: versions, chromium: starting == .textContent,
+                  children: children, userPinsOffsets: pins)
 }
 var dependent = BeliefStore()
 precondition(committing(&dependent, .writeSelection))
@@ -3129,7 +3137,10 @@ precondition(learnedTextContent.broken.isEmpty, "a verdict judged under value re
 precondition(committing(&dependent, .writeSelection, under: .textContent), "a new strike re-judges it under the answer in force")
 precondition(resolving(dependent).broken == [.writeSelection])
 precondition(dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
-precondition(resolving(dependent).broken == [.writeSelection], "without reads nothing re-judges a verdict")
+precondition(resolving(dependent).broken.isEmpty && resolving(dependent).reopened.map(\.question) == ["writeSelection"],
+             "any change of the offsets answer reopens what the old one judged")
+var judgedUntrusted = dependent
+precondition(committing(&judgedUntrusted, .writeSelection, under: .untrusted) && resolving(judgedUntrusted).broken == [.writeSelection])
 precondition(!dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(tag: "e9.c9"), tally: Tally()))
 precondition(dependent.offsetsBelief(at: learnRung)?.provenance.tag == nil, "a read model that stood is not rewritten")
 
@@ -3147,6 +3158,18 @@ precondition(resolving(anchored).readModel == ReadModel(answer: .value, belief: 
 precondition(resolving(anchored, starting: .textContent).readModel.answer == .textContent)
 precondition(resolving(anchored, versions: Versions(app: "1.50")).readModel.newEngine)
 
+// A field with no children has no generated breaks: whatever its rung learned, it reads plain offsets and judges under them.
+var richSibling = BeliefStore()
+precondition(richSibling.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+let textareaBeside = resolving(richSibling, children: false)
+precondition(textareaBeside.readModel.answer == .value && textareaBeside.readModel.source == .plain
+             && textareaBeside.readModel.learned == .untrusted)
+precondition(textareaBeside.traceLines.last?.hasSuffix(" not-this-field") == true)
+precondition(CapabilityResolver.resolve(probed: axProfile, config: [:], beliefs: textareaBeside).profile.has(.readCaret))
+precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: true, children: false) == (.value, .plain))
+precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: false, children: true) == (.textContent, .learned))
+precondition(ReadModel(answer: .value, pinned: true).reading(chromium: true, children: true) == (.textContent, .user))
+
 // The old learner's records carry over judged under value: native demotions keep, Chromium rich text reopens.
 let migrated = BeliefStore(demotions: [(learnRung, "1.49.1", "writeSelection"), (learnRung, "1.49.1", "noSuchAtom")])
 precondition(migrated.beliefs.count == 1 && migrated.beliefs[0].judgedUnder == .value && migrated.beliefs[0].provenance.tag == "migrated")
@@ -3154,9 +3177,10 @@ precondition(resolving(migrated).broken == [.writeSelection] && resolving(migrat
 
 // The observation rule: a move is recorded and republished, a confirmation of a start only dates the engine.
 func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, OffsetsEvidence?, OffsetsAnswer),
-            run: RunAttribution = RunAttribution()) -> Learning.Lesson {
-    Learning.learn(store: &store, rung: learnRung, versions: learnVersions, model: model, snapshot: snapshot, run: run,
-                   overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"), tally: Tally())
+            source: OffsetsSource = .start, run: RunAttribution = RunAttribution()) -> Learning.Lesson {
+    let observed = Learning.Observation(before: snapshot.0, source: source, evidence: snapshot.1, after: snapshot.2)
+    return Learning.learn(store: &store, rung: learnRung, versions: learnVersions, model: model, observed: observed, run: run,
+                          overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"), tally: Tally())
 }
 var observed = BeliefStore()
 let moved = lesson(&observed, model: ReadModel(answer: .value), snapshot: (.value, supportsTextContent, .textContent))
@@ -3180,13 +3204,28 @@ var mismatched = BeliefStore()
 let charged = lesson(&mismatched, model: ReadModel(answer: .value), snapshot: (.value, nil, .value), run: textChecked)
 precondition(charged.move == Learning.Move(from: .value, to: .untrusted, why: .textCheck) && charged.committed == nil)
 var userPinned = BeliefStore()
-precondition(lesson(&userPinned, model: ReadModel(answer: .value, source: .user), snapshot: (.value, nil, .value), run: textChecked).move == nil
-             && userPinned.beliefs.isEmpty, "a user override pins the answer")
+precondition(lesson(&userPinned, model: ReadModel(answer: .value, source: .user, pinned: true), snapshot: (.value, nil, .value),
+                    source: .user, run: textChecked).move == nil && userPinned.beliefs.isEmpty, "a user override pins the answer")
+var plainField = BeliefStore()
+precondition(lesson(&plainField, model: ReadModel(answer: .value, source: .plain), snapshot: (.value, nil, .value),
+                    source: .plain, run: textChecked).move == nil && plainField.beliefs.isEmpty,
+             "a field with no children has no breaks to learn about")
 var wrongRange = RunAttribution()
 wrongRange.record(.setSelection(0..<4))
 wrongRange.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                   selection: 1..<5, length: 7, selectedText: "ne\nt")
 precondition(!wrongRange.textMismatch && wrongRange.failed == .writeSelection)
+// An unanswered text is no contradiction, and the range held, so neither the offsets nor the write answer for it.
+var unanswered = RunAttribution()
+unanswered.record(.setSelection(0..<4))
+unanswered.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
+                  selection: 0..<4, length: 7, selectedText: nil)
+precondition(!unanswered.textMismatch && unanswered.failed == nil)
+// Nor does a boundary side the markers refused while the text matched.
+var sideOnly = RunAttribution()
+sideOnly.record(.settle(Expectation(selection: 0..<4, length: 7, edge: .paragraphEnd, selectedText: "one")), passed: false,
+                selection: 0..<4, length: 7, selectedText: "one")
+precondition(!sideOnly.textMismatch && sideOnly.failed == nil)
 
 // Exemptions stay exemptions, logged as neutral evidence with the reason.
 let offLine = Expectation(landing: .exact(4..<4), blame: Expectation.Blame(
@@ -3315,14 +3354,14 @@ precondition(Expectation(selectedText: "ab").matches(selection: nil, length: nil
 // MARK: - Beliefs end to end (the Sim's Chromium read fault)
 
 /// Chromium rich text: reads and writes skip generated breaks, and markers, where it has them, follow the real caret.
-func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers: Bool, starting: OffsetsAnswer = .value,
+func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers: Bool, chromium: Bool = false,
                  store: BeliefStore = BeliefStore()) -> Sim {
     var host = Sim(text: text, caret: caret, profile: profile)
     host.reads = omitsBreaks
     host.writesInReadOffsets = true
     host.markers = markers
     host.emulatesKeys = true
-    host.learn(with: Sim.Learner(store: store, starting: starting, probed: profile))
+    host.learn(with: Sim.Learner(store: store, chromium: chromium, probed: profile))
     return host
 }
 // LIN-1590's worked example: the caret on the `w` of `world` is 16 in `AXValue` and 11 to Chromium.
@@ -3331,7 +3370,8 @@ let workedExample = "a\nb\nc\nd\ne\nhello world"
 // With #11's candidate, the belief reaches textContent on the first informative snapshot, where the rule sees none.
 var firstParagraph = chromiumSim(workedExample, caret: 0, profile: axProfile, markers: true)
 firstParagraph.type("l")
-precondition(firstParagraph.learner!.model.answer == .value && firstParagraph.learner!.evidence == [.neutral(.noBreaks)])
+precondition(firstParagraph.learner!.model.answer == .value && firstParagraph.learner!.evidence.isEmpty,
+             "a caret in paragraph 1 reads no markers")
 var discovered = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true)
 discovered.type("ciwthere")
 discovered.feed("<Esc>")
@@ -3369,7 +3409,7 @@ newEngine.writesInReadOffsets = false
 newEngine.update(to: Versions(app: "2"))
 newEngine.type("h")
 precondition(newEngine.learner!.model.answer == .value && newEngine.learner!.evidence.last == supportsValue)
-var fixedChromium = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true, starting: .textContent,
+var fixedChromium = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true, chromium: true,
                                 store: discovered.learner!.store)
 fixedChromium.reads = nil
 fixedChromium.writesInReadOffsets = false
@@ -3390,6 +3430,27 @@ precondition(reopening.learner!.resolved!.reopened.map(\.question) == ["writeSel
 reopening.type("ciwthere")
 precondition(reopening.text == "a\nb\nc\nd\ne\nhello there" && reopening.settleFailures == 0)
 
+// The first informative snapshot, even after many that could say nothing in the same binding.
+var firstThenLater = chromiumSim("alpha beta gamma\nb\nc\nd\ne\nhello world", caret: 2, profile: axProfile, markers: true)
+firstThenLater.type("llll")
+precondition(firstThenLater.caret == 6 && firstThenLater.learner!.model.answer == .value)
+precondition(firstThenLater.learner!.sampling.remaining == OffsetsSampling.budget, "paragraph 1 spends no samples")
+firstThenLater.type("5jl")
+precondition(firstThenLater.learner!.model.answer == .textContent && firstThenLater.learner!.evidence.last == supportsTextContent)
+
+// A textarea beside the rich field keeps its plain caret, whatever the rung learned, and teaches the rung nothing.
+var untrustedRung = BeliefStore()
+_ = untrustedRung.record(offsets: .untrusted, at: "sim|role:AXTextArea", versions: Versions(app: "1"), provenance: Provenance(),
+                         tally: Tally())
+var textarea = Sim(text: "say hello world", caret: 6, profile: axProfile)
+textarea.hasChildren = false
+textarea.learn(with: Sim.Learner(store: untrustedRung, probed: axProfile))
+precondition(textarea.profile.has(.readCaret) && textarea.learner!.model.source == .plain)
+textarea.type("ciwbye")
+textarea.feed("<Esc>")
+precondition(textarea.text == "say bye world" && textarea.settleFailures == 0)
+precondition(textarea.learner!.store == untrustedRung && textarea.learner!.evidence.isEmpty)
+
 // The trial rule, end to end: one ignored write commits, judged under the answer it ran under.
 var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
 ignored.swallowsReplace = true
@@ -3398,7 +3459,7 @@ ignored.type("ciw")
 precondition(ignored.learner!.lessons.last?.committed == .insertText && !ignored.profile.has(.insertText))
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 // Neutral evidence, end to end: an off-target ⌃A in Chromium rich text rings and teaches nothing.
-var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, starting: .textContent)
+var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
 chipKey.type("0")
 precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)

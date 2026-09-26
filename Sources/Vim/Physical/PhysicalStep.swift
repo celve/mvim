@@ -309,13 +309,11 @@ public struct Expectation: Equatable, Sendable {
             || !expected.utf16.contains(0xFFFC) && FieldReads.withoutAttachments(observed) == expected
     }
 
-    /// A failure that got the range and length right: the selected text is another's, whatever the offsets read.
-    public func failedOnTextOnly(selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String?) -> Bool {
-        guard selectedText != nil else { return false }
+    /// Whether the range and length held, whatever the selected text read.
+    public func rangeHeld(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
         var offsetsOnly = Expectation(landing: landing, length: length, edge: edge, blame: blame)
         offsetsOnly.longest = longest
         return offsetsOnly.matches(selection: observed, length: observedLength)
-            && !matches(selection: observed, length: observedLength, selectedText: observedText)
     }
 
     /// `.between` made exact from kept carets; a key left at either end is blamed.

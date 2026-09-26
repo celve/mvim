@@ -44,9 +44,8 @@ public enum FieldProber {
             return (capability, ConfigChoice(override: override, seededOff: resolution.isSeededOff))
         })
         let beliefs = Beliefs.load().resolve(
-            rungs: surface.rungs, rung: surface.roleRung, versions: versions,
-            starting: ReadModel.starting(chromiumWithChildren: chromium && Snapshotter.hasParagraphs(element)),
-            userPinsOffsets: choices[.readCaret]?.override != nil
+            rungs: surface.rungs, rung: surface.roleRung, versions: versions, chromium: chromium,
+            children: Snapshotter.hasParagraphs(element), userPinsOffsets: choices[.readCaret]?.override != nil
         )
         let resolved = CapabilityResolver.resolve(probed: probed, config: choices, beliefs: beliefs)
         return (resolved.profile, resolved.report, beliefs)
@@ -99,12 +98,11 @@ public enum FieldProber {
 public enum Snapshotter {
     public struct Reading {
         public let snapshot: FieldSnapshot
-        /// The answer the snapshot started from, and the one it was taken under.
-        public let before: OffsetsAnswer
-        public let answer: OffsetsAnswer
-        public let evidence: OffsetsEvidence?
-        /// The field answered a marker read.
+        public let observed: Learning.Observation
+        /// The markers were read under `value` for evidence alone, and whether the field answered.
+        public let sampled: Bool
         public let markers: Bool
+        public let reads: FieldReads
     }
 
     public static func snapshot(
@@ -116,12 +114,11 @@ public enum Snapshotter {
         model: ReadModel = ReadModel(answer: .value),
         sampling: OffsetsSampling = OffsetsSampling()
     ) -> Reading {
-        // The engine rule is re-read per snapshot, as the hard-coded switch was: a field gains children as it fills.
-        let current = model.source == .learned
-            ? model.answer : ReadModel.starting(chromiumWithChildren: chromium && hasParagraphs(element))
+        // Re-read per snapshot, as the hard-coded switch was: a field gains children as it fills.
+        let (current, source) = model.reading(chromium: chromium, children: hasParagraphs(element))
         // Observation keeps running under `untrusted`, whose withheld caret is still read.
-        let caret = capabilities.has(.readCaret) || model.source == .learned && model.answer == .untrusted
-        let readsMarkers = caret && sampling.readsMarkers(under: current)
+        let caret = capabilities.has(.readCaret) || model.learned == .untrusted
+        let mayRead = caret && (current != .value || source.observes && sampling.remaining > 0)
         // One IPC for the whole volatile half. The capabilities gate which
         // slots are *used*, not which are fetched.
         var names = [
@@ -131,16 +128,20 @@ public enum Snapshotter {
             "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
             kAXSelectedTextAttribute,        // 4
         ]
-        if readsMarkers { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
+        if mayRead { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
         let reads = AX.attributes(names, of: element)
-        let marked = readsMarkers ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
+        let sampled = mayRead && current == .value && sampling.samples(text: reads.string(0), plain: plain)
+        let marked = mayRead && (current != .value || sampled)
+            ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
         var fieldReads = FieldReads(
             text: reads.string(0),
-            plain: reads.range(1).map { $0.location..<($0.location + $0.length) },
+            plain: plain,
             selectedText: reads.string(4),
             markers: marked.map { markerReads(of: element, text: reads.string(0), marked: $0) }
         )
-        let (evidence, answer) = Learning.observe(fieldReads, current: current, model: model)
+        let observed = Learning.observe(fieldReads, before: current, source: source, newEngine: model.newEngine)
+        let answer = observed.after
         // Only the snapshot reads the empty paragraph, which costs four more round trips.
         if answer == .textContent, let marked, fieldReads.markers?.breaks != nil {
             fieldReads.markers?.emptyParagraph = marked.inEmptyParagraph
@@ -167,7 +168,7 @@ public enum Snapshotter {
             caretInEmptyParagraph: interpreted.emptyParagraph,
             textlessLeaves: interpreted.textlessLeaves
         )
-        return Reading(snapshot: snapshot, before: current, answer: answer, evidence: evidence, markers: marked != nil)
+        return Reading(snapshot: snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: fieldReads)
     }
 
     /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.

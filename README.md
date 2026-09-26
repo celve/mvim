@@ -391,22 +391,23 @@ or in one app natively — and keeps them in `fieldBeliefs`, a disposable cache:
   `textContent` is Chromium's without the paragraph breaks it generates (the text-marker path), and
   `untrusted` withholds the caret, so commands take the blind lane (`ciw` is ⌥← ⇧⌥→ ⌘X there, and
   Visual mode rings). A Chromium field with children starts at `textContent` and any other field at
-  `value`. Every snapshot compares the plain `AXSelectedTextRange` with the text markers, and a
-  selection's `AXSelectedText` with what each answer predicts. One observation moves the answer
-  toward `textContent` or `untrusted`, on the snapshot it was made on; evidence for `value` moves
-  it back only when the web engine changed (an Electron app's framework, else the app), and
-  otherwise to `untrusted`. Under `value` the markers are read only on a binding's first three
-  snapshots.
+  `value`; a field with no children (a `<textarea>`, an `<input>`) has no generated breaks, so it
+  always counts as `AXValue` does and teaches nothing. Every snapshot compares the plain
+  `AXSelectedTextRange` with the text markers, and a selection's `AXSelectedText` with what each
+  answer predicts. One observation moves the answer toward `textContent` or `untrusted`, on the
+  snapshot it was made on; evidence for `value` moves it back only when the web engine changed (an
+  Electron app's framework, else the app), and otherwise to `untrusted`. Under `value` the markers
+  are read only where they could tell something, a newline at or before the plain caret, and a
+  binding stops after three such reads say nothing.
 
 A write or key answer records the offsets answer it was judged under and holds only while that
-answer does (every answer holds while the field is `untrusted`, where nothing can re-judge one):
-a demotion made while mvim misread the field's offsets reopens once the offsets answer changes.
-Demotions from before beliefs carry over as judged under `value`.
+answer does: a demotion made while mvim misread the field's offsets reopens once the offsets answer
+changes. Demotions from before beliefs carry over as judged under `value`.
 
 The bind line shows the read model as `offsets=<answer>/<source>`, where the source is `start`
-(the rule above), `learned` or `user`, followed by one `belief` line per stored answer that touched
-the field, with its provenance and whether it is `in-force`, `reopened`, `stale` (another engine's)
-or only `dates-engine`. In the menu, a demotion reads `✗ learned`, and so does **Read caret** while
+(the rule above), `learned`, `user` or `plain` (no children), followed by one `belief` line per
+stored answer that touched the field, with its provenance and whether it is `in-force`, `reopened`,
+`stale` (another engine's), `not-this-field` (a field with no children) or only `dates-engine`. In the menu, a demotion reads `✗ learned`, and so does **Read caret** while
 the field is `untrusted`; choosing On or Off for a row retires the belief behind it. To flush them
 all:
 
