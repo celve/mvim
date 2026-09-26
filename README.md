@@ -89,8 +89,8 @@ mvim/
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
-│   │   │   State,Text,Sim      #   assembly, planners, state + reducer, text math,
-│   │   │                       #   simulated host
+│   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
+│   │   │   Learn               #   simulated host, the learner's beliefs
 │   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
 │                               #   menu, the whole UI), its AppModel, and Updater (Sparkle)
@@ -128,9 +128,9 @@ on it, so nothing carries across by itself — there is no migration code:
    `.release/Norm.app` survives `make clean`. An item left behind can be removed under System
    Settings → General → Login Items.
 2. **Before launching mvim, carry your settings across** — per-app Auto / Off / Force,
-   capability overrides, learned priors. They stay in the `com.loom.Norm` domain, which is left
+   capability overrides, learned demotions. They stay in the `com.loom.Norm` domain, which is left
    in place; skip this to start fresh, re-entering policies and overrides from the menu while the
-   priors are learned again:
+   demotions are learned again:
 
    ```sh
    defaults export com.loom.Norm - | defaults import com.loom.mvim -
@@ -258,7 +258,8 @@ each type's file; `grep -rn '// MARK: - Recorder' Sources/Vim` is the index.
 
 Five categories: `bind` (a field became vim's, with its whole capability resolution),
 `cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
-answered instead), `learn` (a demotion committed, or the reason one was not), `gate` (an
+answered instead), `learn` (a [belief](#learned-beliefs) changed, evidence that counted for
+neither answer, or the reason nothing was learned), `gate` (an
 element that did not become a binding). Every line carries `e<epoch>.c<seq>` — the binding
 and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
 command line `e12.c47 …`; the word boundary catches both and keeps `e120` out.
@@ -276,16 +277,20 @@ a blind keypress, which can never name the capability it failed, so it rings wit
 the learner anything. A `!` after a native key names that key, and a failure blames it
 (`fail=lineStartKey`) when a caret key left a selection, or, outside web content, when the field
 still reads as it did before the key although the key had somewhere to go. A landing somewhere
-else aborts without learning.
+else aborts without learning. Where a key's lane exempts a failure from blame, a `learn` line says
+so: `neutral q=lineStartKey why=paragraph-lines` (a line key off target in Chromium's rich text),
+`why=empty-paragraph` (a key from a caret in an empty paragraph) or `why=web-content` (a word or
+paragraph key that stayed put in web content).
 
-When keys made the selection an edit is about to delete or type over, the edit first checks
-the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
-waits for `AXSelectedText` to equal the text the plan selected from `AXValue`, not counting the
-U+FFFC Chromium writes into it for each icon or other element with no text. Chromium's
-rich-text fields misread the caret, so the keys can select other text while every offset reads
-back as planned. A failed check presses ← to drop that selection and leaves mvim in Normal
-mode. Its `settle` line adds `text=(N)`, a length and never the text, on both sides; a `FAIL`
-whose `sel` and `len` agree failed on the text.
+Before an edit deletes or types over a selection, it checks the selected text: `ciw` is
+`W!!R!CCC` with AX selection writes and `P2P5!!P?CCC` without, where the second `!` waits for
+`AXSelectedText` to equal the text the plan selected from `AXValue`, not counting the U+FFFC
+Chromium writes into it for each icon or other element with no text. A misread caret puts keys
+and exact writes alike on other text while every offset reads back as planned. A failed check
+presses ← to drop that selection, leaves mvim in Normal mode, and tells the
+[offsets belief](#learned-beliefs) that its answer does not fit. Its `settle` line adds `text=(N)`,
+a length and never the text, on both sides (the text itself only with text recording on); a
+`FAIL` whose `sel` and `len` agree failed on the text.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
@@ -294,10 +299,10 @@ sat behind the settle and a lying field decided which mode mvim was in — `mode
 on a `steps=W!R!CCC abort@3` line is the signature of that bug.
 
 A Chromium rich-text field (a contenteditable in Chrome, Dia or an Electron app; its bind
-line says `chromium=1`) names its selection in text content: `AXValue` without the `\n`
-Chromium generates where a paragraph starts. mvim plans in `AXValue` offsets and converts at
-the field's edge, so a `settle` line's `want` and `got` are the field's own offsets, behind the
-planner's by the paragraph breaks before them. Where one field offset is both a paragraph's end
+line says `chromium=1 offsets=textContent/…`) names its selection in text content: `AXValue`
+without the `\n` Chromium generates where a paragraph starts. mvim plans in `AXValue` offsets
+and converts at the field's edge, so a `settle` line's `want` and `got` are the field's own
+offsets, behind the planner's by the paragraph breaks before them. Where one field offset is both a paragraph's end
 and the next one's start, `edge=end` or `edge=start` says which the settle waited for.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
@@ -357,11 +362,13 @@ should, including a caret key that leaves a selection (as a select-all binding w
 nothing where it had somewhere to go, is learned off for that surface like a write that lies, and mvim
 counts arrows there again; switch it back on from the menu. In Chromium's rich text a key that lands
 somewhere else only aborts the command, because one paragraph can be several `AXValue` lines there (a
-mention chip) and a working key lands off the model's line; turn such a key off from the menu.
+mention chip) and a working key lands off the model's line; its `learn` line says `why=paragraph-lines`,
+and you can turn such a key off from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
 paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
-(LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
+(LIN-1564), and where that fails the caret is unknown and the command goes blind. Which fields
+count this way is a [belief](#learned-beliefs), checked on every snapshot. Keys are pressed
 even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
 the caret the command starts from. An empty paragraph can be missing from `AXValue`, and a caret
 in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
@@ -371,6 +378,41 @@ the text the field selected.
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
 until it holds text, so the settles after it do not check the length.
+
+## Learned beliefs
+
+mvim learns three kinds of answer about each kind of field — every field of one role on one site,
+or in one app natively — and keeps them in `fieldBeliefs`, a disposable cache:
+
+- **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and one
+  settle failure blamed on one sets it off for that kind of field until the app updates. A pass
+  changes nothing.
+- **Offsets**: how the field counts caret and selection offsets. `value` is `AXValue`'s count,
+  `textContent` is Chromium's without the paragraph breaks it generates (the text-marker path), and
+  `untrusted` withholds the caret, so commands take the blind lane (`ciw` is ⌥← ⇧⌥→ ⌘X there, and
+  Visual mode rings). A Chromium field with children starts at `textContent` and any other field at
+  `value`. Every snapshot compares the plain `AXSelectedTextRange` with the text markers, and a
+  selection's `AXSelectedText` with what each answer predicts. One observation moves the answer
+  toward `textContent` or `untrusted`, on the snapshot it was made on; evidence for `value` moves
+  it back only when the web engine changed (an Electron app's framework, else the app), and
+  otherwise to `untrusted`. Under `value` the markers are read only on a binding's first three
+  snapshots.
+
+A write or key answer records the offsets answer it was judged under and holds only while that
+answer does (every answer holds while the field is `untrusted`, where nothing can re-judge one):
+a demotion made while mvim misread the field's offsets reopens once the offsets answer changes.
+Demotions from before beliefs carry over as judged under `value`.
+
+The bind line shows the read model as `offsets=<answer>/<source>`, where the source is `start`
+(the rule above), `learned` or `user`, followed by one `belief` line per stored answer that touched
+the field, with its provenance and whether it is `in-force`, `reopened`, `stale` (another engine's)
+or only `dates-engine`. In the menu, a demotion reads `✗ learned`, and so does **Read caret** while
+the field is `untrusted`; choosing On or Off for a row retires the belief behind it. To flush them
+all:
+
+```sh
+defaults delete com.loom.mvim fieldBeliefs
+```
 
 ## Native word, paragraph and page keys
 

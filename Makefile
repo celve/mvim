@@ -15,7 +15,7 @@ BUILD   := $(shell git rev-list --count HEAD 2>/dev/null)
 all: build
 
 # The pure Vim engine: every .swift under Sources/Vim EXCEPT Runtime/ (which has AppKit/AX
-# deps). Recursive so the engine can live in layer subfolders (Key/Model/Raw/Logical/Physical/State/Text).
+# deps). Recursive so the engine can live in layer subfolders (Key/Model/Raw/Logical/Physical/State/Text/Learn).
 # Invariant: impure code lives ONLY under Sources/Vim/Runtime/.
 VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 
@@ -23,7 +23,7 @@ VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 # listed here one at a time, and only when they are pure enough to link against
 # nothing but the stdlib — Surface.swift holds the rung algebra and precedence
 # walks, which are the part of per-surface config worth pinning.
-CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/StrikeLedger.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift
+CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift
 
 # Permission-free unit tests for the pure Vim engine. No Xcode/app build, no Accessibility grant.
 test:

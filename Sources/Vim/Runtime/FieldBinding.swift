@@ -3,8 +3,7 @@ import LoomCore
 
 /// Probes what a focused field can do. Trial reads *prove* the read
 /// capabilities; settable flags *claim* the writes — and the claims are
-/// corrected by `LearnedPriors`, the lazy write probe's result cache
-/// (real commands are the probe; settle verdicts are its readings).
+/// corrected by the beliefs real commands teach (settle verdicts are their readings).
 public enum FieldProber {
     /// Three IPCs, not six: the four read trials ride one batch, and the two
     /// settable flags use a different API (`AXUIElementIsAttributeSettable`)
@@ -28,90 +27,29 @@ public enum FieldProber {
         return CapabilityProfile(available: available)
     }
 
-    /// The full resolution for one binding: probed truth, minus what the field
-    /// has demonstrably failed to deliver, minus the user's demotions — then the
-    /// policy atoms derived from their parent mechanisms under `CapabilityConfig`
-    /// seeds and overrides. The profile is what the planner consumes; the report
-    /// is the menu's why.
+    /// The full resolution for one binding: the probe, curation and the user's overrides, and the beliefs learned
+    /// about fields like this one. The profile is what the planner consumes; the report is the menu's why.
     ///
-    /// The `surface` is the whole point: config is keyed by the text engine
-    /// behind the field, not by the app hosting it, so a browser's own search
-    /// box and an `<input>` in the page it is showing resolve independently
-    /// even though both report `AXTextField`. `appVersion` keys the learner's
-    /// TTL — an app update re-opens every trial it had concluded.
+    /// The `surface` is the whole point: config and beliefs are keyed by the text engine behind the field, not by the
+    /// app hosting it, so a browser's own search box and an `<input>` in the page resolve independently.
     public static func resolve(
-        _ element: AXUIElement, surface: Surface, appVersion: String?
-    ) -> (profile: CapabilityProfile, report: CapabilityReport) {
+        _ element: AXUIElement, surface: Surface, versions: Versions, chromium: Bool
+    ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs) {
         let probed = probe(element)
-        var statuses: [Capability: CapabilityStatus] = [:]
-        var entries: [Capability: CapabilityReport.Entry] = [:]
-
-        // One store read for all nine atoms — the ladder is the same for each.
-        let config = CapabilityConfig.resolveAll(
-            surface, capabilities: Capability.allCases.map(\.rawValue)
+        // One store read for every atom: the ladder is the same for each.
+        let config = CapabilityConfig.resolveAll(surface, capabilities: Capability.allCases.map(\.rawValue))
+        let choices = Dictionary(uniqueKeysWithValues: Capability.allCases.map { capability -> (Capability, ConfigChoice) in
+            let resolution = config[capability.rawValue] ?? .auto
+            let override = resolution.override.map { $0 == .on ? ConfigChoice.Override.on : .off }
+            return (capability, ConfigChoice(override: override, seededOff: resolution.isSeededOff))
+        })
+        let beliefs = Beliefs.load().resolve(
+            rungs: surface.rungs, rung: surface.roleRung, versions: versions,
+            starting: ReadModel.starting(chromiumWithChildren: chromium && Snapshotter.hasParagraphs(element)),
+            userPinsOffsets: choices[.readCaret]?.override != nil
         )
-        func choice(_ capability: Capability) -> CapabilityConfig.Override? {
-            config[capability.rawValue]?.override
-        }
-        // Only the write mechanisms are ever in here: they are the only claims
-        // a settle can contradict.
-        let learned = LearnedPriors.demoted(rungs: surface.rungs, version: appVersion)
-
-        // Mechanism atoms: probe truth wins upward, and two things subtract from
-        // it — evidence (the field failed to deliver) and the user's `off`. An
-        // explicit `on` un-does the evidence exactly the way it un-seeds
-        // curation, so a decision always outranks an inference.
-        for capability in Capability.allCases where capability.species == .mechanism {
-            let entry: CapabilityReport.Entry
-            if probed.has(capability), choice(capability) == .off {
-                entry = CapabilityReport.Entry(status: .unavailable, source: .user)
-            } else if probed.has(capability),
-                      learned.contains(capability.rawValue),
-                      choice(capability) != .on {
-                entry = CapabilityReport.Entry(status: .unavailable, source: .learned)
-            } else {
-                entry = CapabilityReport.Entry(
-                    status: probed.has(capability) ? .available : .unavailable,
-                    source: .probed
-                )
-            }
-            statuses[capability] = entry.status
-            entries[capability] = entry
-        }
-
-        // Policy atoms: their parent mechanism, seed- and user-gated. `.on`
-        // un-seeds curation only — a missing mechanism stays missing. The
-        // mechanism loop above has already run, so every parent is resolved;
-        // this stands in only if that ever stops being true.
-        let unavailableEntry = CapabilityReport.Entry(status: .unavailable, source: .probed)
-        for capability in Capability.allCases where capability.species == .policy {
-            // A parentless policy is ungated — nothing about the field can
-            // moot it, so it answers to seeds and the user alone. Absent
-            // this, `mechanism` is nil and the check below would deny it
-            // permanently.
-            let mechanism = capability.parent.map { entries[$0] ?? unavailableEntry }
-            let resolved = config[capability.rawValue] ?? .auto
-            let userChoice = resolved.override
-            // Seeds and the user's choice come from two separate ladder walks,
-            // so a seed at a narrow rung and an `.on` at a wide one are both
-            // visible here — and the precedence below is the one this table
-            // always had, unchanged.
-            let seeded = resolved.isSeededOff
-            let entry: CapabilityReport.Entry
-            if let mechanism, mechanism.status != .available {
-                entry = CapabilityReport.Entry(status: .unavailable, source: mechanism.source)
-            } else if userChoice == .off {
-                entry = CapabilityReport.Entry(status: .unavailable, source: .user)
-            } else if seeded, userChoice != .on {
-                entry = CapabilityReport.Entry(status: .unavailable, source: .seeded)
-            } else {
-                entry = CapabilityReport.Entry(status: .available, source: userChoice == .on ? .user : .probed)
-            }
-            statuses[capability] = entry.status
-            entries[capability] = entry
-        }
-
-        return (CapabilityProfile(statuses: statuses), CapabilityReport(entries: entries))
+        let resolved = CapabilityResolver.resolve(probed: probed, config: choices, beliefs: beliefs)
+        return (resolved.profile, resolved.report, beliefs)
     }
 
     /// The engage verdict for one element, from a single AX round trip.
@@ -157,48 +95,67 @@ public enum FieldProber {
     }
 }
 
-/// Reads the volatile half of a `FieldSnapshot`, fresh per command.
+/// Reads the volatile half of a `FieldSnapshot`, fresh per command, and what those reads say about the offsets.
 public enum Snapshotter {
+    public struct Reading {
+        public let snapshot: FieldSnapshot
+        /// The answer the snapshot started from, and the one it was taken under.
+        public let before: OffsetsAnswer
+        public let answer: OffsetsAnswer
+        public let evidence: OffsetsEvidence?
+        /// The field answered a marker read.
+        public let markers: Bool
+    }
+
     public static func snapshot(
         of element: AXUIElement,
         capabilities: CapabilityProfile,
         anchor: Int?,
         cursor: Range<Int>?,
-        chromium: Bool = false
-    ) -> FieldSnapshot {
-        let paragraphs = chromium && hasParagraphs(element)
+        chromium: Bool = false,
+        model: ReadModel = ReadModel(answer: .value),
+        sampling: OffsetsSampling = OffsetsSampling()
+    ) -> Reading {
+        // The engine rule is re-read per snapshot, as the hard-coded switch was: a field gains children as it fills.
+        let current = model.source == .learned
+            ? model.answer : ReadModel.starting(chromiumWithChildren: chromium && hasParagraphs(element))
+        // Observation keeps running under `untrusted`, whose withheld caret is still read.
+        let caret = capabilities.has(.readCaret) || model.source == .learned && model.answer == .untrusted
+        let readsMarkers = caret && sampling.readsMarkers(under: current)
         // One IPC for the whole volatile half. The capabilities gate which
-        // slots are *used*, not which are fetched — a batch costs the same
-        // round trip either way, and branching the attribute list per profile
-        // would buy nothing.
+        // slots are *used*, not which are fetched.
         var names = [
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
             "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
+            kAXSelectedTextAttribute,        // 4
         ]
-        if paragraphs { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 4
+        if readsMarkers { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
         let reads = AX.attributes(names, of: element)
-        let text = capabilities.has(.readText) ? reads.string(0) : nil
-        var selection: Range<Int>?
-        if capabilities.has(.readCaret), let range = reads.range(1) {
-            selection = range.location..<(range.location + range.length)
+        let marked = readsMarkers ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        var fieldReads = FieldReads(
+            text: reads.string(0),
+            plain: reads.range(1).map { $0.location..<($0.location + $0.length) },
+            selectedText: reads.string(4),
+            markers: marked.map { markerReads(of: element, text: reads.string(0), marked: $0) }
+        )
+        let (evidence, answer) = Learning.observe(fieldReads, current: current, model: model)
+        // Only the snapshot reads the empty paragraph, which costs four more round trips.
+        if answer == .textContent, let marked, fieldReads.markers?.breaks != nil {
+            fieldReads.markers?.emptyParagraph = marked.inEmptyParagraph
         }
-        var breaks: ParagraphBreaks?
-        var emptyParagraph = false
-        var textlessLeaves = false
-        if paragraphs {
-            breaks = ParagraphBreaks()
-            if capabilities.has(.readCaret) {
-                (selection, breaks, emptyParagraph, textlessLeaves)
-                    = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
-            }
+        var interpreted = fieldReads.interpreted(under: answer)
+        if !capabilities.has(.readCaret) {
+            interpreted = (nil, answer == .textContent ? ParagraphBreaks() : nil, false, false)
         }
+        let text = capabilities.has(.readText) ? fieldReads.text : nil
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
+        let selection = interpreted.selection
         // The drawn cursor counts only while it still IS the selection;
         // otherwise the selection is the user's.
         let stampedCursor = (cursor != nil && !cursor!.isEmpty && cursor == selection) ? cursor : nil
-        return FieldSnapshot(
+        let snapshot = FieldSnapshot(
             capabilities: capabilities,
             text: text,
             selection: selection,
@@ -206,10 +163,11 @@ public enum Snapshotter {
             anchor: anchor,
             cursor: stampedCursor,
             webContent: reads.string(3) != nil,
-            breaks: breaks,
-            caretInEmptyParagraph: emptyParagraph,
-            textlessLeaves: textlessLeaves
+            breaks: interpreted.breaks,
+            caretInEmptyParagraph: interpreted.emptyParagraph,
+            textlessLeaves: interpreted.textlessLeaves
         )
+        return Reading(snapshot: snapshot, before: current, answer: answer, evidence: evidence, markers: marked != nil)
     }
 
     /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.
@@ -217,35 +175,29 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets, nil if unplaceable, the breaks it used, and whether a caret is in an
-    /// empty paragraph.
-    private static func paragraphRead(
-        of element: AXUIElement, text: String?, marked selected: AnyObject?
-    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool, textlessLeaves: Bool) {
+    /// The marker selection in `AXValue` offsets and the breaks it used, unaligned where they cannot be placed.
+    private static func markerReads(of element: AXUIElement, text: String?, marked: AX.MarkedSelection) -> MarkerReads {
         // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
-        guard let text, !text.utf16.contains(0xFFFC), let marked = AX.markedSelection(of: element, selected: selected) else {
-            return (nil, ParagraphBreaks(), false, false)
-        }
-        let field = marked.range
+        guard let text, !text.utf16.contains(0xFFFC) else { return MarkerReads(breaks: nil, value: nil) }
         var breaks = ParagraphBreaks()
         var textlessLeaves = false
         if text.contains("\n") {
             guard let markers = AX.markerText(of: element),
                   let aligned = ParagraphBreaks(value: text, fieldText: MarkerText.plain(markers)) else {
-                return (nil, breaks, false, false)
+                return MarkerReads(breaks: nil, value: nil)
             }
             breaks = aligned
             textlessLeaves = markers.utf16.contains(0xFFFC)
         }
         // A caret's ends share one marker, so its side is read once.
         var caretSide: ParagraphBreaks.Side??
-        let range = breaks.valueRange(field) { end in
+        let range = breaks.valueRange(marked.range) { end in
             if marked.isCollapsed, let known = caretSide { return known }
             let side = paragraphSide(of: marked, upper: end == .upper)
             if marked.isCollapsed { caretSide = side }
             return side
         }
-        return (range, breaks, marked.inEmptyParagraph, textlessLeaves)
+        return MarkerReads(breaks: breaks, value: range, textlessLeaves: textlessLeaves)
     }
 
     /// Where typing at a boundary end would land; nil when a read fails.

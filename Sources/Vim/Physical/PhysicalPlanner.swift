@@ -268,12 +268,12 @@ private extension PhysicalPlanner {
         steps.contains { if case .press = $0 { return true }; return false }
     }
 
-    /// Before an edit replaces a selection keys made: Chromium's misread caret puts
-    /// them on other text while every offset reads back as planned (LIN-1533).
+    /// Before an edit replaces a selection: a misread caret puts keys and writes on other text while every offset
+    /// reads back as planned (LIN-1533), and the offsets belief learns from the mismatch.
     static func checkSelectedText(
         _ text: String, context: Context, profile: CapabilityProfile
     ) -> [PhysicalStep] {
-        guard !text.isEmpty, !profile.has(.writeSelection), profile.has(.readSelectedText) else { return [] }
+        guard !text.isEmpty, profile.has(.readSelectedText) else { return [] }
         // `AXSelectedText` omits paragraph breaks.
         let selected = context.selection.flatMap { selection in context.breaks?.fieldText(text, at: selection) } ?? text
         return settle(context, profile: profile, selectedText: selected)
@@ -644,12 +644,17 @@ private extension PhysicalPlanner {
         let leavesCaret = chords.allSatisfy { !$0.modifiers.contains(.shift) }
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
-            let unmoved = before == context.emptyParagraphCaret || mayStayPut(chords, from: before, in: model)
-                ? [] : [context.field(before)]
+            let emptyParagraph = before == context.emptyParagraphCaret
+            let unmoved = emptyParagraph || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
             // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
             let offTarget = context.breaks == nil
-            guard !unmoved.isEmpty || leavesCaret || offTarget else { return nil }
-            return Expectation.Blame(capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget)
+            var exemptions: [Expectation.Exemption] = []
+            if emptyParagraph { exemptions.append(.init(.emptyParagraph, unmoved: [context.field(before)])) }
+            if !offTarget { exemptions.append(.init(.paragraphLines, offTarget: true)) }
+            guard !unmoved.isEmpty || leavesCaret || offTarget || !exemptions.isEmpty else { return nil }
+            return Expectation.Blame(
+                capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget, exemptions: exemptions
+            )
         }
         var steps: [PhysicalStep] = []
         for chord in chords {
@@ -716,9 +721,11 @@ private extension PhysicalPlanner {
         forward ? p < model.length : p > 0
     }
 
-    /// None in web content: raw reads cannot tell a key that did nothing (LIN-1564).
+    /// Exempt in web content: raw reads cannot tell a key that did nothing (LIN-1564).
     static func wordBlame(_ blame: Expectation.Blame?, context: Context) -> Expectation.Blame? {
-        context.webContent ? nil : blame
+        guard context.webContent, let blame else { return blame }
+        return Expectation.Blame(capability: blame.capability, unmoved: blame.unmoved, leavesCaret: blame.leavesCaret,
+                                 offTarget: blame.offTarget, exemptions: [.init(.webContent, all: true)])
     }
 
     /// `j`/`k` press ↓/↑ only where neither a write nor ⌃E/⌃A can land a line.
@@ -956,8 +963,11 @@ private extension PhysicalPlanner {
             .press(key.chord, count: count),
             // Blamed for leaving a selection, or, outside web content, for staying put.
             appSettle(landing, blame: key.atom.map {
-                let unmoved = strict && !context.webContent ? [context.field(p..<p)] : []
-                return Expectation.Blame(capability: $0, unmoved: unmoved, leavesCaret: true)
+                let stuck = strict ? [context.field(p..<p)] : []
+                return context.webContent
+                    ? Expectation.Blame(capability: $0, unmoved: [], leavesCaret: true,
+                                        exemptions: stuck.isEmpty ? [] : [.init(.webContent, unmoved: stuck)])
+                    : Expectation.Blame(capability: $0, unmoved: stuck, leavesCaret: true)
             }, context: context, profile: profile),
         ]
     }

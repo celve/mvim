@@ -51,7 +51,7 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// Cocoa chords cross blocks natively. Local exactness is untouched.
     ///
     /// Never probed — no AX attribute answers it — and **never learned**:
-    /// `LearnedPriors` demotes from failed settles, and a block-scoped
+    /// the learner's trials demote from failed settles, and a block-scoped
     /// field's settles *pass*. That is the bug; there is no signal. Seeds
     /// and the user's override are the only sources. Subtractive only.
     case wholeDocument
@@ -179,9 +179,8 @@ public struct CapabilityReport: Equatable, Sendable {
         case seeded
         /// The user's menu override.
         case user
-        /// A committed `LearnedPriors` demotion: the field claimed this write
-        /// and then failed to deliver it. A suggestion, not a decision — the
-        /// user can promote it (Off) or overrule it (On).
+        /// A belief: the field claimed this write or key and then failed to deliver it, or, for `readCaret`, no
+        /// read model fits its offsets. A suggestion, not a decision — the user can promote it (Off) or overrule it (On).
         case learned
     }
 

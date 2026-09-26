@@ -221,13 +221,53 @@ public struct Expectation: Equatable, Sendable {
         public let leavesCaret: Bool
         /// A landing anywhere but the prediction is the key's too, where the field's lines are the model's.
         public let offTarget: Bool
+        /// Failures left out on purpose, which the learner logs as neutral evidence.
+        public let exemptions: [Exemption]
 
-        public init(capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false, offTarget: Bool = false) {
+        public init(
+            capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false, offTarget: Bool = false,
+            exemptions: [Exemption] = []
+        ) {
             self.capability = capability
             self.unmoved = unmoved
             self.leavesCaret = leavesCaret
             self.offTarget = offTarget
+            self.exemptions = exemptions
         }
+
+        /// Blames nothing, and logs every failure it would have blamed.
+        var exempt: Bool { exemptions.contains(where: \.all) }
+    }
+
+    /// A failure a blame leaves out: the field staying at `unmoved`, a landing elsewhere with `offTarget`, or with
+    /// `all` anything the blame names.
+    public struct Exemption: Equatable, Sendable {
+        public enum Reason: String, Equatable, Sendable {
+            /// One Chromium paragraph can be several `AXValue` lines (a mention chip), so a working key lands off the model's (#12).
+            case paragraphLines = "paragraph-lines"
+            /// `AXValue` can leave an empty paragraph out, so a key from one can seem to do nothing.
+            case emptyParagraph = "empty-paragraph"
+            /// Raw reads in web content cannot tell a key that did nothing (LIN-1564).
+            case webContent = "web-content"
+        }
+
+        public let reason: Reason
+        public let unmoved: [Range<Int>]
+        public let offTarget: Bool
+        public let all: Bool
+
+        public init(_ reason: Reason, unmoved: [Range<Int>] = [], offTarget: Bool = false, all: Bool = false) {
+            self.reason = reason
+            self.unmoved = unmoved
+            self.offTarget = offTarget
+            self.all = all
+        }
+    }
+
+    /// What a failed settle says about the key it checks.
+    public enum Verdict: Equatable, Sendable {
+        case blamed(Capability)
+        case neutral(Capability, Exemption.Reason)
     }
 
     public init(selection: Range<Int>? = nil, length: Int? = nil, edge: Edge? = nil, selectedText: String? = nil) {
@@ -258,8 +298,24 @@ public struct Expectation: Equatable, Sendable {
         }
         if let longest, (observed?.count ?? 0) > longest { return false }
         if let length, observedLength != length { return false }
-        if let selectedText, observedText != selectedText { return false }
+        if let selectedText, !Self.sameText(selectedText, observedText) { return false }
         return true
+    }
+
+    /// Chromium writes a U+FFFC into `AXSelectedText` for each element with no text, which `AXValue` leaves out.
+    static func sameText(_ expected: String, _ observed: String?) -> Bool {
+        guard let observed else { return false }
+        return observed == expected
+            || !expected.utf16.contains(0xFFFC) && FieldReads.withoutAttachments(observed) == expected
+    }
+
+    /// A failure that got the range and length right: the selected text is another's, whatever the offsets read.
+    public func failedOnTextOnly(selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String?) -> Bool {
+        guard selectedText != nil else { return false }
+        var offsetsOnly = Expectation(landing: landing, length: length, edge: edge, blame: blame)
+        offsetsOnly.longest = longest
+        return offsetsOnly.matches(selection: observed, length: observedLength)
+            && !matches(selection: observed, length: observedLength, selectedText: observedText)
     }
 
     /// `.between` made exact from kept carets; a key left at either end is blamed.
@@ -269,7 +325,8 @@ public struct Expectation: Equatable, Sendable {
             return self
         }
         let widened = blame.map {
-            Blame(capability: $0.capability, unmoved: $0.unmoved + [lower..<lower, upper..<upper], leavesCaret: $0.leavesCaret)
+            Blame(capability: $0.capability, unmoved: $0.unmoved + [lower..<lower, upper..<upper], leavesCaret: $0.leavesCaret,
+                  exemptions: $0.exemptions)
         }
         var resolved = Expectation(landing: .exact(lower..<upper), length: length, edge: edge, blame: widened, selectedText: selectedText)
         resolved.longest = longest
@@ -280,11 +337,30 @@ public struct Expectation: Equatable, Sendable {
 
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
-        guard let blame, let observed,
-              blame.offTarget && landing?.matches(observed) == false || blame.unmoved.contains(observed)
-                || (blame.leavesCaret && !observed.isEmpty)
-                || longest.map({ observed.count > $0 }) == true else { return nil }
+        guard let blame, !blame.exempt, let observed, names(blame, observed) else { return nil }
         return blame.capability
+    }
+
+    /// `blamed`, or the exemption a failure fell under instead.
+    public func verdict(observed: Range<Int>?) -> Verdict? {
+        if let capability = blamed(observed: observed) { return .blamed(capability) }
+        guard let blame, let observed else { return nil }
+        let exemption = blame.exemptions.first { exemption in
+            exemption.all ? names(blame, observed)
+                : exemption.offTarget && landing?.matches(observed) == false || exemption.unmoved.contains(observed)
+        }
+        return exemption.map { .neutral(blame.capability, $0.reason) }
+    }
+
+    /// The key this settle checks, unless its lane never blames it.
+    public var checkedKey: Capability? {
+        blame.flatMap { $0.exempt ? nil : $0.capability }
+    }
+
+    private func names(_ blame: Blame, _ observed: Range<Int>) -> Bool {
+        blame.offTarget && landing?.matches(observed) == false || blame.unmoved.contains(observed)
+            || (blame.leavesCaret && !observed.isEmpty)
+            || longest.map({ observed.count > $0 }) == true
     }
 }
 
@@ -293,10 +369,13 @@ public struct Expectation: Equatable, Sendable {
 extension Expectation {
     /// `sel=4..9 len=15`, then `text=(5)` — a length, never the text. Also renders an observation, which is the
     /// same shape.
-    var traceFields: String {
+    var traceFields: String { traceFields(text: false) }
+
+    /// With text recording on, `text="hello"`.
+    func traceFields(text recording: Bool) -> String {
         let selection = landing.map(\.traceName) ?? "nil"
         var fields = "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
-        fields += selectedText.map { " text=(\($0.utf16.count))" } ?? ""
+        fields += selectedText.map { recording ? " text=\"\($0)\"" : " text=(\($0.utf16.count))" } ?? ""
         if let edge {
             fields += edge == .paragraphStart ? " edge=start" : " edge=end"
         }

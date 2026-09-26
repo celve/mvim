@@ -2,10 +2,10 @@ import Foundation
 
 /// Per-surface capability policy: shipped seeds plus the user's overrides.
 ///
-/// Config, not evidence — `LearnedPriors` records what fields *did*; this store
+/// Config, not evidence — the learner's beliefs record what fields *did*; this store
 /// records what curation and the user *decided*. LoomCore cannot see the
 /// engine's `Capability` type, so the store speaks its raw strings and the
-/// runtime converts (the LearnedPriors pattern).
+/// runtime converts.
 ///
 /// Seeds are compiled in and never written to defaults: the persisted
 /// dictionary holds only user choices, so shipped seed changes always reach
