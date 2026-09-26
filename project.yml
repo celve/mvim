@@ -102,7 +102,7 @@ targets:
         # keychain code, and its only network traffic is Sparkle's; keep the Info.plist honest.
         INFOPLIST_KEY_CFBundleDisplayName: mvim
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
-        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Loom. All rights reserved."
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Linyu Wu. Licensed under GPL-3.0-or-later."
       configs:
         # Release only: an updater in a Debug build would offer to replace it with the release.
         Release:
