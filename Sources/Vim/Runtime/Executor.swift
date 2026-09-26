@@ -98,10 +98,10 @@ public final class Executor {
         return false
     }
 
-    /// A selection or length the paste changed, read straight after it, says the target has read the pasteboard.
-    private func confirmPaste(_ outcome: SettleOutcome, at index: Int) {
-        guard pastedAt == index - 1, outcome.converged,
-              outcome.observedSelection != nil || outcome.observedLength != nil else { return }
+    /// Only a caret landing, read straight after the paste, says the target has read it: an equal-length replacement
+    /// (`g~j` in Chromium rich text, where the settle checks length alone) matches its length before it lands.
+    private func confirmPaste(_ outcome: SettleOutcome, _ expectation: Expectation, at index: Int) {
+        guard pastedAt == index - 1, outcome.converged, expectation.landing != nil else { return }
         PasteboardLoan.shared.landed()
     }
 
@@ -111,12 +111,12 @@ public final class Executor {
         _ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState, paragraphs: Bool = false
     ) -> Bool {
         captures = [:]
+        pastedAt = nil
         lastRun = RunEvidence()
         lastWriteError = nil
         lastObserved = nil
         self.paragraphs = paragraphs
         kept = [:]
-        pastedAt = nil
         var attribution: Capability?
         for (index, next) in plan.steps.enumerated() {
             var step = next
@@ -229,7 +229,7 @@ public final class Executor {
         case .settle(let expectation):
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
-            confirmPaste(outcome, at: index)
+            confirmPaste(outcome, expectation, at: index)
             if record(outcome, expectation, at: index, hard: true) {
                 return true
             }
@@ -241,7 +241,7 @@ public final class Executor {
             // — but a timeout is not a failure: proceed, no bell, never abort.
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
-            confirmPaste(outcome, at: index)
+            confirmPaste(outcome, expectation, at: index)
             _ = record(outcome, expectation, at: index, hard: false)
             return true
 

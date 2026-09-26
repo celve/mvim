@@ -110,11 +110,11 @@ public final class Controller {
     /// steady paths (insert typing, unbound apps, ⌘-chords); one bounded
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
-        guard enabled, event.kind == .keyDown else { return false }
-        // The user's own paste: the app reads the pasteboard on this key, so a register paste's loan ends first.
-        if event.mods.contains(.command), event.characters.lowercased() == "v" || event.keyCode == 9 {
+        // The user's own paste, which the app reads the pasteboard for, ends a register paste's loan even while disabled.
+        if event.kind == .keyDown, event.mods.contains(.command), event.characters.lowercased() == "v" || event.keyCode == 9 {
             PasteboardLoan.shared.restore()
         }
+        guard enabled, event.kind == .keyDown else { return false }
         // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
         guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive
