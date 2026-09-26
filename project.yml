@@ -8,9 +8,17 @@ options:
   groupSortPosition: top
   generateEmptyDirectories: true
 
+packages:
+  # Exact: the resolved-versions file lives in the generated, git-ignored .xcodeproj.
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.0
+
 settings:
   base:
+    # `make publish` tags a release v<MARKETING_VERSION>, so bump it before publishing.
     MARKETING_VERSION: "1.0.0"
+    # `make release` passes the commit count instead: Sparkle orders updates by CFBundleVersion.
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     # Stable Apple Development signature so Accessibility / Input Monitoring
@@ -49,7 +57,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomVim
         GENERATE_INFOPLIST_FILE: YES
 
-  # The menu-bar app: composition root + settings UI. Embeds the two frameworks.
+  # The menu-bar app: composition root + settings UI. Embeds the two frameworks and Sparkle.
   mvim:
     type: application
     platform: macOS
@@ -60,6 +68,22 @@ targets:
     dependencies:
       - target: LoomCore
       - target: LoomVim
+      - package: Sparkle
+    postBuildScripts:
+      # Code Sign On Copy re-signs Sparkle.framework but not the helpers inside it, which would
+      # otherwise ship ad-hoc — and macOS lets only the app's own developer modify its bundle.
+      - name: Sign Sparkle's helpers
+        basedOnDependencyAnalysis: false
+        script: |
+          [ "$CODE_SIGNING_ALLOWED" = YES ] && [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] || exit 0
+          framework="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/Sparkle.framework"
+          helpers="$framework/Versions/B"
+          sign() { codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" -o runtime "$@"; }
+          sign "$helpers/XPCServices/Installer.xpc"
+          sign --preserve-metadata=entitlements "$helpers/XPCServices/Downloader.xpc"
+          sign "$helpers/Autoupdate"
+          sign "$helpers/Updater.app"
+          sign "$framework"
     settings:
       base:
         PRODUCT_NAME: mvim
@@ -67,16 +91,25 @@ targets:
         # grants and the login item, and nothing migrates them (README, Upgrading from Norm).
         PRODUCT_BUNDLE_IDENTIFIER: com.loom.mvim
         GENERATE_INFOPLIST_FILE: YES
+        # Merged into the generated plist: Sparkle's feed and key, from the settings below.
+        INFOPLIST_FILE: Info.plist
         CODE_SIGN_ENTITLEMENTS: mvim.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Run as a menu bar agent: no Dock icon, no main window.
         INFOPLIST_KEY_LSUIElement: YES
-        # No NSMicrophoneUsageDescription — deliberate. mvim contains no
-        # microphone, network, or keychain code; keep the Info.plist honest.
+        # No NSMicrophoneUsageDescription — deliberate. mvim contains no microphone or
+        # keychain code, and its only network traffic is Sparkle's; keep the Info.plist honest.
         INFOPLIST_KEY_CFBundleDisplayName: mvim
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Loom. All rights reserved."
+      configs:
+        # Release only: an updater in a Debug build would offer to replace it with the release.
+        Release:
+          SPARKLE_FEED_URL: https://github.com/celve/mvim/releases/latest/download/appcast.xml
+          # The public half of `generate_keys` (README, Publishing an update); until it is set,
+          # Release builds have no updater either.
+          SPARKLE_PUBLIC_KEY: ""
 
 schemes:
   mvim:

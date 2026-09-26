@@ -3,10 +3,14 @@ SCHEME  := mvim
 CONFIG  := Debug
 DERIVED := build
 RELEASE := .release
+DIST    := dist
 APP     := $(DERIVED)/Build/Products/$(CONFIG)/$(PROJECT).app
 RELAPP  := $(RELEASE)/$(PROJECT).app
+SPARKLE := $(DERIVED)/SourcePackages/artifacts/sparkle/Sparkle/bin
+# Sparkle orders updates by CFBundleVersion, which the commit count only ever raises along main.
+BUILD   := $(shell git rev-list --count HEAD 2>/dev/null)
 
-.PHONY: all gen build run release clean distclean test
+.PHONY: all gen build run release dist publish clean distclean test
 
 all: build
 
@@ -49,15 +53,24 @@ release: gen
 		-scheme $(SCHEME) \
 		-configuration Release \
 		-derivedDataPath $(DERIVED) \
+		$(if $(BUILD),CURRENT_PROJECT_VERSION=$(BUILD)) \
 		build
 	rm -rf $(RELAPP)
 	ditto $(DERIVED)/Build/Products/Release/$(PROJECT).app $(RELAPP)
 	codesign --verify --deep --strict $(RELAPP)
 	@echo "Release app: $(RELAPP)"
 
+# Stages an update in dist/ without publishing it: the zipped app and the appcast pointing at it.
+dist: release
+	scripts/sparkle-release.sh dist $(RELAPP) $(SPARKLE) $(DIST)
+
+# Stages as dist does, then releases it on GitHub, where every installed copy's feed looks.
+publish: release
+	scripts/sparkle-release.sh publish $(RELAPP) $(SPARKLE) $(DIST)
+
 # Spares $(RELEASE): SMAppService records the path of the bundle its login item was registered from.
 clean:
-	rm -rf $(DERIVED) $(PROJECT).xcodeproj
+	rm -rf $(DERIVED) $(PROJECT).xcodeproj $(DIST)
 
 distclean: clean
 	rm -rf $(RELEASE)
