@@ -38,6 +38,9 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// The caret is in an empty paragraph that `AXValue` may leave out, so its read is a neighbour's.
     public let caretInEmptyParagraph: Bool
 
+    /// `AXValue` leaves out some of the field's elements, such as an icon, a widget or an `<hr>`.
+    public let textlessLeaves: Bool
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -47,7 +50,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         cursor: Range<Int>? = nil,
         webContent: Bool = false,
         breaks: ParagraphBreaks? = nil,
-        caretInEmptyParagraph: Bool = false
+        caretInEmptyParagraph: Bool = false,
+        textlessLeaves: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -58,6 +62,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.webContent = webContent
         self.breaks = breaks
         self.caretInEmptyParagraph = caretInEmptyParagraph
+        self.textlessLeaves = textlessLeaves
     }
 
     /// The caret, when the selection is collapsed.

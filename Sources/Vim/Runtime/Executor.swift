@@ -325,7 +325,8 @@ public final class Executor {
             if let slot = lengthSlot {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
-            let text = textSlot.flatMap { reads.string($0) }
+            // Chromium adds a U+FFFC here for each text-less leaf; the plan, read from `AXValue`, has none.
+            let text = textSlot.flatMap { reads.string($0) }.map { paragraphs ? MarkerText.plain($0) : $0 }
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)

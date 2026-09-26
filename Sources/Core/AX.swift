@@ -290,7 +290,8 @@ public enum AX {
             guard isCollapsed, let node = AX.node(at: lower, in: element), let role = AX.role(of: node),
                   role != kAXStaticTextRole,
                   let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)),
-                  let text = parameterized("AXStringForTextMarkerRange", range, of: element) as? String else { return false }
+                  let text = AX.text(from: AXTextMarkerRangeCopyStartMarker(range), to: AXTextMarkerRangeCopyEndMarker(range),
+                                     in: element).map(MarkerText.plain) else { return false }
             return text.isEmpty || text == "\n"
         }
 
@@ -352,8 +353,12 @@ public enum AX {
 
     /// The field's `AXValue` without its paragraph breaks.
     public static func textContent(of element: AXUIElement) -> String? {
+        markerText(of: element).map(MarkerText.plain)
+    }
+
+    public static func markerText(of element: AXUIElement) -> String? {
         guard let field = fieldMarkers(of: element) else { return nil }
-        return parameterized("AXStringForTextMarkerRange", field.range, of: element) as? String
+        return text(from: field.start, to: AXTextMarkerRangeCopyEndMarker(field.range), in: element)
     }
 
     /// The leaf after a marker, which may be anchored on a container such as a list.
@@ -371,7 +376,7 @@ public enum AX {
             while low <= high {
                 let middle = (low + high) / 2
                 guard let childStart = textStart(of: children[middle], in: field).flatMap({
-                    parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, start, $0), of: field) as? Int
+                    plainLength(from: start, to: $0, in: field)
                 }) else { return nil }
                 if childStart <= offset {
                     holder = (middle, childStart)
@@ -411,7 +416,7 @@ public enum AX {
         guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else {
             return nil
         }
-        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+        return plainLength(from: AXTextMarkerRangeCopyStartMarker(range), to: AXTextMarkerRangeCopyEndMarker(range), in: element)
     }
 
     private static func fieldMarkers(of element: AXUIElement) -> (range: AXTextMarkerRange, start: AXTextMarker)? {
@@ -422,8 +427,17 @@ public enum AX {
     }
 
     private static func offset(of marker: AXTextMarker, from start: AXTextMarker, in element: AXUIElement) -> Int? {
-        let range = AXTextMarkerRangeCreate(kCFAllocatorDefault, start, marker)
-        return parameterized("AXLengthForTextMarkerRange", range, of: element) as? Int
+        plainLength(from: start, to: marker, in: element)
+    }
+
+    /// In `AXIndexForTextMarker`'s units, which `AXLengthForTextMarkerRange` exceeds by each U+FFFC.
+    private static func plainLength(from start: AXTextMarker, to end: AXTextMarker, in element: AXUIElement) -> Int? {
+        text(from: start, to: end, in: element).map(MarkerText.plainLength)
+    }
+
+    /// Anchored at `end`: Chromium reads ends that compare equal from the focus on, so a later focus reads to the page's end.
+    private static func text(from start: AXTextMarker, to end: AXTextMarker, in element: AXUIElement) -> String? {
+        parameterized("AXStringForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, end, start), of: element) as? String
     }
 
     private static func textMarkerRange(_ value: AnyObject?) -> AXTextMarkerRange? {

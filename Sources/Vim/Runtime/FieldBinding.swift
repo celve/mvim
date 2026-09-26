@@ -186,10 +186,12 @@ public enum Snapshotter {
         }
         var breaks: ParagraphBreaks?
         var emptyParagraph = false
+        var textlessLeaves = false
         if paragraphs {
             breaks = ParagraphBreaks()
             if capabilities.has(.readCaret) {
-                (selection, breaks, emptyParagraph) = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
+                (selection, breaks, emptyParagraph, textlessLeaves)
+                    = paragraphRead(of: element, text: text, marked: reads.textMarkerRange(4))
             }
         }
         let length = capabilities.has(.readLength) ? reads.int(2) : nil
@@ -205,7 +207,8 @@ public enum Snapshotter {
             cursor: stampedCursor,
             webContent: reads.string(3) != nil,
             breaks: breaks,
-            caretInEmptyParagraph: emptyParagraph
+            caretInEmptyParagraph: emptyParagraph,
+            textlessLeaves: textlessLeaves
         )
     }
 
@@ -218,17 +221,21 @@ public enum Snapshotter {
     /// empty paragraph.
     private static func paragraphRead(
         of element: AXUIElement, text: String?, marked selected: AnyObject?
-    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool) {
-        guard let text, let marked = AX.markedSelection(of: element, selected: selected) else {
-            return (nil, ParagraphBreaks(), false)
+    ) -> (selection: Range<Int>?, breaks: ParagraphBreaks, emptyParagraph: Bool, textlessLeaves: Bool) {
+        // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
+        guard let text, !text.utf16.contains(0xFFFC), let marked = AX.markedSelection(of: element, selected: selected) else {
+            return (nil, ParagraphBreaks(), false, false)
         }
         let field = marked.range
         var breaks = ParagraphBreaks()
+        var textlessLeaves = false
         if text.contains("\n") {
-            guard let aligned = AX.textContent(of: element).flatMap({ ParagraphBreaks(value: text, fieldText: $0) }) else {
-                return (nil, breaks, false)
+            guard let markers = AX.markerText(of: element),
+                  let aligned = ParagraphBreaks(value: text, fieldText: MarkerText.plain(markers)) else {
+                return (nil, breaks, false, false)
             }
             breaks = aligned
+            textlessLeaves = markers.utf16.contains(0xFFFC)
         }
         // A caret's ends share one marker, so its side is read once.
         var caretSide: ParagraphBreaks.Side??
@@ -238,7 +245,7 @@ public enum Snapshotter {
             if marked.isCollapsed { caretSide = side }
             return side
         }
-        return (range, breaks, marked.inEmptyParagraph)
+        return (range, breaks, marked.inEmptyParagraph, textlessLeaves)
     }
 
     /// Where typing at a boundary end would land; nil when a read fails.

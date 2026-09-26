@@ -1295,6 +1295,35 @@ precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
 precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]), "J joins the paragraphs")
 
+precondition(MarkerText.plain("See \u{FFFC}LIN-1234") == "See LIN-1234")
+precondition(MarkerText.plainLength("\u{FFFC}\u{FFFC}Problem") == 7)
+precondition(MarkerText.plainLength("a😀\u{FFFC}") == 3, "UTF-16 units, as the offsets are")
+precondition(MarkerText.plain("") == "" && MarkerText.plainLength("") == 0)
+
+let leafShapes: [(name: String, value: String, markers: String, caret: Int, valueCaret: Int)] = [
+    ("icon chip",
+     "Heading one\nFirst paragraph with some words.\nSee \n\nLIN-1234\n here\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.See \u{FFFC}LIN-1234 here• item alpha• item betaHeading twoLast paragraph here.",
+     95, 104),
+    ("hr",
+     "Heading one\nFirst paragraph with some words.\n\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.\u{FFFC}• item alpha• item betaHeading twoLast paragraph here.",
+     78, 84),
+    ("checkbox",
+     "Heading one\nFirst paragraph with some words.\n• \ntask one\n• item alpha\n• item beta\nHeading two\nLast paragraph here.",
+     "Heading oneFirst paragraph with some words.• \u{FFFC}task one• item alpha• item betaHeading twoLast paragraph here.",
+     88, 95),
+]
+for shape in leafShapes {
+    precondition(ParagraphBreaks(value: shape.value, fieldText: shape.markers) == nil, "\(shape.name): U+FFFC is no break")
+    let breaks = ParagraphBreaks(value: shape.value, fieldText: MarkerText.plain(shape.markers))!
+    precondition(breaks.valueRange(shape.caret..<shape.caret) { _ in preconditionFailure("unambiguous") }
+        == shape.valueCaret..<shape.valueCaret, shape.name)
+}
+let linearHeading = ParagraphBreaks(value: "\n\nProblem\nWhen", fieldText: MarkerText.plain("\u{FFFC}\u{FFFC}ProblemWhen"))!
+precondition(linearHeading.offsets == [0, 1, 9], "the heading widget's two lines are breaks")
+precondition(linearHeading.valueRange(0..<0) { _ in .start(skipping: 0) } == 2..<2, "a caret on the heading sits past them")
+
 precondition(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd).traceFields == "sel=5..7 len=11 edge=end")
 
 /// A Chromium `<p>` editor: every `\n` is a generated paragraph break.
@@ -1367,6 +1396,21 @@ precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
 ])
 precondition(checkedTexts(paragraphPlanning("dd", text: threeParagraphs, caret: 4, profile: readProfile).plan) == ["cd ef"])
+let pastPhantom = Expectation(selection: 0..<2, length: 6, edge: .paragraphStart, selectedText: "ab")
+precondition(paragraphPlanning("dd", text: "ab\n\ncd", caret: 0, profile: readProfile).plan.steps.contains(.settle(pastPhantom)),
+             "keys that stop before the break read the paragraph's end and fail it")
+
+func leafyPlanning(_ keys: String, caret: Int) -> PhysicalPlanner.Planning {
+    let snapshot = FieldSnapshot(capabilities: readProfile, text: threeParagraphs, selection: caret..<caret,
+                                 breaks: ParagraphBreaks(offsets: [2, 8]), textlessLeaves: true)
+    return PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
+}
+precondition(leafyPlanning("J", caret: 4).rejection != nil, "typing over a break could drop an <hr> or a table cell")
+precondition(leafyPlanning("gUj", caret: 4).rejection != nil, "and so could retyping two lines")
+precondition(leafyPlanning("gUiw", caret: 4).rejection == nil, "one line's text is safe to retype")
+precondition(leafyPlanning("dd", caret: 4).rejection == nil, "a delete retypes nothing")
+precondition(paragraphPlanning("J", text: threeParagraphs, caret: 4, profile: readProfile).rejection == nil)
+precondition(paragraphPlanning("gUj", text: threeParagraphs, caret: 4, profile: readProfile).rejection == nil)
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("cd ef\n", at: 3..<9) == "cd ef")
 precondition(ParagraphBreaks(offsets: [2, 8]).fieldText("b\ncd", at: 1..<5) == "bcd")
 precondition(paragraphPlanning("o", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps.contains(
@@ -2681,6 +2725,7 @@ precondition(checkedWord.matches(selection: 4..<9, length: 15, selectedText: "he
 precondition(!checkedWord.matches(selection: 4..<9, length: 15, selectedText: "mber "), "offsets agree, text does not")
 precondition(!checkedWord.matches(selection: 4..<9, length: 15), "no answer")
 precondition(Expectation(selection: 4..<9).matches(selection: 4..<9, length: nil, selectedText: "mber "))
+precondition(!Expectation(selectedText: "a\u{FFFC}b").matches(selection: nil, length: nil, selectedText: "ab"), "an attachment counts")
 precondition(checkedWord.traceFields == "sel=4..9 len=15 text=(5)")
 precondition(!Expectation(selectedText: secret).traceFields.contains(secret), "traceFields leaked the selected text")
 
