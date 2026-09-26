@@ -372,8 +372,9 @@ the text the field selected.
 A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
 item in every type it holds, puts the text up for one ⌘V (marked `org.nspasteboard.TransientType`,
 so clipboard histories that honour it skip it), and puts the rest back once a settle sees the caret
-land after the paste. Nothing else says when the app has read it, so a paste no caret confirms,
-such as any paste in Chromium rich text or `o` and `O` below, stays up for a second. Your own ⌘V,
+land after the paste. Nothing else says when the app has read it, so a paste no caret confirms
+stays up for a second: one where mvim cannot read the field, or one carrying a newline in Chromium
+rich text, whose settles check the length alone, as `o` and `O` below do. Your own ⌘V,
 and a paste of `+`, `*` or a blind cut's register, gets your contents back first; if the app has
 not read mvim's paste by then, that paste gets your contents too. A copy or cut made meanwhile is
 newer and is kept.
