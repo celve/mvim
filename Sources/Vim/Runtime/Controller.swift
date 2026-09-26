@@ -407,6 +407,7 @@ public final class Controller {
             tallies[rung, default: Tally()].count(observed)
             Diag.observed(epoch, seq, observed, under: reading.before)
         }
+        if run.textMismatch { tallies[rung, default: Tally()].count(.misfit(.textCheck)) }
         guard teaches || reading.answer != model.answer else { return }
         var store = Beliefs.load()
         let stored = store

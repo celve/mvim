@@ -3347,6 +3347,7 @@ precondition(misreadWord.text == workedExample && misreadWord.settleFailures == 
 precondition(checkedText(misreadWord.abortedStep) == "hello", "the range reads back as planned while ` worl` is selected")
 precondition(misreadWord.learner!.lessons.last?.move == Learning.Move(from: .value, to: .untrusted, why: .textCheck))
 precondition(misreadWord.learner!.model.answer == .untrusted && !misreadWord.profile.has(.readCaret))
+precondition(misreadWord.learner!.store.offsetsBelief(at: "sim|role:AXTextArea")?.tally?.misfit == 1, "the text check is tallied")
 precondition(misreadWord.state.field.mode == .normal && misreadWord.selection.isEmpty)
 misreadWord.type("ciw")
 precondition(misreadWord.settleFailures == 1 && misreadWord.text == "a\nb\nc\nd\ne\n world" && misreadWord.pasteboard == "hello",

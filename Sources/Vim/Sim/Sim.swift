@@ -529,6 +529,7 @@ extension Sim {
 
     mutating func learn(from reading: Reading) {
         guard var learner else { return }
+        if attribution.textMismatch { learner.tally.count(.misfit(.textCheck)) }
         let config = learner.config
         let lesson = Learning.learn(
             store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
