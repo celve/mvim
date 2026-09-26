@@ -3351,6 +3351,21 @@ precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").
 precondition(Expectation(selectedText: "ab").matches(selection: nil, length: nil, selectedText: "a\u{FFFC}b"),
              "Chromium's leaf with no text is not a different selection")
 
+// An untrusted field withholds the caret and keeps its AX writes: after blind keys, the edit rides their queue.
+let withheldCaret = removing([.readCaret], from: axProfile)
+precondition(physical("rX", text: "say hello", profile: withheldCaret).steps.prefix(2)
+    == [.press(.selectRight, count: 1), .typeText("X")], "an AX write would overtake the queued ⇧→")
+precondition(physical("o", text: "say hello", profile: withheldCaret).steps.prefix(2)
+    == [.press(.lineEnd, count: 1), .typeText("\n")])
+precondition(physical("rX", text: "say hello", profile: withheldCaret).steps.allSatisfy {
+    if case .replaceSelection = $0 { return false }
+    return true
+})
+var replayInsert = VimState.initial
+replayInsert.session.lastChange = VimState.ChangeMemory(body: "i", insert: "abc")
+precondition(physical(".", text: "say hello", profile: withheldCaret, state: replayInsert).steps.contains(.replaceSelection("abc")),
+             "with nothing queued the AX write stays")
+
 // MARK: - Beliefs end to end (the Sim's Chromium read fault)
 
 /// Chromium rich text: reads and writes skip generated breaks, and markers, where it has them, follow the real caret.

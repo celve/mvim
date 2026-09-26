@@ -82,6 +82,13 @@ public enum PhysicalPlanner {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
             steps.append(contentsOf: lowered)
+            for step in lowered {
+                switch step {
+                case .press, .typeText, .clipboardCut, .clipboardCopy, .clipboardInsert: context.keysQueued = true
+                case .settle, .softSettle: context.keysQueued = false
+                default: break
+                }
+            }
         }
         return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
     }
@@ -114,6 +121,9 @@ private extension PhysicalPlanner {
 
         /// The last predicted edit's range, in field offsets — the one in flight if the plan dies.
         var operand: Range<Int>?
+
+        /// Events posted since the last settle, still queued at the window server, which an AX write would overtake.
+        var keysQueued = false
 
         let webContent: Bool
 
@@ -1308,7 +1318,8 @@ private extension PhysicalPlanner {
             return steps
         }
         context.invalidate()
-        return [action]
+        // Blind keys may still be queued, and typing or pasting rides the same queue.
+        return [context.keysQueued ? blindText(replacement, context: context) : action]
     }
 
     /// A typed `\n` makes no paragraph in Chromium's rich text, and ⏎ would send a chat message, so web content pastes it.

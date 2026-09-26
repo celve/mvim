@@ -118,7 +118,8 @@ public enum Snapshotter {
         let (current, source) = model.reading(chromium: chromium, children: hasParagraphs(element))
         // Observation keeps running under `untrusted`, whose withheld caret is still read.
         let caret = capabilities.has(.readCaret) || model.learned == .untrusted
-        let mayRead = caret && (current != .value || source.observes && sampling.remaining > 0)
+        // Under `value` the marker range is fetched only by a sample, after the batch shows it can tell something.
+        let readsMarkers = caret && current != .value
         // One IPC for the whole volatile half. The capabilities gate which
         // slots are *used*, not which are fetched.
         var names = [
@@ -128,12 +129,11 @@ public enum Snapshotter {
             "AXDOMIdentifier",               // 3: present, even empty, only in web content (see `GateAttributes`)
             kAXSelectedTextAttribute,        // 4
         ]
-        if mayRead { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
+        if readsMarkers { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
         let reads = AX.attributes(names, of: element)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
-        let sampled = mayRead && current == .value && sampling.samples(text: reads.string(0), plain: plain)
-        let marked = mayRead && (current != .value || sampled)
-            ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
+        let marked = readsMarkers || sampled ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
         var fieldReads = FieldReads(
             text: reads.string(0),
             plain: plain,
