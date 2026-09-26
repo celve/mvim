@@ -3,7 +3,8 @@
 Vim's modal editing in the text fields of your Mac. mvim lives in the menu bar: it reads and edits the
 focused field through Accessibility, and takes the keys it needs with a keyboard event tap.
 
-Every field starts in Insert mode. **⌃[, not Esc, enters Normal mode.**
+A field starts in Insert mode, unless you reach it from another block of the same document.
+**⌃[, not Esc, enters Normal mode.**
 
 There is no release yet, so [build it from source](#install). mvim needs macOS 14 or later, and it is
 free software under the [GNU GPL](#license).
@@ -47,11 +48,14 @@ System Settings → Privacy & Security, and run `defaults delete com.loom.mvim`.
 key to the right of P, whatever the keyboard layout. **Esc is never mvim's**, so apps keep it for
 their own cancels and dialogs. The menu-bar icon shows the mode: a keyboard while mvim is not in a
 field, otherwise **i**, **n** or **v** in a square. Where mvim can set the selection, Normal mode also
-draws a block cursor. Nothing shows a half-typed command, or a `/` search as you type it.
+draws a block cursor. Nothing shows a half-typed command, or a `/` search as you type it. Moving
+between the blocks of one document, as in Notion, keeps the mode you were in.
 
-Apps keep their shortcuts in every mode: every ⌘ and ⌥ combination, Esc, Home, End, Page Up and Page
-Down, the function keys, and every ⌃ combination except ⌃[, ⌃R and ⌃V, so ⌃A, ⌃E and ⌃K work as in
-any Mac text field. In Normal mode, a key mvim does not know beeps instead of typing.
+In Insert mode mvim takes only ⌃[. In Normal and Visual mode apps still keep every ⌘ and ⌥
+combination, Esc, Home, End, Page Up and Page Down, the function keys, and every ⌃ combination but
+⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while [the app's own page keys](#native-word-paragraph-and-page-keys)
+are on. So ⌃A, ⌃E and ⌃K work as in any Mac text field, and a key mvim does not know beeps instead
+of typing.
 
 The menu is mvim's whole interface. **Vim Mode** turns mvim off everywhere until you turn it back on
 or mvim starts again. **Vim in _App_** chooses, per app:
@@ -100,12 +104,15 @@ moves are approximate, deletes and yanks go through ⌘X and ⌘C so the clipboa
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
 
-mvim also learns. When a write or a key does not land within a quarter of a second, mvim switches that
-capability off for fields like the one it failed in, and **Capabilities** marks it `✗ learned` until
-the app updates. **On …** and **Off …** override what mvim detected or learned, for one field, fields
-like it, a site or the whole app, and `defaults delete com.loom.mvim learnedCapabilityPriors` forgets
-everything learned. **App's word, paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{`
-`}` `gj` `gk` ⌃F ⌃B to the app's own keys: see
+mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
+check (it lands wrong, or not within a quarter of a second), mvim switches that capability off for
+fields like the one it failed in, and **Capabilities** marks it `✗ learned` until the app updates.
+Some failures only stop the command: a key landing elsewhere in Chromium's rich text, a word key
+doing nothing in web content, anything under **Force**, and any capability you set yourself.
+**On …** and **Off …** override what mvim detected or learned, for one field, fields like it, a site
+or the whole app, and `defaults delete com.loom.mvim learnedCapabilityPriors` forgets everything
+learned. **App's word, paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj`
+`gk` ⌃F ⌃B to the app's own keys: see
 [Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
 
 ## Privacy
@@ -114,10 +121,11 @@ mvim needs **Accessibility**, to read and edit the focused field and to post key
 Monitoring**, for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed
 into a field it is working in. mvim has no microphone, keychain or networking code, and
 [Sparkle](#updates) is built in but inactive until the first release. Its settings and its log name
-the apps and websites you use, but never what you type (a unit test holds the command log to that)
-unless you turn on [text recording](#diagnostics). mvim pastes through the clipboard into fields it
-cannot write, and restores the clipboard afterwards; in fields it cannot read, cut and copy use the
-clipboard itself.
+the apps and websites you use. The log also records the Normal-mode commands you type, but never the
+text you insert or a command's operand, count or register (a unit test holds it to that), unless you
+turn on [text recording](#diagnostics); if mvim ever mistook the mode, some of your words could reach
+it as commands. mvim pastes through the clipboard into fields it cannot write, and restores the
+clipboard afterwards; in fields it cannot read, cut and copy use the clipboard itself.
 
 ## Reporting a bug
 
