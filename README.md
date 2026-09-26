@@ -57,6 +57,7 @@ number is the commit count, which is how [updates](#updates) are ordered.
 | `make build`     | Generate + build a Debug binary                |
 | `make run`       | Build, then launch the Debug `mvim.app`        |
 | `make test`      | Run the pure Vim engine tests                  |
+| `make test-pasteboard` | Test the pasteboard loan on a private pasteboard |
 | `make release`   | Build Release, copy it to `.release/mvim.app`  |
 | `make dist`      | `release`, then stage its update in `dist/`    |
 | `make publish`   | `dist`, then release it on GitHub              |
@@ -371,6 +372,14 @@ the text the field selected.
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
 until it holds text, so the settles after it do not check the length.
+
+Such a paste, like any register pasted where the field takes no AX insertion, borrows the
+pasteboard. mvim saves every item in every type it holds, puts the text up for one ⌘V (marked
+`org.nspasteboard.TransientType`, so clipboard histories that honour it skip it), and puts the
+rest back as soon as a settle sees the paste land. Nothing else says when the app has read it,
+so a paste no settle confirmed, as with `o` above, stays up for a second. Your own ⌘V, and a
+paste of `+`, `*` or a blind cut's register, gets your contents back first, and a copy or cut
+made meanwhile is newer and is kept.
 
 ## Native word, paragraph and page keys
 

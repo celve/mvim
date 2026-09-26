@@ -10,7 +10,7 @@ SPARKLE := $(DERIVED)/SourcePackages/artifacts/sparkle/Sparkle/bin
 # Sparkle orders updates by CFBundleVersion, which the commit count only ever raises along main.
 BUILD   := $(shell git rev-list --count HEAD 2>/dev/null)
 
-.PHONY: all gen build run release dist publish clean distclean test
+.PHONY: all gen build run release dist publish clean distclean test test-pasteboard
 
 all: build
 
@@ -30,6 +30,12 @@ test:
 	@mkdir -p $(DERIVED)
 	@swiftc -o $(DERIVED)/vim-engine-test $(VIM_PURE) $(CORE_PURE) Tests/VimEngineTests/main.swift
 	@$(DERIVED)/vim-engine-test
+
+# The register paste's pasteboard loan, on a private named pasteboard: needs a login session, no grant.
+test-pasteboard:
+	@mkdir -p $(DERIVED)
+	@swiftc -o $(DERIVED)/pasteboard-test Sources/Vim/Runtime/PasteboardLoan.swift Tests/PasteboardTests/main.swift
+	@$(DERIVED)/pasteboard-test
 
 gen:
 	xcodegen generate

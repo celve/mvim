@@ -111,6 +111,10 @@ public final class Controller {
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
         guard enabled, event.kind == .keyDown else { return false }
+        // The user's own paste: the app reads the pasteboard on this key, so a register paste's loan ends first.
+        if event.mods.contains(.command), event.characters.lowercased() == "v" || event.keyCode == 9 {
+            PasteboardLoan.shared.restore()
+        }
         // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
         guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive

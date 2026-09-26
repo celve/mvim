@@ -14,22 +14,7 @@ import LoomCore
 public final class Executor {
     public init() {}
 
-    /// How long a literal clipboard insert keeps its transient content
-    /// before the saved contents are restored (guarded by changeCount).
-    private static let restoreDelay: TimeInterval = 0.2
-
     private var captures: [CaptureSlot: String] = [:]
-
-    /// Every item in every type it holds, so the restore also gives back a copied image or file.
-    private static func items(of pasteboard: NSPasteboard) -> [NSPasteboardItem] {
-        (pasteboard.pasteboardItems ?? []).map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
-            }
-            return copy
-        }
-    }
 
     /// What the most recent `execute()` did — the lazy write probe's raw
     /// readings, plus what the recorder needs to explain them. Only the two
@@ -81,6 +66,9 @@ public final class Executor {
     /// Carets this run's settles kept, for `.between` landings.
     private var kept: [Int: Int] = [:]
 
+    /// This run's last register paste, which only the settle straight after it can confirm.
+    private var pastedAt: Int?
+
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
 
@@ -110,6 +98,13 @@ public final class Executor {
         return false
     }
 
+    /// A selection or length the paste changed, read straight after it, says the target has read the pasteboard.
+    private func confirmPaste(_ outcome: SettleOutcome, at index: Int) {
+        guard pastedAt == index - 1, outcome.converged,
+              outcome.observedSelection != nil || outcome.observedLength != nil else { return }
+        PasteboardLoan.shared.landed()
+    }
+
     /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
     @discardableResult
     public func execute(
@@ -121,6 +116,7 @@ public final class Executor {
         lastObserved = nil
         self.paragraphs = paragraphs
         kept = [:]
+        pastedAt = nil
         var attribution: Capability?
         for (index, next) in plan.steps.enumerated() {
             var step = next
@@ -211,23 +207,14 @@ public final class Executor {
                 // Set → ⌘V → return. No pre-⌘V sleep: setString is
                 // synchronous, and the app reads the pasteboard only when IT
                 // processes the ⌘V, which the event queue orders after the
-                // write. The restore is deferred hygiene, not a wait.
-                let pasteboard = NSPasteboard.general
-                let saved = Self.items(of: pasteboard)
-                pasteboard.clearContents()
-                pasteboard.setString(content, forType: .string)
-                let stamp = pasteboard.changeCount
+                // write. Giving it back is the loan's, not a wait.
+                PasteboardLoan.shared.put(content)
+                pastedAt = index
                 Synth.commandV()
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.restoreDelay) {
-                    let pasteboard = NSPasteboard.general
-                    // Newer owner (a blind cut, a user ⌘C) wins: only ever
-                    // decline to write, never clobber.
-                    guard pasteboard.changeCount == stamp else { return }
-                    pasteboard.clearContents()
-                    pasteboard.writeObjects(saved)
-                }
             } else {
-                Synth.commandV()   // registers +/* and pasteboard markers: paste as-is
+                // Registers +/* and pasteboard markers paste what the user has there, not a register still on loan.
+                PasteboardLoan.shared.restore()
+                Synth.commandV()
             }
             return true
 
@@ -242,6 +229,7 @@ public final class Executor {
         case .settle(let expectation):
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
+            confirmPaste(outcome, at: index)
             if record(outcome, expectation, at: index, hard: true) {
                 return true
             }
@@ -253,6 +241,7 @@ public final class Executor {
             // — but a timeout is not a failure: proceed, no bell, never abort.
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
+            confirmPaste(outcome, at: index)
             _ = record(outcome, expectation, at: index, hard: false)
             return true
 
