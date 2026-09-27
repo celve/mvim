@@ -9,6 +9,13 @@ RELAPP  := $(RELEASE)/$(PROJECT).app
 SPARKLE := $(DERIVED)/SourcePackages/artifacts/sparkle/Sparkle/bin
 # Sparkle orders updates by CFBundleVersion, which the commit count only ever raises along main.
 BUILD   := $(shell git rev-list --count HEAD 2>/dev/null)
+# Empty signs as project.yml says; `-` signs ad-hoc, and any other value names a keychain identity.
+SIGN    :=
+SIGNING := $(if $(SIGN),CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGN)" DEVELOPMENT_TEAM=)
+
+ifneq ($(and $(SIGN),$(filter dist publish,$(MAKECMDGOALS))),)
+$(error SIGN is for local builds: installs keep their grants only under project.yml's identity)
+endif
 
 .PHONY: all gen build run release dist publish clean distclean test
 
@@ -38,6 +45,7 @@ build: gen
 		-scheme $(SCHEME) \
 		-configuration $(CONFIG) \
 		-derivedDataPath $(DERIVED) \
+		$(SIGNING) \
 		build
 
 run: build
@@ -52,6 +60,7 @@ release: gen
 		-configuration Release \
 		-derivedDataPath $(DERIVED) \
 		$(if $(BUILD),CURRENT_PROJECT_VERSION=$(BUILD)) \
+		$(SIGNING) \
 		build
 	rm -rf $(RELAPP)
 	ditto $(DERIVED)/Build/Products/Release/$(PROJECT).app $(RELAPP)

@@ -229,6 +229,13 @@ each time. To build under a different team, change `DEVELOPMENT_TEAM` in `projec
 `make build` and `make release` regenerates the Xcode project from it, so a team picked in Xcode
 does not stick. Keep that change out of pull requests.
 
+Without that certificate, `SIGN` signs one `make build`, `make run` or `make release` another way,
+leaving `project.yml` alone. `make run SIGN=-` signs ad-hoc: it builds anywhere, but macOS revokes
+the grants at every build. `SIGN="<name>"` signs with another code-signing identity in the keychain,
+such as a self-signed certificate; switching to or from it costs the grants once, and they persist
+across its builds. `make dist` and `make publish` refuse `SIGN`, since installs keep their grants
+only while updates keep `project.yml`'s identity.
+
 ### Start at login
 
 The menu's **Start at Login** toggle registers mvim with `SMAppService.mainApp`, the API that
