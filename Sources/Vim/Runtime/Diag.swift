@@ -31,9 +31,15 @@ enum Diag {
         line += " forced=\(binding.isForced ? 1 : 0) overlay=\(binding.isOverlay ? 1 : 0)"
         // nil is the signal: the learner keys on this rung and needs one.
         line += " rung=\(binding.surface.roleRung ?? "nil")"
-        line += " ver=\(binding.appVersion ?? "nil")"
+        line += " ver=\(binding.versions.app ?? "nil")"
+        if let engine = binding.versions.engine {
+            line += " engine=\(engine)"
+        }
         if let report = binding.capabilityReport {
             line += " caps=\(report.traceGrid)"
+        }
+        if let beliefs = binding.beliefs {
+            line += " offsets=\(beliefs.readModel.traceName)"
         }
         if binding.isChromium {
             line += " chromium=1"
@@ -42,6 +48,9 @@ enum Diag {
             line += " id=\(identifier)"
         }
         self.bind.log("\(line, privacy: .public)")
+        for belief in binding.beliefs?.traceLines ?? [] {
+            self.bind.log("e\(epoch, privacy: .public) \(belief, privacy: .public)")
+        }
         if recordsText {
             self.bind.log("""
                 TEXT RECORDING ON — to stop: defaults delete com.loom.mvim \
@@ -104,12 +113,12 @@ enum Diag {
     /// Includes the soft ones, which ring nothing, abort nothing and were invisible.
     private static func settleFailed(_ tag: String, _ failure: Executor.SettleFailure) {
         var line = "\(tag) \(failure.hard ? "FAIL" : "soft")@\(failure.index)"
-        line += " want \(failure.expectation.traceFields)"
+        line += " want \(failure.expectation.traceFields(text: recordsText))"
         let observed = Expectation(
             selection: failure.observedSelection, length: failure.observedLength,
             selectedText: failure.observedSelectedText
         )
-        line += " got \(observed.traceFields)"
+        line += " got \(observed.traceFields(text: recordsText))"
         // A field that answered something else, versus one that would not answer.
         line += " answered=\(failure.answered ? 1 : 0)"
         line += " polls=\(failure.polls) ms=\(failure.milliseconds)"
@@ -121,11 +130,22 @@ enum Diag {
 
     // MARK: - The learner
 
-    static func learned(_ epoch: UInt64, _ seq: UInt64, rung: String, version: String?, capability: Capability) {
-        learn.log("""
-            e\(epoch, privacy: .public).c\(seq, privacy: .public) commit \
-            rung=\(rung, privacy: .public) cap=\(capability.traceName, privacy: .public) \
-            ver=\(version ?? "nil", privacy: .public) → republish
+    static func learned(
+        _ epoch: UInt64, _ seq: UInt64, _ lesson: Learning.Lesson, rung: String, versions: Versions, failed: Capability?
+    ) {
+        for line in lesson.traceLines(rung: rung, versions: versions, failed: failed) {
+            learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) \(line, privacy: .public)")
+        }
+    }
+
+    static func neutral(_ epoch: UInt64, _ seq: UInt64, _ verdict: Expectation.Verdict) {
+        learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) \(verdict.traceFields, privacy: .public)")
+    }
+
+    static func observed(_ epoch: UInt64, _ seq: UInt64, _ evidence: OffsetsEvidence, under answer: OffsetsAnswer) {
+        learn.debug("""
+            e\(epoch, privacy: .public).c\(seq, privacy: .public) observe offsets=\(answer.rawValue, privacy: .public) \
+            \(evidence.traceFields, privacy: .public)
             """)
     }
 

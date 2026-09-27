@@ -21,6 +21,9 @@ public final class Controller {
         }
     }
 
+    /// Physical Esc engages Normal mode alongside ⌃[: the menu's Normal Mode Key.
+    public var escapeEngages = false
+
     /// Mode channel for the menu-bar indicator; nil = unbound. Setting the
     /// callback publishes immediately — the tracker may have bound during
     /// init, before the app model could wire in.
@@ -47,10 +50,11 @@ public final class Controller {
     private var state = VimState.initial
     private let executor = Executor()
 
-    /// The lazy write probe's running tally. In memory on purpose: a structural
-    /// lie fails every command and commits in seconds, while a flaky field
-    /// interleaves successes and is correctly forgotten at exit.
-    private var ledger = StrikeLedger()
+    /// Marker sampling for the bound field; a new element starts over.
+    private var sampling = OffsetsSampling()
+
+    /// Per-rung evidence this process, stored with the read model.
+    private var tallies: [String: Tally] = [:]
 
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
@@ -106,6 +110,11 @@ public final class Controller {
         tracker.reresolveCapabilities()
     }
 
+    public func forgetBelief(_ capability: Capability, at rung: String) {
+        Beliefs.forget(capability.rawValue, at: rung)
+        if capability == .readCaret { Beliefs.forget(Belief.offsets, at: rung) }
+    }
+
     /// The `InputHub` handler: returns the consume verdict. Zero AX on the
     /// steady paths (insert typing, unbound apps, ⌘-chords); one bounded
     /// resolve on Esc and one verify before running a completed command.
@@ -116,7 +125,7 @@ public final class Controller {
         }
         guard enabled, event.kind == .keyDown else { return false }
         // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
-        guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
+        guard let token = gate(event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive
             // it: the app may move the caret, and a later key would complete
             // the command against a position the user never aimed at (`d`,
@@ -126,10 +135,8 @@ public final class Controller {
             return false
         }
 
-        // ⌃[ is the mode-engaging key — the one keystroke where a stale
-        // binding has teeth. Rate-limited full re-check (secure/enabled too).
-        // Physical Esc never gets here: KeyNotation returns nil for it.
-        if token == "<C-[>" { tracker.reverify() }
+        // An engage key is where a stale binding has teeth: a rate-limited full re-check.
+        if Self.engageTokens.contains(token) { tracker.reverify() }
 
         guard var binding = tracker.bindingForKeydown() else { return false }
 
@@ -155,7 +162,7 @@ public final class Controller {
         case .passthrough:
             return false
         case .pending, .cancelled:
-            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+            guard gate(event, profile: binding.capabilities) != nil else {
                 monitor.cancelPending()
                 return false
             }
@@ -164,11 +171,8 @@ public final class Controller {
             // Numbered here, not in `run`, so the three silent drops below are too.
             seq &+= 1
             let commandSeq = seq
-            // Verify-before-run: never mutate a field focus has left. An
-            // overlay summoned over a bound Normal-mode field emits no event
-            // the tracker can see, so a completed command buys one bounded
-            // resolve. ⌃[ already reverified this very event.
-            if token != "<C-[>" {
+            // Never mutate a field focus has left (an overlay emits no event); an engage key already reverified.
+            if !Self.engageTokens.contains(token) {
                 if binding.isForced {
                     // AX-silent apps resolve no focused element — the
                     // element check would swallow every command. Verify at
@@ -199,7 +203,7 @@ public final class Controller {
                     }
                 }
             }
-            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+            guard gate(event, profile: binding.capabilities) != nil else {
                 Diag.dropped(tracker.epoch, commandSeq, command: completed.command, reason: "app-key")
                 return false
             }
@@ -212,6 +216,12 @@ public final class Controller {
     }
 
     private static let readsAppKeys = CapabilityProfile(available: [.nativeMotions])
+
+    private static let engageTokens: Set<String> = ["<C-[>", "<Esc>"]
+
+    private func gate(_ event: KeyEvent, profile: CapabilityProfile) -> String? {
+        KeyNotation.token(for: event, profile: profile, escapeEngages: escapeEngages)
+    }
 
     /// A completed command verify-before-run threw away, then handed to its reverify.
     private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
@@ -237,6 +247,7 @@ public final class Controller {
             )
         }
         if !transition.preservesDrawnCursor { fieldBreaks = nil }
+        if transition != .sameElement { sampling = OffsetsSampling() }
         binding = new
         Diag.bind(tracker.epoch, transition, new)
         // Keys-in-flight and the open dot body are one unit, and neither
@@ -281,13 +292,20 @@ public final class Controller {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        let snapshot = Snapshotter.snapshot(
+        let reading = Snapshotter.snapshot(
             of: binding.element,
             capabilities: binding.capabilities,
             anchor: anchor,
             cursor: state.field.cursor,
-            chromium: binding.isChromium
+            chromium: binding.isChromium,
+            model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
+            sampling: sampling
         )
+        if reading.sampled {
+            sampling.sampled(markers: reading.markers, evidence: reading.observed.evidence, text: reading.reads.text,
+                             plain: reading.reads.plain)
+        }
+        let snapshot = reading.snapshot
         fieldBreaks = snapshot.breaks
         let paragraphs = snapshot.breaks != nil
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
@@ -302,7 +320,7 @@ public final class Controller {
         // Deferred so it runs after hygiene and the dot bookkeeping, on both
         // paths, and so the republish a commit triggers happens as `run`
         // unwinds rather than re-entering the tracker mid-command.
-        defer { learn(from: evidence, on: binding, epoch: epoch, seq: commandSeq) }
+        defer { learn(from: evidence, reading: reading, on: binding, epoch: epoch, seq: commandSeq) }
         // Declared second so LIFO runs it first, before the republish it may cause.
         defer {
             Diag.command(
@@ -375,64 +393,40 @@ public final class Controller {
         return nil
     }
 
-    /// Fold one command's settle verdicts into the write probe's tally.
-    ///
-    /// Only hard settles produce evidence, and only an AX write or a native
-    /// key is ever attributed — so this speaks exclusively about the claims a
-    /// field can make and then fail to deliver: `writeSelection`, `insertText`
-    /// and the keys. Reads were proven at bind; policies have no settle signal.
-    ///
-    /// A strike commits a demotion (`StrikeLedger.strikesToCommit`), persisted and applied
-    /// at once, so the next command routes around the lie. The re-resolve is
-    /// session-preserving (`.sameElement`), so it does not move the user mid-edit.
+    /// A change applies at once, keeping the session (`.sameElement`), so the next command routes around it.
     private func learn(
-        from evidence: Executor.RunEvidence, on binding: FocusTracker.Binding,
+        from evidence: Executor.RunEvidence, reading: Snapshotter.Reading, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64
     ) {
-        // A command that issued no AX write or native key — the whole blind lane,
-        // and any plan whose steps were all commits — teaches nothing and should
-        // not pay for the config lookups below. Already on the line as `fail=nil`.
-        guard evidence.failedCapability != nil || !evidence.settledCapabilities.isEmpty else {
-            return
-        }
-        // No role means no stable key to accumulate against (a forced binding,
-        // or an element AX would not name).
+        let run = evidence.attribution
+        let observed = reading.observed
+        if let neutral = run.neutral { Diag.neutral(epoch, seq, neutral) }
+        // A forced binding resolves nothing to learn against.
+        guard let beliefs = binding.beliefs else { return }
+        let model = beliefs.readModel
+        let teaches = observed.evidence?.informative == true || run.textMismatch || run.failed != nil
+        // No role means no stable key to accumulate against.
         guard let rung = binding.surface.roleRung else {
-            Diag.notLearned(epoch, seq, reason: "no-rung", failed: evidence.failedCapability)
+            if teaches { Diag.notLearned(epoch, seq, reason: "no-rung", failed: run.failed) }
             return
         }
-
-        /// The user has the last word: once they have set an atom explicitly,
-        /// stop inferring about it. Without this their `.on` would lose to a
-        /// machine guess, and clearing an override would not restore
-        /// auto-detection because the learned demotion would silently persist.
-        func isAuto(_ capability: Capability) -> Bool {
-            CapabilityConfig.resolve(binding.surface, capability: capability.rawValue)
-                .override == nil
+        if let evidence = observed.evidence {
+            tallies[rung, default: Tally()].count(evidence)
+            Diag.observed(epoch, seq, evidence, under: observed.before)
         }
-
-        // No silence check on the success path: clearing a tally is forgetting,
-        // not inferring, and a capability the user has set can never have
-        // accumulated one anyway — strikes below are what the rule gates.
-        for capability in evidence.settledCapabilities {
-            ledger.clear(rung: rung, capability: capability.rawValue)
-        }
-
-        guard let failed = evidence.failedCapability else { return }
-        guard isAuto(failed) else {
-            Diag.notLearned(epoch, seq, reason: "user-override", failed: failed)
-            return
-        }
-        // At a threshold of one, false means already committed — a misattributed lie.
-        guard ledger.strike(rung: rung, capability: failed.rawValue) else {
-            Diag.notLearned(epoch, seq, reason: "already-committed", failed: failed)
-            return
-        }
-        LearnedPriors.commit(
-            rung: rung, version: binding.appVersion, capability: failed.rawValue
+        if run.textMismatch, observed.source.observes { tallies[rung, default: Tally()].count(.misfit(.textCheck)) }
+        guard teaches || observed.after != model.answer else { return }
+        var store = Beliefs.load()
+        let stored = store
+        let lesson = Learning.learn(
+            store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
+            // The user has the last word: once they set an atom, stop inferring about it.
+            overridden: { CapabilityConfig.resolve(binding.surface, capability: $0.rawValue).override != nil },
+            provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()
         )
-        Diag.learned(epoch, seq, rung: rung, version: binding.appVersion, capability: failed)
-        tracker.reresolveCapabilities()
+        if store != stored { Beliefs.save(store) }
+        Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions, failed: run.failed)
+        if lesson.republish { tracker.reresolveCapabilities() }
     }
 
     /// Collapse a stranded selection, and report whether the field is safe to type into.

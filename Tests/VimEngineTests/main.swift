@@ -314,6 +314,7 @@ let ciwA = physical("ciw", text: "say hello world", caret: 6, profile: axProfile
 precondition(ciwA.steps == [
     .setSelection(4..<9),
     .settle(Expectation(selection: 4..<9, length: 15)),
+    .settle(Expectation(selection: 4..<9, length: 15, selectedText: "hello")),
     .replaceSelection(""),
     .settle(Expectation(selection: 4..<4, length: 10)),
     .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
@@ -359,6 +360,7 @@ let ciwNoInsert = physical("ciw", text: "say hello world", caret: 6, profile: no
 precondition(ciwNoInsert.steps == [
     .setSelection(4..<9),
     .settle(Expectation(selection: 4..<9, length: 15)),
+    .settle(Expectation(selection: 4..<9, length: 15, selectedText: "hello")),
     .press(.deleteBack, count: 1),
     .softSettle(Expectation(selection: 4..<4, length: 10)),
     .commit(.deleted(into: nil, content: .literal("hello"), wise: .character)),
@@ -451,6 +453,7 @@ precondition(physical(";", text: "say hello", caret: 0, profile: axProfile, stat
 precondition(physical("dw", text: "say hello", caret: 0, profile: axProfile).steps == [
     .setSelection(0..<4),
     .settle(Expectation(selection: 0..<4, length: 9)),
+    .settle(Expectation(selection: 0..<4, length: 9, selectedText: "say ")),
     .replaceSelection(""),
     .settle(Expectation(selection: 0..<0, length: 5)),
     .commit(.deleted(into: nil, content: .literal("say "), wise: .character)),
@@ -468,6 +471,7 @@ precondition(!physical("u", text: "say hello", caret: 0, profile: axProfile).mut
 precondition(physical("dd", text: "one\ntwo", caret: 1, profile: axProfile).steps == [
     .setSelection(0..<4),
     .settle(Expectation(selection: 0..<4, length: 7)),
+    .settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")),
     .replaceSelection(""),
     .settle(Expectation(selection: 0..<0, length: 3)),
     .commit(.deleted(into: nil, content: .literal("one\n"), wise: .line)),
@@ -527,9 +531,7 @@ precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: axProfile
 
 // MARK: - Block-scoped fields (wholeDocument denied)
 
-// The atom's raw value is a cross-module string contract: `CapabilityConfig`
-// seeds and `LearnedPriors` key on it by literal, because LoomCore cannot see
-// this type. Renaming the case silently orphans the Notion seed, so pin it.
+// A cross-module string contract: `CapabilityConfig` seeds and stored beliefs name the raw value.
 precondition(Capability.wholeDocument.rawValue == "wholeDocument")
 precondition(Capability.drawCursor.rawValue == "drawCursor")
 // Policy atoms are resolved from a parent mechanism, never probed.
@@ -709,6 +711,10 @@ func selectedBack(_ end: Landing, length: Int, within: Range<Int>) -> [PhysicalS
 func moveBlame(_ atom: Capability, _ p: Int?) -> Expectation.Blame {
     Expectation.Blame(capability: atom, unmoved: p.map { [$0..<$0] } ?? [], leavesCaret: true)
 }
+func webMoveBlame(_ atom: Capability, _ p: Int?) -> Expectation.Blame {
+    Expectation.Blame(capability: atom, unmoved: [], leavesCaret: true,
+                      exemptions: p.map { [.init(.webContent, unmoved: [$0..<$0])] } ?? [])
+}
 let prose = "say hello world"
 let nativeParagraphs = "alpha beta\ngamma delta\n\nepsilon zeta"
 
@@ -757,17 +763,17 @@ func webPhysical(
 // In Chromium text content checks leave in field offsets, and a boundary caret names its side.
 let chromiumBreak = ParagraphBreaks(offsets: [2])
 precondition(webPhysical("w", text: "ab\ncd", caret: 3, profile: nativeRead, breaks: chromiumBreak).steps[1]
-    == .settle(Expectation(landing: .caretAfter(2, strict: true), length: 5, blame: moveBlame(.wordKeys, nil))))
+    == .settle(Expectation(landing: .caretAfter(2, strict: true), length: 5, blame: webMoveBlame(.wordKeys, 2))))
 precondition(webPhysical("w", text: "ab\ncd", caret: 2, profile: nativeRead, breaks: chromiumBreak).steps[1]
     == .settle(Expectation(landing: .caretAfter(2, strict: false), length: 5, blame: moveBlame(.wordKeys, nil))))
 let boundaryCiw = webPhysical("ciw", text: "ab\ncd", caret: 2, profile: nativeRead, breaks: chromiumBreak).steps
 precondition(boundaryCiw[2] == .settle(kept(Expectation(landing: .exact(2..<2), length: 5, edge: .paragraphStart), 0)))
 precondition(boundaryCiw[6] == .settle(kept(Expectation(landing: .exact(2..<2), length: 5, edge: .paragraphEnd), 1)))
 precondition(webPhysical("w", text: "ab\ncd\nef", caret: 6, profile: nativeRead).steps[1]
-    == .settle(Expectation(landing: .caretAfter(6, strict: true), length: 8, blame: moveBlame(.wordKeys, nil))))
+    == .settle(Expectation(landing: .caretAfter(6, strict: true), length: 8, blame: webMoveBlame(.wordKeys, 6))))
 precondition(webPhysical("ciw", text: prose, caret: 6, profile: nativeRead).steps.allSatisfy {
     guard case .settle(let expectation) = $0 else { return true }
-    return expectation.blame == nil
+    return expectation.checkedKey == nil
 })
 precondition(physical("w", text: "ab\ncd\nef", caret: 5, profile: nativeRead).steps[1]
     == .settle(Expectation(landing: .caretAfter(5, strict: true), length: 8, blame: moveBlame(.wordKeys, 5))))
@@ -1358,6 +1364,7 @@ precondition(lastWordA.plan.steps == [
     .setSelection(5..<7),
     .press(.selectLeft, count: 1),
     .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd)),
+    .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd, selectedText: "ef")),
     .replaceSelection(""),
     .settle(Expectation(selection: 5..<5, length: 9, edge: .paragraphEnd)),
     .commit(.deleted(into: nil, content: .literal("ef"), wise: .character)),
@@ -1391,6 +1398,7 @@ precondition(PhysicalPlanner.planning(fromParagraphEnd, snapshot: FieldSnapshot(
     .press(.left, count: 1),
     .press(.selectRight, count: 3),
     .settle(Expectation(selection: 2..<4, length: 11)),
+    .settle(Expectation(selection: 2..<4, length: 11, selectedText: "cd")),
     .replaceSelection(""),
     .settle(Expectation(selection: 2..<2, length: 8)),
     .commit(.deleted(into: nil, content: .literal("\ncd"), wise: .character)),
@@ -1467,11 +1475,10 @@ func checksText(_ plan: PhysicalPlan) -> Bool {
         return false
     }
 }
-// An AX write made the selection, so lane A is exactly as it was.
 for edit in laneBEdits {
     for profile in [axProfile, noCursorProfile, noInsertProfile, blockProfile] {
-        precondition(!checksText(physical(edit.keys, text: twoLines, caret: edit.caret, profile: profile)),
-                     "lane A must not check the text \(edit.keys) replaces")
+        let plan = physical(edit.keys, text: twoLines, caret: edit.caret, profile: profile)
+        precondition(plan == .rejected || checkedTexts(plan) == edit.text, "lane A must check the text \(edit.keys) replaces")
     }
 }
 let readNothingSelected = CapabilityProfile(available: [.readText, .readLength, .readCaret, .wholeDocument])
@@ -1502,10 +1509,11 @@ private func expectToken(
     _ chord: KeyNotation.Chord,
     _ characters: String,
     _ expected: String?,
+    escapeEngages: Bool = false,
     file: StaticString = #file,
     line: UInt = #line
 ) {
-    let token = KeyNotation.token(keyCode: keyCode, chord: chord, characters: characters)
+    let token = KeyNotation.token(keyCode: keyCode, chord: chord, characters: characters, escapeEngages: escapeEngages)
     precondition(
         token == expected,
         "Unexpected token for keyCode \(keyCode) chord \(chord.rawValue): \(token ?? "nil")",
@@ -1524,8 +1532,16 @@ expectToken(38, [.shift], "J", "J")
 expectToken(123, [], "", "<Left>")
 expectToken(36, [], "\r", "<CR>")
 expectToken(48, [], "\t", "\t")          // bare Tab stays vim's — deliberate scope
-expectToken(53, [], "\u{1B}", nil)       // physical Esc is never vim's
+expectToken(53, [], "\u{1B}", nil)       // physical Esc is the app's unless chosen
 expectToken(38, [.command], "j", nil)
+
+expectToken(53, [], "\u{1B}", "<Esc>", escapeEngages: true)
+expectToken(53, [.shift], "\u{1B}", "<Esc>", escapeEngages: true)
+expectToken(53, [.option], "\u{1B}", nil, escapeEngages: true)
+expectToken(53, [.command], "\u{1B}", nil, escapeEngages: true)
+expectToken(53, [.control], "\u{1B}", "<C-[>")
+expectToken(33, [.control], "\u{1B}", "<C-[>", escapeEngages: true)
+expectToken(38, [], "j", "j", escapeEngages: true)
 
 // ⇧ is transparent on the navigation cluster…
 expectToken(123, [.shift], "", "<Left>")
@@ -1637,11 +1653,18 @@ monitor.cancelPending()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
 
-// Esc cancels a pending command; on an idle buffer it dispatches.
+// Esc cancels a pending command; idle, it is the app's in Normal and leaves Visual.
 precondition(monitor.feed("d", mode: .normal) == .pending)
 precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)
-precondition(monitor.feed("<Esc>", mode: .normal) ==
+precondition(monitor.feed("<Esc>", mode: .normal) == .passthrough)
+precondition(monitor.feed("/", mode: .normal) == .pending)
+precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)
+precondition(monitor.feed("i", mode: .visual) == .pending)
+precondition(monitor.feed("<Esc>", mode: .visual) == .cancelled)
+precondition(monitor.feed("<Esc>", mode: .visual) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"))))
+precondition(monitor.feed("\u{1B}", mode: .normal) ==
+    .command(RawMonitor.Completed(command: RawCommand("\u{1B}"))))
 
 // Visual: bare operators fire on the selection; i/a await their object.
 precondition(monitor.feed("d", mode: .visual) ==
@@ -1698,8 +1721,7 @@ monitor.reset()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "")))
 
-// <C-[> is the runtime's engage key (physical Esc never reaches the
-// monitor): it must complete insert, cancel pending, and dispatch alone.
+// <C-[> must complete insert, cancel pending, and dispatch alone, even idle in Normal.
 precondition(monitor.feed("h", mode: .insert) == .passthrough)
 precondition(monitor.feed("<C-[>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
@@ -1858,6 +1880,18 @@ precondition(sim.selection == 10..<11)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
+
+var esc = Sim(text: "say hello world", caret: 4, profile: axProfile)
+esc.type("vl")
+esc.feed("<Esc>")
+precondition(esc.state.field.mode == .normal && esc.selection == 5..<6)
+esc.type("d")
+esc.feed("<Esc>")
+esc.type("x")
+precondition(esc.text == "say hllo world")
+esc.feed("<Esc>")
+precondition(esc.text == "say hllo world" && esc.selection == 5..<6 && esc.state.field.mode == .normal)
+precondition(esc.settleFailures == 0 && esc.bells == 0 && esc.unsupportedSteps == 0)
 
 /// Types `change`, ends it with ⌃[, then types `then`.
 func replayed(_ text: String, caret: Int = 0, _ change: String, then keys: String) -> Sim {
@@ -2535,43 +2569,58 @@ precondition(diaChrome.rungs.contains(diaChrome.roleRung!))
 let learnRung = "com.dia.app|notion.so|role:AXTextField"
 let otherRung = "com.other.app|role:AXTextField"
 
-// One strike commits. The fields this catches no-op the write on every single
-// command, so a second reading buys no certainty and costs another dead command
-// on every new surface. `true` means "persist this and re-resolve the binding".
-var learnerLedger = StrikeLedger()
-precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == true)
+// One strike commits; `true` asks to persist and re-resolve.
+let learnVersions = Versions(app: "1.49.1")
+func committing(_ store: inout BeliefStore, _ capability: Capability, at rung: String = learnRung,
+                under offsets: OffsetsAnswer = .value, versions: Versions = learnVersions) -> Bool {
+    store.commit(broken: capability, at: rung, judgedUnder: offsets, versions: versions, provenance: Provenance(tag: "e1.c1"))
+}
+var trials = BeliefStore()
+precondition(committing(&trials, .insertText))
+precondition(!committing(&trials, .insertText) && !committing(&trials, .insertText))
+func broken(_ store: BeliefStore, rung: String = learnRung, versions: Versions = learnVersions) -> Set<Capability> {
+    store.resolve(rungs: [rung], rung: rung, versions: versions, chromium: false, children: true, userPinsOffsets: false).broken
+}
+precondition(broken(trials) == [.insertText])
 
-// ...and says so exactly once. A demoted capability stops being exercised, but a
-// stray strike (a stale cursor collapse, a queued command) must not re-fire the
-// republish a commit triggers.
-precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false)
-precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false)
+var passed = RunAttribution()
+passed.record(.replaceSelection(""))
+passed.record(.settle(Expectation(selection: 4..<4)), passed: true, selection: 4..<4)
+precondition(passed.settled == [.insertText] && passed.failed == nil)
+for start in [BeliefStore(), trials] {
+    var store = start
+    let lesson = Learning.learn(
+        store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
+        observed: Learning.Observation(before: .value, source: .start), run: passed, overridden: { _ in false },
+        provenance: Provenance(), tally: Tally()
+    )
+    precondition(store == start && !lesson.republish && lesson.committed == nil)
+}
 
-// A success never un-commits. Once demoted the capability is not exercised, so
-// it generates no evidence either way — only the version TTL re-opens the trial.
-learnerLedger.clear(rung: learnRung, capability: "insertText")
-precondition(learnerLedger.strike(rung: learnRung, capability: "insertText") == false,
-             "a cleared tally must not resurrect a committed demotion")
+var perRung = BeliefStore()
+precondition(committing(&perRung, .insertText) && committing(&perRung, .writeSelection) && committing(&perRung, .insertText, at: otherRung))
+precondition(!committing(&perRung, .insertText) && !committing(&perRung, .insertText, at: otherRung))
+precondition(broken(perRung) == [.insertText, .writeSelection] && broken(perRung, rung: otherRung) == [.insertText])
 
-// Clearing something that never struck is a no-op — the honest-app path, which
-// runs on essentially every command.
-var learnerHonest = StrikeLedger()
-learnerHonest.clear(rung: learnRung, capability: "insertText")
-precondition(learnerHonest.pending(rung: learnRung, capability: "insertText") == 0)
+precondition(broken(perRung, versions: Versions(app: "1.50")).isEmpty)
+precondition(committing(&perRung, .writeSelection, versions: Versions(app: "1.50")))
+precondition(!perRung.beliefs.contains { $0.rung == learnRung && $0.appVersion == "1.49.1" })
+precondition(perRung.beliefs.contains { $0.rung == otherRung }, "other rungs keep theirs")
 
-// Commits are independent per capability and per rung: a lying insertText must
-// not drag writeSelection down with it, nor one site another.
-var learnerMixed = StrikeLedger()
-precondition(learnerMixed.strike(rung: learnRung, capability: "insertText") == true)
-precondition(learnerMixed.strike(rung: learnRung, capability: "writeSelection") == true)
-precondition(learnerMixed.strike(rung: otherRung, capability: "insertText") == true)
-// Each of those is its own conclusion, so none of them re-fires.
-precondition(learnerMixed.strike(rung: learnRung, capability: "insertText") == false)
-precondition(learnerMixed.strike(rung: otherRung, capability: "insertText") == false)
-
-// The threshold is the single knob: raising it restores the forgiving behaviour
-// (a success clearing a pending tally) without touching anything else.
-precondition(StrikeLedger.strikesToCommit == 1)
+var struck = RunAttribution()
+struck.record(.setSelection(4..<9))
+struck.record(.settle(Expectation(selection: 4..<9)), passed: false, selection: 0..<0)
+precondition(struck.failed == .writeSelection)
+for overridden in [true, false] {
+    var store = BeliefStore()
+    let lesson = Learning.learn(
+        store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
+        observed: Learning.Observation(before: .value, source: .start), run: struck, overridden: { _ in overridden },
+        provenance: Provenance(), tally: Tally()
+    )
+    precondition(overridden ? lesson.skip == .userOverride && store.beliefs.isEmpty
+                 : lesson.committed == .writeSelection && lesson.republish && broken(store) == [.writeSelection])
+}
 
 
 // MARK: - The recorder's renderers
@@ -2585,7 +2634,7 @@ func traced(
     )
 }
 
-precondition(ciwA.traceShape == "W!R!CCC")
+precondition(ciwA.traceShape == "W!!R!CCC")
 precondition(physical("ciw", text: "say hello world", caret: 6, profile: readProfile).traceShape
              == "P2P5!!P?CCC")
 precondition(physical("ciw", text: "say hello world", caret: 6, profile: blindProfile).traceShape
@@ -3018,5 +3067,408 @@ precondition(sim.blamed.isEmpty && sim.settleFailures == 0, "⌃A at a line star
 precondition(Landing.caretAfter(4, strict: true).matches(5..<5) && !Landing.caretAfter(4, strict: true).matches(4..<4))
 precondition(Landing.caretBefore(4, strict: false).matches(4..<4) && !Landing.caretBefore(4, strict: false).matches(2..<3))
 precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "sel=>2 len=nil")
+
+// MARK: - The belief model
+
+let supportsValue = OffsetsEvidence.supports(.value, .plainIsValue)
+let supportsTextContent = OffsetsEvidence.supports(.textContent, .plainIsTextContent)
+for answer in OffsetsAnswer.allCases {
+    for newEngine in [false, true] {
+        precondition(answer.next(.neutral(.noBreaks), newEngine: newEngine) == answer)
+        precondition(answer.next(.misfit(.selectedText), newEngine: newEngine) == .untrusted)
+        precondition(answer.next(supportsTextContent, newEngine: newEngine) == .textContent, "textContent fits again from \(answer)")
+    }
+    precondition(answer.next(supportsValue, newEngine: true) == .value)
+}
+precondition(OffsetsAnswer.value.next(supportsValue, newEngine: false) == .value)
+precondition(OffsetsAnswer.textContent.next(supportsValue, newEngine: false) == .untrusted, "value needs a new engine")
+precondition(OffsetsAnswer.untrusted.next(supportsValue, newEngine: false) == .untrusted)
+
+// In "ab\ncd" a caret before `d` is 4 in `AXValue` and 3 without the break.
+let beforeD = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 4..<4)
+precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: beforeD).evidence(current: .value) == supportsTextContent)
+precondition(FieldReads(text: "ab\ncd", plain: 4..<4, markers: beforeD).evidence(current: .textContent) == supportsValue)
+precondition(FieldReads(text: "ab\ncd", plain: 0..<0, markers: beforeD).evidence(current: .textContent) == .neutral(.boundarySnap))
+precondition(FieldReads(text: "ab\ncd", plain: 1..<1, markers: MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 1..<1))
+    .evidence(current: .value) == .neutral(.noBreaks))
+precondition(FieldReads(text: "ab\ncd", plain: 3..<3).evidence(current: .value) == nil, "a caret without markers compares nothing")
+precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: MarkerReads(breaks: nil, value: nil)).evidence(current: .textContent) == nil)
+// A list marker the side read skips is no break.
+let listItem = ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!
+precondition(FieldReads(text: "• ab\n• cd", plain: 6..<6, markers: MarkerReads(breaks: listItem, value: 7..<7))
+    .evidence(current: .textContent) == supportsTextContent)
+
+let cd = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 3..<5)
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd", markers: cd).evidence(current: .value) == supportsTextContent)
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .value) == .misfit(.selectedText),
+             "with value the only candidate, a mismatch fits nothing")
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .textContent) == .neutral(.unaligned))
+precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "cd").selectedTextEvidence(current: .value) == .neutral(.textAgrees))
+precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "c\u{FFFC}d").selectedTextEvidence(current: .value) == .neutral(.textAgrees),
+             "Chromium's U+FFFC for a leaf with no text is no disagreement")
+precondition(FieldReads(text: "ab\nab", plain: 2..<4, selectedText: "\na", markers: MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 3..<5))
+    .evidence(current: .textContent) == .misfit(.readsDisagree))
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "zz", markers: cd).evidence(current: .textContent) == .misfit(.selectedText),
+             "a selected-text misfit outranks the offsets")
+precondition(FieldReads(text: "ab", plain: 0..<1, selectedText: "a", markers: MarkerReads(breaks: nil, value: nil))
+    .interpreted(under: .textContent) == (nil, ParagraphBreaks(), false, false))
+precondition(FieldReads(text: "ab", plain: 0..<1).interpreted(under: .untrusted) == (nil, nil, false, false))
+
+var sampling = OffsetsSampling()
+precondition(!sampling.samples(text: "ab", plain: 1..<1) && !sampling.samples(text: "ab\ncd", plain: nil))
+precondition(!sampling.samples(text: "ab\ncd", plain: 1..<1), "a plain read before the first newline is paragraph 1's under any count")
+precondition(sampling.samples(text: "ab\ncd", plain: 2..<2) && sampling.samples(text: "ab\ncd", plain: 0..<2))
+sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 0..<2)
+precondition(sampling.remaining == OffsetsSampling.budget, "a silence at paragraph 1's end costs nothing")
+for _ in 1..<OffsetsSampling.budget {
+    sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 3..<3)
+    precondition(sampling.samples(text: "ab\ncd", plain: 3..<3))
+}
+sampling.sampled(markers: true, evidence: nil, text: "ab\ncd", plain: 4..<4)
+precondition(!sampling.samples(text: "ab\ncd", plain: 3..<3))
+var informed = OffsetsSampling()
+informed.sampled(markers: true, evidence: supportsValue, text: nil, plain: nil)
+var markerless = OffsetsSampling()
+markerless.sampled(markers: false, evidence: nil, text: nil, plain: nil)
+precondition(!informed.samples(text: "ab\ncd", plain: 3..<3) && !markerless.samples(text: "ab\ncd", plain: 3..<3))
+
+func resolving(_ store: BeliefStore, starting: OffsetsAnswer = .value, versions: Versions = learnVersions,
+               pins: Bool = false, children: Bool = true) -> ResolvedBeliefs {
+    store.resolve(rungs: diaPageField.rungs, rung: learnRung, versions: versions, chromium: starting == .textContent,
+                  children: children, userPinsOffsets: pins)
+}
+var dependent = BeliefStore()
+precondition(committing(&dependent, .writeSelection))
+precondition(resolving(dependent).broken == [.writeSelection] && resolving(dependent).reopened.isEmpty)
+let reopenedAtStart = resolving(dependent, starting: .textContent)
+precondition(reopenedAtStart.broken.isEmpty && reopenedAtStart.reopened.map(\.question) == ["writeSelection"])
+precondition(dependent.record(offsets: .textContent, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+let learnedTextContent = resolving(dependent)
+precondition(learnedTextContent.readModel.answer == .textContent && learnedTextContent.readModel.source == .learned)
+precondition(learnedTextContent.broken.isEmpty, "a verdict judged under value reopens when its rung learns textContent")
+precondition(committing(&dependent, .writeSelection, under: .textContent), "a new strike re-judges it under the answer in force")
+precondition(resolving(dependent).broken == [.writeSelection])
+precondition(dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+precondition(resolving(dependent).broken.isEmpty && resolving(dependent).reopened.map(\.question) == ["writeSelection"],
+             "any change of the offsets answer reopens what the old one judged")
+var judgedUntrusted = dependent
+precondition(committing(&judgedUntrusted, .writeSelection, under: .untrusted) && resolving(judgedUntrusted).broken == [.writeSelection])
+precondition(!dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(tag: "e9.c9"), tally: Tally()))
+precondition(dependent.offsetsBelief(at: learnRung)?.provenance.tag == nil, "a read model that stood is not rewritten")
+
+let upgraded = resolving(dependent, versions: Versions(app: learnVersions.app, engine: "42"))
+precondition(upgraded.readModel.answer == .value && upgraded.readModel.source == .start && upgraded.readModel.newEngine)
+let pinned = resolving(dependent, starting: .textContent, pins: true)
+precondition(pinned.readModel.answer == .textContent && pinned.readModel.source == .user)
+precondition(dependent.forget(Belief.offsets, at: learnRung) && resolving(dependent).readModel.source == .start)
+
+var anchored = BeliefStore()
+precondition(anchored.record(offsets: .textContent, at: learnRung, anchor: true, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+precondition(resolving(anchored).readModel == ReadModel(answer: .value, belief: anchored.offsetsBelief(at: learnRung)))
+precondition(resolving(anchored, starting: .textContent).readModel.answer == .textContent)
+precondition(resolving(anchored, versions: Versions(app: "1.50")).readModel.newEngine)
+
+var richSibling = BeliefStore()
+precondition(richSibling.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+let textareaBeside = resolving(richSibling, children: false)
+precondition(textareaBeside.readModel.answer == .value && textareaBeside.readModel.source == .plain
+             && textareaBeside.readModel.learned == .untrusted)
+precondition(textareaBeside.traceLines.last?.hasSuffix(" not-this-field") == true)
+precondition(CapabilityResolver.resolve(probed: axProfile, config: [:], beliefs: textareaBeside).profile.has(.readCaret))
+precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: true, children: false) == (.value, .plain))
+precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: false, children: true) == (.textContent, .learned))
+precondition(ReadModel(answer: .value, pinned: true).reading(chromium: true, children: true) == (.textContent, .user))
+
+let migrated = BeliefStore(demotions: [(learnRung, "1.49.1", "writeSelection"), (learnRung, "1.49.1", "noSuchAtom")])
+precondition(migrated.beliefs.count == 1 && migrated.beliefs[0].judgedUnder == .value && migrated.beliefs[0].provenance.tag == "migrated")
+precondition(resolving(migrated).broken == [.writeSelection] && resolving(migrated, starting: .textContent).broken.isEmpty)
+
+func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, OffsetsEvidence?, OffsetsAnswer),
+            source: OffsetsSource = .start, run: RunAttribution = RunAttribution()) -> Learning.Lesson {
+    let observed = Learning.Observation(before: snapshot.0, source: source, evidence: snapshot.1, after: snapshot.2)
+    return Learning.learn(store: &store, rung: learnRung, versions: learnVersions, model: model, observed: observed, run: run,
+                          overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"), tally: Tally())
+}
+var observed = BeliefStore()
+let moved = lesson(&observed, model: ReadModel(answer: .value), snapshot: (.value, supportsTextContent, .textContent))
+precondition(moved.move == Learning.Move(from: .value, to: .textContent, why: .plainIsTextContent) && moved.recorded && moved.republish)
+precondition(observed.offsetsBelief(at: learnRung)?.provenance.tag == "e2.c5")
+var confirming = BeliefStore()
+let dated = lesson(&confirming, model: ReadModel(answer: .textContent), snapshot: (.textContent, supportsTextContent, .textContent))
+precondition(dated.move == nil && dated.recorded && dated.republish && confirming.offsetsBelief(at: learnRung)?.anchor == true)
+let againDated = lesson(&confirming, model: ReadModel(answer: .textContent, belief: confirming.offsetsBelief(at: learnRung)),
+                        snapshot: (.textContent, supportsTextContent, .textContent))
+precondition(!againDated.recorded && !againDated.republish)
+var valueConfirmed = BeliefStore()
+precondition(!lesson(&valueConfirmed, model: ReadModel(answer: .value), snapshot: (.value, supportsValue, .value)).recorded
+             && valueConfirmed.beliefs.isEmpty, "value needs no date")
+var textChecked = RunAttribution()
+textChecked.record(.setSelection(0..<4))
+textChecked.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
+                   selection: 0..<4, length: 7, selectedText: "two\n")
+precondition(textChecked.textMismatch && textChecked.failed == nil, "the offsets answer for a text mismatch, not the write")
+var mismatched = BeliefStore()
+let charged = lesson(&mismatched, model: ReadModel(answer: .value), snapshot: (.value, nil, .value), run: textChecked)
+precondition(charged.move == Learning.Move(from: .value, to: .untrusted, why: .textCheck) && charged.committed == nil)
+var userPinned = BeliefStore()
+precondition(lesson(&userPinned, model: ReadModel(answer: .value, source: .user, pinned: true), snapshot: (.value, nil, .value),
+                    source: .user, run: textChecked).move == nil && userPinned.beliefs.isEmpty, "a user override pins the answer")
+var plainField = BeliefStore()
+precondition(lesson(&plainField, model: ReadModel(answer: .value, source: .plain), snapshot: (.value, nil, .value),
+                    source: .plain, run: textChecked).move == nil && plainField.beliefs.isEmpty,
+             "a field with no children has no breaks to learn about")
+var wrongRange = RunAttribution()
+wrongRange.record(.setSelection(0..<4))
+wrongRange.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
+                  selection: 1..<5, length: 7, selectedText: "ne\nt")
+precondition(!wrongRange.textMismatch && wrongRange.failed == .writeSelection)
+var unanswered = RunAttribution()
+unanswered.record(.setSelection(0..<4))
+unanswered.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
+                  selection: 0..<4, length: 7, selectedText: nil)
+precondition(!unanswered.textMismatch && unanswered.failed == nil)
+var sideOnly = RunAttribution()
+sideOnly.record(.settle(Expectation(selection: 0..<4, length: 7, edge: .paragraphEnd, selectedText: "one")), passed: false,
+                selection: 0..<4, length: 7, selectedText: "one")
+precondition(!sideOnly.textMismatch && sideOnly.failed == nil)
+
+let offLine = Expectation(landing: .exact(4..<4), blame: Expectation.Blame(
+    capability: .lineStartKey, unmoved: [], leavesCaret: true, exemptions: [.init(.paragraphLines, offTarget: true)]))
+precondition(offLine.verdict(observed: 2..<2) == .neutral(.lineStartKey, .paragraphLines) && offLine.blamed(observed: 2..<2) == nil)
+precondition(offLine.verdict(observed: 2..<5) == .blamed(.lineStartKey), "a selection left behind is still blamed")
+precondition(offLine.verdict(observed: 4..<4) == nil)
+let fromEmpty = Expectation(landing: .exact(7..<7), blame: Expectation.Blame(
+    capability: .lineEndKey, unmoved: [], exemptions: [.init(.emptyParagraph, unmoved: [5..<5])]))
+precondition(fromEmpty.verdict(observed: 5..<5) == .neutral(.lineEndKey, .emptyParagraph) && fromEmpty.verdict(observed: 6..<6) == nil)
+var webWord = Expectation(landing: .exact(0..<3), blame: Expectation.Blame(
+    capability: .wordKeys, unmoved: [0..<0], exemptions: [.init(.webContent, all: true)]))
+webWord.longest = 3
+precondition(webWord.blamed(observed: 0..<0) == nil && webWord.checkedKey == nil)
+precondition(webWord.verdict(observed: 0..<5) == .neutral(.wordKeys, .webContent) && webWord.verdict(observed: 1..<2) == nil)
+var neutralRun = RunAttribution()
+neutralRun.record(.press(.paragraphStart, count: 1))
+neutralRun.record(.settle(offLine), passed: false, selection: 2..<2)
+precondition(neutralRun.neutral == .neutral(.lineStartKey, .paragraphLines) && neutralRun.failed == nil)
+let chipLine = webPhysical("0", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: chromiumBreak)
+precondition(chipLine.steps.contains {
+    guard case .settle(let expectation) = $0 else { return false }
+    return expectation.verdict(observed: 5..<5) == .neutral(.lineStartKey, .paragraphLines)
+}, "an off-target line key in Chromium rich text is neutral")
+
+// The resolver's table before beliefs, which it must still match.
+func previousTable(probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>)
+    -> [Capability: CapabilityReport.Entry] {
+    var entries: [Capability: CapabilityReport.Entry] = [:]
+    for capability in Capability.allCases where capability.species == .mechanism {
+        let choice = config[capability]?.override
+        if probed.has(capability), choice == .off {
+            entries[capability] = .init(status: .unavailable, source: .user)
+        } else if probed.has(capability), learned.contains(capability), choice != .on {
+            entries[capability] = .init(status: .unavailable, source: .learned)
+        } else {
+            entries[capability] = .init(status: probed.has(capability) ? .available : .unavailable, source: .probed)
+        }
+    }
+    for capability in Capability.allCases where capability.species == .policy {
+        let mechanism = capability.parent.map { entries[$0] ?? .init(status: .unavailable, source: .probed) }
+        let choice = config[capability] ?? ConfigChoice()
+        if let mechanism, mechanism.status != .available {
+            entries[capability] = .init(status: .unavailable, source: mechanism.source)
+        } else if choice.override == .off {
+            entries[capability] = .init(status: .unavailable, source: .user)
+        } else if choice.seededOff, choice.override != .on {
+            entries[capability] = .init(status: .unavailable, source: .seeded)
+        } else {
+            entries[capability] = .init(status: .available, source: choice.override == .on ? .user : .probed)
+        }
+    }
+    return entries
+}
+var draw: UInt64 = 0x9E37_79B9_7F4A_7C15
+func coin(_ sides: UInt64) -> UInt64 {
+    draw ^= draw << 13
+    draw ^= draw >> 7
+    draw ^= draw << 17
+    return draw % sides
+}
+for _ in 0..<400 {
+    var probed: Set<Capability> = []
+    var config: [Capability: ConfigChoice] = [:]
+    var demoted: Set<Capability> = []
+    var store = BeliefStore()
+    for capability in Capability.allCases {
+        if coin(2) == 0 { probed.insert(capability) }
+        let override: ConfigChoice.Override? = [nil, .on, .off][Int(coin(3))]
+        config[capability] = ConfigChoice(override: override, seededOff: coin(3) == 0)
+        if capability.species == .mechanism, coin(3) == 0 {
+            demoted.insert(capability)
+            _ = committing(&store, capability)
+        }
+    }
+    let profile = CapabilityProfile(available: probed)
+    let resolved = CapabilityResolver.resolve(probed: profile, config: config, beliefs: resolving(store))
+    precondition(resolved.report.entries == previousTable(probed: profile, config: config, learned: demoted))
+    precondition(resolved.profile.statuses == previousTable(probed: profile, config: config, learned: demoted).mapValues(\.status))
+}
+var withheld = BeliefStore()
+_ = withheld.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally())
+let untrustedReport = CapabilityResolver.resolve(probed: axProfile, config: [:], beliefs: resolving(withheld)).report
+precondition(untrustedReport.entries[.readCaret] == .init(status: .unavailable, source: .learned))
+precondition(CapabilityResolver.resolve(probed: axProfile, config: [.readCaret: ConfigChoice(override: .on)], beliefs: resolving(withheld))
+    .profile.has(.readCaret))
+
+let judgedBelief = Belief(
+    rung: learnRung, question: "writeSelection", answer: Belief.broken, judgedUnder: .value, versions: Versions(app: "1.49.1"),
+    provenance: Provenance(build: "1.0.0 (812)", learnedAt: "2026-09-24T10:00:00Z", tag: "e3.c7")
+)
+precondition(judgedBelief.traceFields
+    == "q=writeSelection a=broken judged=value ver=1.49.1 build=1.0.0(812) at=2026-09-24T10:00:00Z tag=e3.c7")
+var tallied = Tally()
+tallied.count(supportsTextContent)
+tallied.count(.neutral(.noBreaks))
+let offsetsBelief = Belief(rung: learnRung, question: Belief.offsets, answer: "textContent",
+                           versions: Versions(app: "1.32.4", engine: "41.3.0"), tally: tallied, anchor: true)
+precondition(offsetsBelief.traceFields == "q=offsets a=textContent ver=1.32.4 engine=41.3.0 tally=v0,tc1,misfit0,neutral1 anchor")
+precondition(ReadModel(answer: .textContent).traceName == "textContent/start")
+precondition(ReadModel(answer: .value, newEngine: true).traceName == "value/start new-engine")
+var shown = BeliefStore(beliefs: [judgedBelief])
+_ = shown.record(offsets: .textContent, at: learnRung, versions: Versions(app: "1.49.1"), provenance: Provenance(tag: "e4.c1"), tally: Tally())
+precondition(resolving(shown, versions: Versions(app: "1.49.1")).traceLines == [
+    "belief q=writeSelection a=broken judged=value ver=1.49.1 build=1.0.0(812) at=2026-09-24T10:00:00Z tag=e3.c7 reopened offsets=textContent",
+    "belief q=offsets a=textContent ver=1.49.1 tag=e4.c1 tally=v0,tc0,misfit0,neutral0 in-force",
+])
+precondition(supportsTextContent.traceFields == "supports=textContent why=plain=textContent")
+precondition(OffsetsEvidence.misfit(.textCheck).traceFields == "misfit why=text-check")
+precondition(Expectation.Verdict.neutral(.lineStartKey, .paragraphLines).traceFields == "neutral q=lineStartKey why=paragraph-lines")
+precondition(moved.traceLines(rung: learnRung, versions: learnVersions, failed: nil)
+    == ["offsets value→textContent why=plain=textContent rung=\(learnRung) engine=1.49.1 → republish"])
+precondition(Learning.Lesson(committed: .insertText, republish: true).traceLines(rung: learnRung, versions: learnVersions, failed: .insertText)
+    == ["commit q=insertText rung=\(learnRung) ver=1.49.1 → republish"])
+precondition(Learning.Lesson(skip: .alreadyCommitted).traceLines(rung: learnRung, versions: learnVersions, failed: .insertText)
+    == ["skip=already-committed fail=insertText"])
+precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields(text: true)
+    == "sel=10..15 len=21 text=\"hello\"")
+precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields == "sel=10..15 len=21 text=(5)")
+precondition(Expectation(selectedText: "ab").matches(selection: nil, length: nil, selectedText: "a\u{FFFC}b"),
+             "Chromium's leaf with no text is not a different selection")
+
+let withheldCaret = removing([.readCaret], from: axProfile)
+precondition(physical("rX", text: "say hello", profile: withheldCaret).steps.prefix(2)
+    == [.press(.selectRight, count: 1), .typeText("X")], "an AX write would overtake the queued ⇧→")
+precondition(physical("o", text: "say hello", profile: withheldCaret).steps.prefix(2)
+    == [.press(.lineEnd, count: 1), .typeText("\n")])
+precondition(physical("rX", text: "say hello", profile: withheldCaret).steps.allSatisfy {
+    if case .replaceSelection = $0 { return false }
+    return true
+})
+var replayInsert = VimState.initial
+replayInsert.session.lastChange = VimState.ChangeMemory(body: "i", insert: "abc")
+precondition(physical(".", text: "say hello", profile: withheldCaret, state: replayInsert).steps.contains(.replaceSelection("abc")),
+             "with nothing queued the AX write stays")
+
+// MARK: - Beliefs end to end (the Sim's Chromium read fault)
+
+func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers: Bool, chromium: Bool = false,
+                 store: BeliefStore = BeliefStore()) -> Sim {
+    var host = Sim(text: text, caret: caret, profile: profile)
+    host.reads = omitsBreaks
+    host.writesInReadOffsets = true
+    host.markers = markers
+    host.emulatesKeys = true
+    host.learn(with: Sim.Learner(store: store, chromium: chromium, probed: profile))
+    return host
+}
+// LIN-1590's worked example: the caret on the `w` of `world` is 16 in `AXValue` and 11 to Chromium.
+let workedExample = "a\nb\nc\nd\ne\nhello world"
+
+var firstParagraph = chromiumSim(workedExample, caret: 0, profile: axProfile, markers: true)
+firstParagraph.type("l")
+precondition(firstParagraph.learner!.model.answer == .value && firstParagraph.learner!.evidence.isEmpty,
+             "a caret in paragraph 1 reads no markers")
+var discovered = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true)
+discovered.type("ciwthere")
+discovered.feed("<Esc>")
+precondition(discovered.learner!.evidence.first == supportsTextContent)
+precondition(discovered.learner!.lessons.first?.move == Learning.Move(from: .value, to: .textContent, why: .plainIsTextContent))
+precondition(discovered.learner!.model.answer == .textContent && discovered.learner!.model.source == .learned)
+precondition(discovered.text == "a\nb\nc\nd\ne\nhello there" && discovered.settleFailures == 0, "the move takes effect on its own snapshot")
+
+var misreadWord = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: false)
+misreadWord.type("ciw")
+precondition(misreadWord.text == workedExample && misreadWord.settleFailures == 1, "ciw deletes nothing")
+precondition(checkedText(misreadWord.abortedStep) == "hello", "the range reads back as planned while ` worl` is selected")
+precondition(misreadWord.learner!.lessons.last?.move == Learning.Move(from: .value, to: .untrusted, why: .textCheck))
+precondition(misreadWord.learner!.model.answer == .untrusted && !misreadWord.profile.has(.readCaret))
+precondition(misreadWord.learner!.store.offsetsBelief(at: "sim|role:AXTextArea")?.tally?.misfit == 1, "the text check is tallied")
+precondition(misreadWord.state.field.mode == .normal && misreadWord.selection.isEmpty)
+misreadWord.type("ciw")
+precondition(misreadWord.settleFailures == 1 && misreadWord.text == "a\nb\nc\nd\ne\n world" && misreadWord.pasteboard == "hello",
+             "the next ciw lets the field choose the word, from where the check left the caret")
+var misreadKeys = chromiumSim(paragraphs, caret: 24, profile: readProfile, markers: false)
+misreadKeys.type("ciw")
+precondition(misreadKeys.text == paragraphs && misreadKeys.learner!.model.answer == .untrusted)
+
+var sameEngine = discovered
+sameEngine.reads = nil
+sameEngine.writesInReadOffsets = false
+sameEngine.type("h")
+precondition(sameEngine.learner!.lessons.last?.move == Learning.Move(from: .textContent, to: .untrusted, why: .plainIsValue))
+var newEngine = discovered
+newEngine.reads = nil
+newEngine.writesInReadOffsets = false
+newEngine.update(to: Versions(app: "2"))
+newEngine.type("h")
+precondition(newEngine.learner!.model.answer == .value && newEngine.learner!.evidence.last == supportsValue)
+var fixedChromium = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true, chromium: true,
+                                store: discovered.learner!.store)
+fixedChromium.reads = nil
+fixedChromium.writesInReadOffsets = false
+fixedChromium.update(to: Versions(app: "2"))
+fixedChromium.type("h")
+precondition(fixedChromium.learner!.lessons.last?.move == Learning.Move(from: .textContent, to: .value, why: .plainIsValue),
+             "a detected Chromium field moves back to value on a new engine")
+
+var preFix = BeliefStore()
+_ = preFix.commit(broken: .writeSelection, at: "sim|role:AXTextArea", judgedUnder: .value, versions: Versions(app: "1"),
+                  provenance: Provenance(tag: "e3.c7"))
+var reopening = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: true, store: preFix)
+precondition(!reopening.profile.has(.writeSelection), "in force while plain reads stand")
+reopening.type("l")
+precondition(reopening.learner!.model.answer == .textContent && reopening.profile.has(.writeSelection))
+precondition(reopening.learner!.resolved!.reopened.map(\.question) == ["writeSelection"])
+reopening.type("ciwthere")
+precondition(reopening.text == "a\nb\nc\nd\ne\nhello there" && reopening.settleFailures == 0)
+
+var firstThenLater = chromiumSim("alpha beta gamma\nb\nc\nd\ne\nhello world", caret: 2, profile: axProfile, markers: true)
+firstThenLater.type("llll")
+precondition(firstThenLater.caret == 6 && firstThenLater.learner!.model.answer == .value)
+precondition(firstThenLater.learner!.sampling.remaining == OffsetsSampling.budget, "paragraph 1 spends no samples")
+firstThenLater.type("5jl")
+precondition(firstThenLater.learner!.model.answer == .textContent && firstThenLater.learner!.evidence.last == supportsTextContent)
+
+var untrustedRung = BeliefStore()
+_ = untrustedRung.record(offsets: .untrusted, at: "sim|role:AXTextArea", versions: Versions(app: "1"), provenance: Provenance(),
+                         tally: Tally())
+var textarea = Sim(text: "say hello world", caret: 6, profile: axProfile)
+textarea.hasChildren = false
+textarea.learn(with: Sim.Learner(store: untrustedRung, probed: axProfile))
+precondition(textarea.profile.has(.readCaret) && textarea.learner!.model.source == .plain)
+textarea.type("ciwbye")
+textarea.feed("<Esc>")
+precondition(textarea.text == "say bye world" && textarea.settleFailures == 0)
+precondition(textarea.learner!.store == untrustedRung && textarea.learner!.evidence.isEmpty)
+
+var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
+ignored.swallowsReplace = true
+ignored.learn(with: Sim.Learner(probed: axProfile))
+ignored.type("ciw")
+precondition(ignored.learner!.lessons.last?.committed == .insertText && !ignored.profile.has(.insertText))
+precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
+var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
+chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
+chipKey.type("0")
+precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)
+precondition(chipKey.learner!.lessons.last?.neutral == .neutral(.lineStartKey, .paragraphLines))
+precondition(chipKey.learner!.lessons.last?.committed == nil && chipKey.profile.has(.lineStartKey))
 
 print("Vim engine tests passed")

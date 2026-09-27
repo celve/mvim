@@ -14,6 +14,10 @@ struct MvimApp: App {
     var body: some Scene {
         MenuBarExtra {
             Toggle("Vim Mode", isOn: $model.vimEnabled)
+            Picker("Normal Mode Key", selection: $model.normalModeKey) {
+                Text("⌃[").tag(NormalModeKey.controlBracket)
+                Text("Esc").tag(NormalModeKey.escape)
+            }
             if let front = model.frontApp {
                 Picker("Vim in \(front.name)", selection: Binding(
                     get: { model.frontAppPolicy },
@@ -175,6 +179,12 @@ final class AppModel: ObservableObject {
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
     }
+    @Published var normalModeKey = Prefs.normalModeKey {
+        didSet {
+            Prefs.normalModeKey = normalModeKey
+            controller.escapeEngages = normalModeKey == .escape
+        }
+    }
 
     private let controller: Controller
     private var token: InputHub.Token?
@@ -189,6 +199,7 @@ final class AppModel: ObservableObject {
 
         let controller = Controller()
         self.controller = controller
+        controller.escapeEngages = normalModeKey == .escape
         controller.onModeChange = { [weak self] mode in
             guard let self else { return }
             switch mode {
@@ -263,12 +274,9 @@ final class AppModel: ObservableObject {
         CapabilityConfig.setUserOverride(
             override, at: rung, on: surface, capability: capability.rawValue
         )
-        // Disposing of the learner's suggestion retires it. Promoting it (Off)
-        // makes the same denial a permanent decision, and overruling it (On)
-        // rejects it outright — either way the inference has served its purpose
-        // and should not linger to be re-applied if the user returns to Auto.
+        // An override retires the belief behind the row, so returning to Auto does not revive it.
         if override != nil, let rung = surface.roleRung {
-            LearnedPriors.forget(rung: rung, capability: capability.rawValue)
+            controller.forgetBelief(capability, at: rung)
         }
         controller.refreshCapabilities()
         refreshCapabilityRows()
