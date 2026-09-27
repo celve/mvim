@@ -1,22 +1,6 @@
 import Foundation
 
-/// Per-surface capability policy: shipped seeds plus the user's overrides.
-///
-/// Config, not evidence — the learner's beliefs record what fields *did*; this store
-/// records what curation and the user *decided*. LoomCore cannot see the
-/// engine's `Capability` type, so the store speaks its raw strings and the
-/// runtime converts.
-///
-/// Seeds are compiled in and never written to defaults: the persisted
-/// dictionary holds only user choices, so shipped seed changes always reach
-/// users (no register-defaults trade-off). Overrides are subtractive against
-/// mechanism truth — an explicit `.on` un-seeds curation, never a failed probe.
-///
-/// **The thin half.** Everything decided lives in `Surface`/`SurfaceLadder`,
-/// which are pure and therefore under `make test`; this type only reaches
-/// `UserDefaults` and back. The keys are `Surface` rungs rather than bundle
-/// IDs, and a bare bundle ID is still a rung — so every override written
-/// before surfaces existed keeps resolving with no migration.
+/// Shipped seeds plus the user's persisted overrides, in raw strings since LoomCore cannot see `Capability`.
 public enum CapabilityConfig {
     static let storeKey = "capabilityOverrides"
 

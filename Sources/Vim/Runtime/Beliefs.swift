@@ -1,12 +1,9 @@
 import Foundation
 
-/// The belief store's home in the defaults domain, a JSON string so `defaults read` stays legible.
-///
-/// A disposable cache, never config: an unreadable store is an empty one, and
-/// `defaults delete com.loom.mvim fieldBeliefs` flushes it.
+/// A JSON string so `defaults read` stays legible; an unreadable store reads as empty.
 enum Beliefs {
     static let storeKey = "fieldBeliefs"
-    /// The learner before beliefs: schema 2's `(rung, version, capability)` demotions.
+    /// The old learner's schema 2 demotions, migrated once.
     static let legacyKey = "learnedCapabilityPriors"
 
     static func load() -> BeliefStore {
@@ -32,7 +29,6 @@ enum Beliefs {
         UserDefaults.standard.set(json, forKey: storeKey)
     }
 
-    /// A user override retires the belief it overrules.
     static func forget(_ question: String, at rung: String) {
         var store = load()
         guard store.forget(question, at: rung) else { return }

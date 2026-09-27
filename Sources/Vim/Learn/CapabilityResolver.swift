@@ -13,8 +13,7 @@ public struct ConfigChoice: Equatable, Sendable {
     }
 }
 
-/// Probed truth, minus what the field has failed to deliver, minus the user's demotions; then the policy
-/// atoms from their parent mechanisms under seeds and overrides.
+/// Probed truth minus learned failures and the user's Off; policies then follow their parent mechanisms.
 public enum CapabilityResolver {
     public static func resolve(
         probed: CapabilityProfile, config: [Capability: ConfigChoice], beliefs: ResolvedBeliefs
@@ -28,7 +27,7 @@ public enum CapabilityResolver {
         probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
         var entries: [Capability: CapabilityReport.Entry] = [:]
-        // An explicit `on` undoes evidence exactly the way it un-seeds curation.
+        // An explicit On overrules evidence as it un-seeds curation.
         for capability in Capability.allCases where capability.species == .mechanism {
             let choice = config[capability]?.override
             if probed.has(capability), choice == .off {
@@ -39,7 +38,7 @@ public enum CapabilityResolver {
                 entries[capability] = CapabilityReport.Entry(status: probed.has(capability) ? .available : .unavailable, source: .probed)
             }
         }
-        // `.on` un-seeds curation only: a missing mechanism stays missing, and a parentless policy is ungated.
+        // On un-seeds a policy but cannot revive a missing mechanism; a parentless policy is ungated.
         let unavailable = CapabilityReport.Entry(status: .unavailable, source: .probed)
         for capability in Capability.allCases where capability.species == .policy {
             let mechanism = capability.parent.map { entries[$0] ?? unavailable }

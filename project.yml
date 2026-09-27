@@ -29,9 +29,7 @@ settings:
     DEVELOPMENT_TEAM: "8TDYAWS6VC"
 
 targets:
-  # Shared foundation (mvim's copy, split from loom): the input tap + key model,
-  # text I/O (AX/Synth), capability config, and the neutral Prefs store.
-  # Deliberately carries NO Keychain — this app keeps no secrets.
+  # Input tap, key model, text I/O (AX/Synth), capability config and Prefs; deliberately no Keychain.
   LoomCore:
     type: framework
     platform: macOS

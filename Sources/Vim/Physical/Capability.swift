@@ -37,23 +37,7 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// transient command selections keep using regardless. Subtractive only.
     case drawCursor
 
-    /// Does the readable text span the whole navigable document?
-    ///
-    /// The policy atom that answers a question about *truth* rather than
-    /// permission. In a block editor (Notion) each block is its own
-    /// contenteditable, so `AXValue` is one block, not the page: the model
-    /// is exact within the block — `w`, `f`, `ciw`, `x` are all correct —
-    /// and a lie about everything past it. `j` then resolves to the offset
-    /// it started at and executes a flawless no-op.
-    ///
-    /// Denied, the planner stops trusting the model for geography beyond
-    /// the caret's line and routes those steps to the blind lane, whose
-    /// Cocoa chords cross blocks natively. Local exactness is untouched.
-    ///
-    /// Never probed — no AX attribute answers it — and **never learned**:
-    /// the learner's trials demote from failed settles, and a block-scoped
-    /// field's settles *pass*. That is the bug; there is no signal. Seeds
-    /// and the user's override are the only sources. Subtractive only.
+    /// False in block editors (Notion), whose `AXValue` is one block; seeded only, as no probe or settle can tell.
     case wholeDocument
 
     /// Is each focused field its own vim session?
@@ -179,8 +163,7 @@ public struct CapabilityReport: Equatable, Sendable {
         case seeded
         /// The user's menu override.
         case user
-        /// A belief: the field claimed this write or key and then failed to deliver it, or, for `readCaret`, no
-        /// read model fits its offsets. A suggestion, not a decision — the user can promote it (Off) or overrule it (On).
+        /// A belief: a write or key failed, or, for `readCaret`, no read model fits.
         case learned
     }
 

@@ -1,17 +1,13 @@
-/// How a field counts caret and selection offsets: the offsets question's answers.
+/// How a field counts caret and selection offsets.
 public enum OffsetsAnswer: String, Codable, CaseIterable, Equatable, Sendable {
-    /// `AXValue`'s own offsets.
     case value
-    /// Chromium's count without the paragraph breaks it generates in `AXValue` (#11, #13).
+    /// Chromium's count, without the paragraph breaks it generates in `AXValue`.
     case textContent
-    /// No answer fits: caret reads are withheld and commands take the blind lane.
+    /// No count fits: the caret is withheld and commands go blind.
     case untrusted
 }
 
-/// One learned answer to one question about the fields at a rung.
-///
-/// A trial belief's question is a write or key capability, and its only stored answer is
-/// `broken`, since a pass changes nothing. The read model's question is `offsets`.
+/// A rung's learned answer: `broken` for a write or key, or the `offsets` read model.
 public struct Belief: Codable, Equatable, Sendable {
     public static let offsets = "offsets"
     public static let broken = "broken"
@@ -19,14 +15,13 @@ public struct Belief: Codable, Equatable, Sendable {
     public var rung: String
     public var question: String
     public var answer: String
-    /// The offsets answer a trial verdict was judged under; the verdict holds only while it does.
+    /// The verdict holds only while the read model gives this answer.
     public var judgedUnder: OffsetsAnswer?
-    /// "" when unresolvable, as the old store had it.
     public var appVersion: String
     public var engineVersion: String?
     public var provenance: Provenance
     public var tally: Tally?
-    /// A read model evidence confirmed rather than moved: it dates the engine and leaves each field its own start.
+    /// Confirmed, not moved: dates the engine but leaves each field its starting answer.
     public var anchor: Bool?
 
     public init(
@@ -50,13 +45,11 @@ public struct Belief: Codable, Equatable, Sendable {
         question == Self.offsets ? OffsetsAnswer(rawValue: answer) : nil
     }
 
-    /// What the read model expires on: Electron's framework where readable, else the app itself.
+    /// The read model expires on this: Electron's framework version, else the app's.
     var engineKey: String { engineVersion ?? appVersion }
 }
 
-/// Where a belief came from, for the recorder.
 public struct Provenance: Codable, Equatable, Sendable {
-    /// The mvim build that decided it.
     public var build: String?
     public var learnedAt: String?
     /// The deciding command's recorder tag, `e12.c47`.
@@ -69,7 +62,7 @@ public struct Provenance: Codable, Equatable, Sendable {
     }
 }
 
-/// The offsets evidence a read-model belief has seen since the process started.
+/// Offsets evidence counted since the process started.
 public struct Tally: Codable, Equatable, Sendable {
     public var value = 0
     public var textContent = 0
@@ -88,7 +81,6 @@ public struct Tally: Codable, Equatable, Sendable {
     }
 }
 
-/// The host app's version and, where readable, its web engine's.
 public struct Versions: Equatable, Sendable {
     public var app: String?
     public var engine: String?
@@ -102,7 +94,6 @@ public struct Versions: Equatable, Sendable {
 }
 
 public extension OffsetsAnswer {
-    /// Toward a safer answer on one observation; back to `value` only on another engine.
     func next(_ evidence: OffsetsEvidence, newEngine: Bool) -> OffsetsAnswer {
         switch evidence {
         case .neutral:
@@ -121,7 +112,7 @@ public extension OffsetsAnswer {
 
 // MARK: - The store
 
-/// The learner's memory: one belief per rung and question. A disposable cache, never config.
+/// One belief per rung and question; a disposable cache, never config.
 public struct BeliefStore: Codable, Equatable, Sendable {
     public static let currentSchema = 3
 
@@ -133,26 +124,23 @@ public struct BeliefStore: Codable, Equatable, Sendable {
     }
 }
 
-/// Where a read model came from.
 public enum OffsetsSource: String, Equatable, Sendable {
-    /// The engine rule: a Chromium field with AX children counts text content, any other `AXValue`.
     case start
     case learned
     /// A `readCaret` override retired the belief.
     case user
-    /// The field has no AX children, so no generated breaks: both counts are `AXValue`'s, whatever its rung learned.
+    /// No AX children, so no generated breaks: both counts agree, whatever the rung learned.
     case plain
 
     /// Whether the field's reads teach its rung's read model.
     public var observes: Bool { self == .start || self == .learned }
 }
 
-/// How a binding reads offsets, and what the movement rule needs to move it.
 public struct ReadModel: Equatable, Sendable {
-    /// At bind, where the profile was resolved.
+    /// At bind; each snapshot takes its own through `reading`.
     public var answer: OffsetsAnswer
     public var source: OffsetsSource
-    /// The rung's learned answer, in force at this engine.
+    /// Nil unless the rung's learned answer is in force at this engine.
     public var learned: OffsetsAnswer?
     public var pinned: Bool
     /// The stored belief, in force or not.
@@ -179,18 +167,16 @@ public struct ReadModel: Equatable, Sendable {
     }
 }
 
-/// The beliefs that apply to one field.
 public struct ResolvedBeliefs: Equatable, Sendable {
     public var readModel: ReadModel
-    /// Trial verdicts in force.
     public var broken: Set<Capability>
     public var inForce: [Belief]
-    /// Trial verdicts judged under another offsets answer, reopened.
+    /// Verdicts judged under another offsets answer.
     public var reopened: [Belief]
 }
 
 public extension BeliefStore {
-    /// Trial verdicts hold across the whole ladder, as curation's do; the read model lives at `rung` alone.
+    /// Verdicts apply across the ladder, as curation does; the read model only at `rung`.
     func resolve(
         rungs: [String], rung: String?, versions: Versions, chromium: Bool, children: Bool, userPinsOffsets: Bool
     ) -> ResolvedBeliefs {
@@ -219,7 +205,7 @@ public extension BeliefStore {
         beliefs.first { $0.rung == rung && $0.question == Belief.offsets }
     }
 
-    /// One failure blamed on `capability` sets it broken; false when that verdict already stood.
+    /// False when that verdict already stood.
     mutating func commit(
         broken capability: Capability, at rung: String, judgedUnder offsets: OffsetsAnswer,
         versions: Versions, provenance: Provenance
@@ -241,7 +227,7 @@ public extension BeliefStore {
         return true
     }
 
-    /// Writes the read model; false, and nothing written, when it already stood at this engine.
+    /// False, writing nothing, when it already stood at this engine.
     mutating func record(
         offsets answer: OffsetsAnswer, at rung: String, anchor: Bool = false, versions: Versions, provenance: Provenance,
         tally: Tally
@@ -260,7 +246,7 @@ public extension BeliefStore {
         return true
     }
 
-    /// The learner before beliefs had one read model, plain `AXValue` offsets, so its demotions were judged under it.
+    /// The old learner read plain `AXValue` offsets, so its demotions were judged under `value`.
     init(demotions: [(rung: String, version: String, capability: String)]) {
         self.init(beliefs: demotions.compactMap { demotion in
             guard Capability(rawValue: demotion.capability) != nil else { return nil }
@@ -271,7 +257,6 @@ public extension BeliefStore {
         })
     }
 
-    /// A user override retires the belief.
     @discardableResult
     mutating func forget(_ question: String, at rung: String) -> Bool {
         let before = beliefs.count
@@ -283,14 +268,12 @@ public extension BeliefStore {
 // MARK: - Recorder
 
 extension ReadModel {
-    /// `textContent/start`; a stored belief from another engine adds `new-engine`.
     var traceName: String {
         "\(answer.rawValue)/\(source.rawValue)" + (newEngine ? " new-engine" : "")
     }
 }
 
 extension Belief {
-    /// `q=writeSelection a=broken judged=value ver=1.49.1 build=1.0.0(812) at=… tag=e3.c7`; unknowns left out.
     var traceFields: String {
         var fields = "q=\(question) a=\(answer)"
         if let judgedUnder { fields += " judged=\(judgedUnder.rawValue)" }
@@ -310,7 +293,6 @@ extension Tally {
 }
 
 extension ResolvedBeliefs {
-    /// One `belief` line per stored answer that touched this field, with why it does or does not apply.
     var traceLines: [String] {
         var lines = inForce.map { "belief \($0.traceFields) in-force" }
         lines += reopened.map { "belief \($0.traceFields) reopened offsets=\(readModel.answer.rawValue)" }

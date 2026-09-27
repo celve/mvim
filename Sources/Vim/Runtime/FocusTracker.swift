@@ -44,14 +44,14 @@ public final class FocusTracker {
         /// under the answers already resolved against it.
         public let surface: Surface
 
-        /// The learner's TTLs: an app update reopens every trial, an engine update the read model.
+        /// An app update reopens every trial, an engine update the read model.
         public let versions: Versions
 
         /// Provenance behind `capabilities`, for the menu's badge rows.
         /// nil for forced bindings — empty profile, nothing resolved.
         public let capabilityReport: CapabilityReport?
 
-        /// The beliefs behind `capabilities` and the read model snapshots take; nil for forced bindings.
+        /// Nil for forced bindings, which learn nothing.
         public let beliefs: ResolvedBeliefs?
 
         public let isChromium: Bool
@@ -165,17 +165,7 @@ public final class FocusTracker {
         resolveAndPublish(revalidateGate: true)
     }
 
-    /// A capability answer changed — a menu override, or a belief the learner
-    /// just changed: rebuild the bound element's profile and republish.
-    /// `resolveAndPublish`'s same-element short-circuit deliberately never
-    /// re-probes, so this is its own entry.
-    ///
-    /// The republish is **session-preserving**: it hands `publish` the same
-    /// element, so the edge is `.sameElement` and `carried(across:)` returns the
-    /// field untouched — mode, marks and drawn cursor all survive. That is what
-    /// lets the learner apply a demotion mid-edit without bouncing the user out
-    /// of Normal. Forced bindings carry no profile; a dead or de-gated element
-    /// falls back to the full resolve.
+    /// Re-probes and republishes the same element (`.sameElement`), so mode, marks and cursor survive.
     public func reresolveCapabilities() {
         guard enabled, let bound = binding, !bound.isForced else { return }
         let gate = FieldProber.gate(bound.element)
@@ -445,7 +435,7 @@ public final class FocusTracker {
             // App-only: a forced binding has no real element, so there is no
             // role and nothing to resolve an origin from.
             surface: Surface(bundleID: bundleID),
-            versions: Versions(),   // the learner ignores forced bindings
+            versions: Versions(),
             capabilityReport: nil,
             beliefs: nil,
             isChromium: false

@@ -51,20 +51,18 @@ public struct Sim {
         return reads == nil ? selected : selected.filter { $0 != "\n" }
     }
 
-    /// The field answers text-marker reads, which follow the real selection and count every `\n` as a break Chromium
-    /// generates.
+    /// The field answers text-marker reads: the real selection, every `\n` a generated break.
     public var markers = false
 
-    /// AX selection writes land in `reads`' coordinates, as Chromium's do (rule 1).
+    /// Selection writes land in `reads`' coordinates, as Chromium's do.
     public var writesInReadOffsets = false
 
-    /// The field has AX children, as a rich-text editor's paragraphs are; a `<textarea>` has none.
     public var hasChildren = true
 
-    /// The read model snapshots are taken under when no learner runs.
+    /// Used only when no learner runs.
     public var readModel: OffsetsAnswer = .value
 
-    /// Runs the controller's learner against this field, re-resolving `profile` from its beliefs.
+    /// Learns from each command and re-resolves `profile` from its beliefs.
     public private(set) var learner: Learner?
 
     /// Where the last command's run ended early, if it did.
@@ -117,13 +115,11 @@ public struct Sim {
 
     public var caret: Int { selection.lowerBound }
 
-    /// Binds the field to a learner, the way a focus change resolves one.
     public mutating func learn(with learner: Learner) {
         self.learner = learner
         resolveBeliefs()
     }
 
-    /// The host updated and the field binds again: new versions, and a new binding's sampling.
     public mutating func update(to versions: Versions) {
         learner?.versions = versions
         learner?.sampling = OffsetsSampling()
@@ -403,7 +399,7 @@ private extension Sim {
         return nil
     }
 
-    /// Where a write of `offset` lands: in `reads`' coordinates, a boundary resolves to the next paragraph's start.
+    /// In `reads`' coordinates a boundary offset lands at the next paragraph's start.
     func landing(_ offset: Int) -> Int {
         guard writesInReadOffsets, let reads else { return offset }
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
@@ -448,14 +444,12 @@ private extension Sim {
 // MARK: - The learner
 
 public extension Sim {
-    /// The controller's learner for one field: its beliefs, and what the field is before them.
+    /// The Controller's learner for one field.
     struct Learner: Equatable, Sendable {
         public var store: BeliefStore
         public var rung: String
         public var versions: Versions
-        /// Whether the engine rule sees Chromium, which starts a field with children at `textContent`.
         public var chromium: Bool
-        /// The profile before beliefs.
         public var probed: CapabilityProfile
         public var config: [Capability: ConfigChoice] = [:]
         public var sampling = OffsetsSampling()
@@ -473,7 +467,7 @@ public extension Sim {
             self.versions = versions
             self.chromium = chromium
             self.probed = probed
-            // A policy the profile leaves out stands for curation's seed, as `nativeMotions` is seeded off everywhere.
+            // A policy the profile leaves out is seeded off, as `nativeMotions` is everywhere.
             for policy in Capability.allCases where policy.species == .policy && !probed.has(policy) {
                 config[policy] = ConfigChoice(seededOff: true)
             }
@@ -482,7 +476,6 @@ public extension Sim {
         public var model: ReadModel { resolved?.readModel ?? ReadModel(answer: chromium ? .textContent : .value) }
     }
 
-    /// What a snapshot read, and the answer it was taken under.
     struct Reading {
         let selection: Range<Int>?
         let breaks: ParagraphBreaks?
@@ -493,7 +486,7 @@ public extension Sim {
 }
 
 extension Sim {
-    /// The snapshot's reads under the current read model; a learner learns from them before they are interpreted.
+    /// The learner observes these reads before the snapshot interprets them.
     mutating func read() -> Reading {
         let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
             ?? (readModel, .start)
@@ -517,14 +510,13 @@ extension Sim {
         }
         let interpreted = reads.interpreted(under: observed.after)
         return Reading(
-            // A snapshot takes the plain read even when a settle would find none, as it always has.
+            // A snapshot takes the plain read even where a settle would find none.
             selection: observed.after == .value ? readSelection : interpreted.selection,
             breaks: interpreted.breaks, emptyParagraph: interpreted.emptyParagraph, textlessLeaves: interpreted.textlessLeaves,
             observed: observed
         )
     }
 
-    /// The markers' view: the real selection, every `\n` a generated break.
     var markerReads: MarkerReads {
         MarkerReads(breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection)
     }

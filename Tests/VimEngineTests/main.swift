@@ -314,7 +314,6 @@ let ciwA = physical("ciw", text: "say hello world", caret: 6, profile: axProfile
 precondition(ciwA.steps == [
     .setSelection(4..<9),
     .settle(Expectation(selection: 4..<9, length: 15)),
-    // A misread caret puts an exact write on other text too, and only the text tells (LIN-1590).
     .settle(Expectation(selection: 4..<9, length: 15, selectedText: "hello")),
     .replaceSelection(""),
     .settle(Expectation(selection: 4..<4, length: 10)),
@@ -532,9 +531,7 @@ precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: axProfile
 
 // MARK: - Block-scoped fields (wholeDocument denied)
 
-// The atom's raw value is a cross-module string contract: `CapabilityConfig`
-// seeds key on it by literal, because LoomCore cannot see this type, and stored
-// beliefs name it. Renaming the case silently orphans the Notion seed, so pin it.
+// A cross-module string contract: `CapabilityConfig` seeds and stored beliefs name the raw value.
 precondition(Capability.wholeDocument.rawValue == "wholeDocument")
 precondition(Capability.drawCursor.rawValue == "drawCursor")
 // Policy atoms are resolved from a parent mechanism, never probed.
@@ -714,7 +711,6 @@ func selectedBack(_ end: Landing, length: Int, within: Range<Int>) -> [PhysicalS
 func moveBlame(_ atom: Capability, _ p: Int?) -> Expectation.Blame {
     Expectation.Blame(capability: atom, unmoved: p.map { [$0..<$0] } ?? [], leavesCaret: true)
 }
-/// Web content blames only a selection left behind, and logs a key that stayed at `p` as neutral.
 func webMoveBlame(_ atom: Capability, _ p: Int?) -> Expectation.Blame {
     Expectation.Blame(capability: atom, unmoved: [], leavesCaret: true,
                       exemptions: p.map { [.init(.webContent, unmoved: [$0..<$0])] } ?? [])
@@ -1479,7 +1475,6 @@ func checksText(_ plan: PhysicalPlan) -> Bool {
         return false
     }
 }
-// An exact write lands on other text under a misread caret as keys do, so lane A checks the same text.
 for edit in laneBEdits {
     for profile in [axProfile, noCursorProfile, noInsertProfile, blockProfile] {
         let plan = physical(edit.keys, text: twoLines, caret: edit.caret, profile: profile)
@@ -2547,7 +2542,7 @@ precondition(diaChrome.rungs.contains(diaChrome.roleRung!))
 let learnRung = "com.dia.app|notion.so|role:AXTextField"
 let otherRung = "com.other.app|role:AXTextField"
 
-// One strike commits: the fields this catches no-op the write on every command. `true` means "persist and re-resolve".
+// One strike commits; `true` asks to persist and re-resolve.
 let learnVersions = Versions(app: "1.49.1")
 func committing(_ store: inout BeliefStore, _ capability: Capability, at rung: String = learnRung,
                 under offsets: OffsetsAnswer = .value, versions: Versions = learnVersions) -> Bool {
@@ -2555,14 +2550,12 @@ func committing(_ store: inout BeliefStore, _ capability: Capability, at rung: S
 }
 var trials = BeliefStore()
 precondition(committing(&trials, .insertText))
-// ...and says so exactly once, so a stray strike never re-fires the republish.
 precondition(!committing(&trials, .insertText) && !committing(&trials, .insertText))
 func broken(_ store: BeliefStore, rung: String = learnRung, versions: Versions = learnVersions) -> Set<Capability> {
     store.resolve(rungs: [rung], rung: rung, versions: versions, chromium: false, children: true, userPinsOffsets: false).broken
 }
 precondition(broken(trials) == [.insertText])
 
-// A pass is a confirmation and changes nothing, committed or not.
 var passed = RunAttribution()
 passed.record(.replaceSelection(""))
 passed.record(.settle(Expectation(selection: 4..<4)), passed: true, selection: 4..<4)
@@ -2577,19 +2570,16 @@ for start in [BeliefStore(), trials] {
     precondition(store == start && !lesson.republish && lesson.committed == nil)
 }
 
-// Independent per capability and per rung: a lying insertText drags neither writeSelection nor another site down.
 var perRung = BeliefStore()
 precondition(committing(&perRung, .insertText) && committing(&perRung, .writeSelection) && committing(&perRung, .insertText, at: otherRung))
 precondition(!committing(&perRung, .insertText) && !committing(&perRung, .insertText, at: otherRung))
 precondition(broken(perRung) == [.insertText, .writeSelection] && broken(perRung, rung: otherRung) == [.insertText])
 
-// An app update reopens every trial at the rung, and the next strike clears the stale ones.
 precondition(broken(perRung, versions: Versions(app: "1.50")).isEmpty)
 precondition(committing(&perRung, .writeSelection, versions: Versions(app: "1.50")))
 precondition(!perRung.beliefs.contains { $0.rung == learnRung && $0.appVersion == "1.49.1" })
 precondition(perRung.beliefs.contains { $0.rung == otherRung }, "other rungs keep theirs")
 
-// A user override skips the strike, and one failure blamed on an automatic capability commits.
 var struck = RunAttribution()
 struck.record(.setSelection(4..<9))
 struck.record(.settle(Expectation(selection: 4..<9)), passed: false, selection: 0..<0)
@@ -3053,7 +3043,6 @@ precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "
 
 // MARK: - The belief model
 
-// Toward a safer answer on one observation, back to `value` only on another engine; a misfit is always untrusted.
 let supportsValue = OffsetsEvidence.supports(.value, .plainIsValue)
 let supportsTextContent = OffsetsEvidence.supports(.textContent, .plainIsTextContent)
 for answer in OffsetsAnswer.allCases {
@@ -3068,7 +3057,7 @@ precondition(OffsetsAnswer.value.next(supportsValue, newEngine: false) == .value
 precondition(OffsetsAnswer.textContent.next(supportsValue, newEngine: false) == .untrusted, "value needs a new engine")
 precondition(OffsetsAnswer.untrusted.next(supportsValue, newEngine: false) == .untrusted)
 
-// P against V and F. "ab\ncd": a caret before `d` is 4 in `AXValue` (V) and 3 without the break (F).
+// In "ab\ncd" a caret before `d` is 4 in `AXValue` and 3 without the break.
 let beforeD = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 4..<4)
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: beforeD).evidence(current: .value) == supportsTextContent)
 precondition(FieldReads(text: "ab\ncd", plain: 4..<4, markers: beforeD).evidence(current: .textContent) == supportsValue)
@@ -3077,12 +3066,11 @@ precondition(FieldReads(text: "ab\ncd", plain: 1..<1, markers: MarkerReads(break
     .evidence(current: .value) == .neutral(.noBreaks))
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3).evidence(current: .value) == nil, "a caret without markers compares nothing")
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: MarkerReads(breaks: nil, value: nil)).evidence(current: .textContent) == nil)
-// A list marker the side read skips is no break: F comes from V, not from the raw marker offset.
+// A list marker the side read skips is no break.
 let listItem = ParagraphBreaks(value: "• ab\n• cd", fieldText: "• ab• cd")!
 precondition(FieldReads(text: "• ab\n• cd", plain: 6..<6, markers: MarkerReads(breaks: listItem, value: 7..<7))
     .evidence(current: .textContent) == supportsTextContent)
 
-// Selected text: each answer's prediction from `AXValue`, which only the markers can make for textContent.
 let cd = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 3..<5)
 precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd", markers: cd).evidence(current: .value) == supportsTextContent)
 precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .value) == .misfit(.selectedText),
@@ -3099,7 +3087,6 @@ precondition(FieldReads(text: "ab", plain: 0..<1, selectedText: "a", markers: Ma
     .interpreted(under: .textContent) == (nil, ParagraphBreaks(), false, false))
 precondition(FieldReads(text: "ab", plain: 0..<1).interpreted(under: .untrusted) == (nil, nil, false, false))
 
-// Under `value` the markers are sampled only where they could say something, a few times, until they do.
 var sampling = OffsetsSampling()
 precondition(!sampling.samples(text: "ab", plain: 1..<1) && !sampling.samples(text: "ab\ncd", plain: nil))
 precondition(!sampling.samples(text: "ab\ncd", plain: 1..<1), "a plain read before the first newline is paragraph 1's under any count")
@@ -3118,8 +3105,6 @@ var markerless = OffsetsSampling()
 markerless.sampled(markers: false, evidence: nil, text: nil, plain: nil)
 precondition(!informed.samples(text: "ab\ncd", plain: 3..<3) && !markerless.samples(text: "ab\ncd", plain: 3..<3))
 
-// The dependency: a trial verdict holds only under the offsets answer it was judged under.
-/// `starting: .textContent` is a Chromium field with children.
 func resolving(_ store: BeliefStore, starting: OffsetsAnswer = .value, versions: Versions = learnVersions,
                pins: Bool = false, children: Bool = true) -> ResolvedBeliefs {
     store.resolve(rungs: diaPageField.rungs, rung: learnRung, versions: versions, chromium: starting == .textContent,
@@ -3144,21 +3129,18 @@ precondition(committing(&judgedUntrusted, .writeSelection, under: .untrusted) &&
 precondition(!dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(tag: "e9.c9"), tally: Tally()))
 precondition(dependent.offsetsBelief(at: learnRung)?.provenance.tag == nil, "a read model that stood is not rewritten")
 
-// A new engine retires the read model and remembers it was another engine's; a user override retires it outright.
 let upgraded = resolving(dependent, versions: Versions(app: learnVersions.app, engine: "42"))
 precondition(upgraded.readModel.answer == .value && upgraded.readModel.source == .start && upgraded.readModel.newEngine)
 let pinned = resolving(dependent, starting: .textContent, pins: true)
 precondition(pinned.readModel.answer == .textContent && pinned.readModel.source == .user)
 precondition(dependent.forget(Belief.offsets, at: learnRung) && resolving(dependent).readModel.source == .start)
 
-// A confirmation dates the engine without handing its answer to every field of the rung.
 var anchored = BeliefStore()
 precondition(anchored.record(offsets: .textContent, at: learnRung, anchor: true, versions: learnVersions, provenance: Provenance(), tally: Tally()))
 precondition(resolving(anchored).readModel == ReadModel(answer: .value, belief: anchored.offsetsBelief(at: learnRung)))
 precondition(resolving(anchored, starting: .textContent).readModel.answer == .textContent)
 precondition(resolving(anchored, versions: Versions(app: "1.50")).readModel.newEngine)
 
-// A field with no children has no generated breaks: whatever its rung learned, it reads plain offsets and judges under them.
 var richSibling = BeliefStore()
 precondition(richSibling.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
 let textareaBeside = resolving(richSibling, children: false)
@@ -3170,12 +3152,10 @@ precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: 
 precondition(ReadModel(answer: .value, learned: .textContent).reading(chromium: false, children: true) == (.textContent, .learned))
 precondition(ReadModel(answer: .value, pinned: true).reading(chromium: true, children: true) == (.textContent, .user))
 
-// The old learner's records carry over judged under value: native demotions keep, Chromium rich text reopens.
 let migrated = BeliefStore(demotions: [(learnRung, "1.49.1", "writeSelection"), (learnRung, "1.49.1", "noSuchAtom")])
 precondition(migrated.beliefs.count == 1 && migrated.beliefs[0].judgedUnder == .value && migrated.beliefs[0].provenance.tag == "migrated")
 precondition(resolving(migrated).broken == [.writeSelection] && resolving(migrated, starting: .textContent).broken.isEmpty)
 
-// The observation rule: a move is recorded and republished, a confirmation of a start only dates the engine.
 func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, OffsetsEvidence?, OffsetsAnswer),
             source: OffsetsSource = .start, run: RunAttribution = RunAttribution()) -> Learning.Lesson {
     let observed = Learning.Observation(before: snapshot.0, source: source, evidence: snapshot.1, after: snapshot.2)
@@ -3215,19 +3195,16 @@ wrongRange.record(.setSelection(0..<4))
 wrongRange.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                   selection: 1..<5, length: 7, selectedText: "ne\nt")
 precondition(!wrongRange.textMismatch && wrongRange.failed == .writeSelection)
-// An unanswered text is no contradiction, and the range held, so neither the offsets nor the write answer for it.
 var unanswered = RunAttribution()
 unanswered.record(.setSelection(0..<4))
 unanswered.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                   selection: 0..<4, length: 7, selectedText: nil)
 precondition(!unanswered.textMismatch && unanswered.failed == nil)
-// Nor does a boundary side the markers refused while the text matched.
 var sideOnly = RunAttribution()
 sideOnly.record(.settle(Expectation(selection: 0..<4, length: 7, edge: .paragraphEnd, selectedText: "one")), passed: false,
                 selection: 0..<4, length: 7, selectedText: "one")
 precondition(!sideOnly.textMismatch && sideOnly.failed == nil)
 
-// Exemptions stay exemptions, logged as neutral evidence with the reason.
 let offLine = Expectation(landing: .exact(4..<4), blame: Expectation.Blame(
     capability: .lineStartKey, unmoved: [], leavesCaret: true, exemptions: [.init(.paragraphLines, offTarget: true)]))
 precondition(offLine.verdict(observed: 2..<2) == .neutral(.lineStartKey, .paragraphLines) && offLine.blamed(observed: 2..<2) == nil)
@@ -3245,14 +3222,13 @@ var neutralRun = RunAttribution()
 neutralRun.record(.press(.paragraphStart, count: 1))
 neutralRun.record(.settle(offLine), passed: false, selection: 2..<2)
 precondition(neutralRun.neutral == .neutral(.lineStartKey, .paragraphLines) && neutralRun.failed == nil)
-// The planner marks each exemption where it drops a blame.
 let chipLine = webPhysical("0", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: chromiumBreak)
 precondition(chipLine.steps.contains {
     guard case .settle(let expectation) = $0 else { return false }
     return expectation.verdict(observed: 5..<5) == .neutral(.lineStartKey, .paragraphLines)
 }, "an off-target line key in Chromium rich text is neutral")
 
-// Resolution keeps the table it had: probe, the user's off, evidence, the user's on, then policies over their parents.
+// The resolver's table before beliefs, which it must still match.
 func previousTable(probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>)
     -> [Capability: CapabilityReport.Entry] {
     var entries: [Capability: CapabilityReport.Entry] = [:]
@@ -3307,7 +3283,6 @@ for _ in 0..<400 {
     precondition(resolved.report.entries == previousTable(probed: profile, config: config, learned: demoted))
     precondition(resolved.profile.statuses == previousTable(probed: profile, config: config, learned: demoted).mapValues(\.status))
 }
-// `untrusted` withholds the caret as learned, and the user's On overrules it.
 var withheld = BeliefStore()
 _ = withheld.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally())
 let untrustedReport = CapabilityResolver.resolve(probed: axProfile, config: [:], beliefs: resolving(withheld)).report
@@ -3315,7 +3290,6 @@ precondition(untrustedReport.entries[.readCaret] == .init(status: .unavailable, 
 precondition(CapabilityResolver.resolve(probed: axProfile, config: [.readCaret: ConfigChoice(override: .on)], beliefs: resolving(withheld))
     .profile.has(.readCaret))
 
-// The recorder: every belief with its provenance, and why it does or does not apply.
 let judgedBelief = Belief(
     rung: learnRung, question: "writeSelection", answer: Belief.broken, judgedUnder: .value, versions: Versions(app: "1.49.1"),
     provenance: Provenance(build: "1.0.0 (812)", learnedAt: "2026-09-24T10:00:00Z", tag: "e3.c7")
@@ -3351,7 +3325,6 @@ precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").
 precondition(Expectation(selectedText: "ab").matches(selection: nil, length: nil, selectedText: "a\u{FFFC}b"),
              "Chromium's leaf with no text is not a different selection")
 
-// An untrusted field withholds the caret and keeps its AX writes: after blind keys, the edit rides their queue.
 let withheldCaret = removing([.readCaret], from: axProfile)
 precondition(physical("rX", text: "say hello", profile: withheldCaret).steps.prefix(2)
     == [.press(.selectRight, count: 1), .typeText("X")], "an AX write would overtake the queued ⇧→")
@@ -3368,7 +3341,6 @@ precondition(physical(".", text: "say hello", profile: withheldCaret, state: rep
 
 // MARK: - Beliefs end to end (the Sim's Chromium read fault)
 
-/// Chromium rich text: reads and writes skip generated breaks, and markers, where it has them, follow the real caret.
 func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers: Bool, chromium: Bool = false,
                  store: BeliefStore = BeliefStore()) -> Sim {
     var host = Sim(text: text, caret: caret, profile: profile)
@@ -3382,7 +3354,6 @@ func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers
 // LIN-1590's worked example: the caret on the `w` of `world` is 16 in `AXValue` and 11 to Chromium.
 let workedExample = "a\nb\nc\nd\ne\nhello world"
 
-// With #11's candidate, the belief reaches textContent on the first informative snapshot, where the rule sees none.
 var firstParagraph = chromiumSim(workedExample, caret: 0, profile: axProfile, markers: true)
 firstParagraph.type("l")
 precondition(firstParagraph.learner!.model.answer == .value && firstParagraph.learner!.evidence.isEmpty,
@@ -3395,7 +3366,6 @@ precondition(discovered.learner!.lessons.first?.move == Learning.Move(from: .val
 precondition(discovered.learner!.model.answer == .textContent && discovered.learner!.model.source == .learned)
 precondition(discovered.text == "a\nb\nc\nd\ne\nhello there" && discovered.settleFailures == 0, "the move takes effect on its own snapshot")
 
-// With value the only candidate, the text check stops the edit, and the field goes untrusted.
 var misreadWord = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: false)
 misreadWord.type("ciw")
 precondition(misreadWord.text == workedExample && misreadWord.settleFailures == 1, "ciw deletes nothing")
@@ -3407,12 +3377,10 @@ precondition(misreadWord.state.field.mode == .normal && misreadWord.selection.is
 misreadWord.type("ciw")
 precondition(misreadWord.settleFailures == 1 && misreadWord.text == "a\nb\nc\nd\ne\n world" && misreadWord.pasteboard == "hello",
              "the next ciw lets the field choose the word, from where the check left the caret")
-// Lane B's text check teaches the same.
 var misreadKeys = chromiumSim(paragraphs, caret: 24, profile: readProfile, markers: false)
 misreadKeys.type("ciw")
 precondition(misreadKeys.text == paragraphs && misreadKeys.learner!.model.answer == .untrusted)
 
-// Back to value only with the fault gone and a new engine; without the new engine, untrusted.
 var sameEngine = discovered
 sameEngine.reads = nil
 sameEngine.writesInReadOffsets = false
@@ -3433,7 +3401,6 @@ fixedChromium.type("h")
 precondition(fixedChromium.learner!.lessons.last?.move == Learning.Move(from: .textContent, to: .value, why: .plainIsValue),
              "a detected Chromium field moves back to value on a new engine")
 
-// The dependency: a verdict judged under plain reads reopens once the rung learns textContent.
 var preFix = BeliefStore()
 _ = preFix.commit(broken: .writeSelection, at: "sim|role:AXTextArea", judgedUnder: .value, versions: Versions(app: "1"),
                   provenance: Provenance(tag: "e3.c7"))
@@ -3445,7 +3412,6 @@ precondition(reopening.learner!.resolved!.reopened.map(\.question) == ["writeSel
 reopening.type("ciwthere")
 precondition(reopening.text == "a\nb\nc\nd\ne\nhello there" && reopening.settleFailures == 0)
 
-// The first informative snapshot, even after many that could say nothing in the same binding.
 var firstThenLater = chromiumSim("alpha beta gamma\nb\nc\nd\ne\nhello world", caret: 2, profile: axProfile, markers: true)
 firstThenLater.type("llll")
 precondition(firstThenLater.caret == 6 && firstThenLater.learner!.model.answer == .value)
@@ -3453,7 +3419,6 @@ precondition(firstThenLater.learner!.sampling.remaining == OffsetsSampling.budge
 firstThenLater.type("5jl")
 precondition(firstThenLater.learner!.model.answer == .textContent && firstThenLater.learner!.evidence.last == supportsTextContent)
 
-// A textarea beside the rich field keeps its plain caret, whatever the rung learned, and teaches the rung nothing.
 var untrustedRung = BeliefStore()
 _ = untrustedRung.record(offsets: .untrusted, at: "sim|role:AXTextArea", versions: Versions(app: "1"), provenance: Provenance(),
                          tally: Tally())
@@ -3466,14 +3431,12 @@ textarea.feed("<Esc>")
 precondition(textarea.text == "say bye world" && textarea.settleFailures == 0)
 precondition(textarea.learner!.store == untrustedRung && textarea.learner!.evidence.isEmpty)
 
-// The trial rule, end to end: one ignored write commits, judged under the answer it ran under.
 var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
 ignored.swallowsReplace = true
 ignored.learn(with: Sim.Learner(probed: axProfile))
 ignored.type("ciw")
 precondition(ignored.learner!.lessons.last?.committed == .insertText && !ignored.profile.has(.insertText))
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
-// Neutral evidence, end to end: an off-target ⌃A in Chromium rich text rings and teaches nothing.
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
 chipKey.type("0")

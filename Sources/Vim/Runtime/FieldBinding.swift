@@ -1,9 +1,7 @@
 import ApplicationServices
 import LoomCore
 
-/// Probes what a focused field can do. Trial reads *prove* the read
-/// capabilities; settable flags *claim* the writes — and the claims are
-/// corrected by the beliefs real commands teach (settle verdicts are their readings).
+/// Reads prove the read capabilities; settable flags only claim the writes, which beliefs then correct.
 public enum FieldProber {
     /// Three IPCs, not six: the four read trials ride one batch, and the two
     /// settable flags use a different API (`AXUIElementIsAttributeSettable`)
@@ -27,11 +25,7 @@ public enum FieldProber {
         return CapabilityProfile(available: available)
     }
 
-    /// The full resolution for one binding: the probe, curation and the user's overrides, and the beliefs learned
-    /// about fields like this one. The profile is what the planner consumes; the report is the menu's why.
-    ///
-    /// The `surface` is the whole point: config and beliefs are keyed by the text engine behind the field, not by the
-    /// app hosting it, so a browser's own search box and an `<input>` in the page resolve independently.
+    /// Config and beliefs key on the field's surface, not its app: a browser's search box and a page `<input>` differ.
     public static func resolve(
         _ element: AXUIElement, surface: Surface, versions: Versions, chromium: Bool
     ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs) {
@@ -94,12 +88,12 @@ public enum FieldProber {
     }
 }
 
-/// Reads the volatile half of a `FieldSnapshot`, fresh per command, and what those reads say about the offsets.
+/// Reads the volatile half of a `FieldSnapshot`, fresh per command.
 public enum Snapshotter {
     public struct Reading {
         public let snapshot: FieldSnapshot
         public let observed: Learning.Observation
-        /// The markers were read under `value` for evidence alone, and whether the field answered.
+        /// Markers read under `value` for evidence alone; `markers` says whether they answered.
         public let sampled: Bool
         public let markers: Bool
         public let reads: FieldReads
@@ -114,14 +108,12 @@ public enum Snapshotter {
         model: ReadModel = ReadModel(answer: .value),
         sampling: OffsetsSampling = OffsetsSampling()
     ) -> Reading {
-        // Re-read per snapshot, as the hard-coded switch was: a field gains children as it fills.
         let (current, source) = model.reading(chromium: chromium, children: hasParagraphs(element))
         // Observation keeps running under `untrusted`, whose withheld caret is still read.
         let caret = capabilities.has(.readCaret) || model.learned == .untrusted
-        // Under `value` the marker range is fetched only by a sample, after the batch shows it can tell something.
+        // Under `value` only a sample fetches the marker range, once the batch shows it can tell.
         let readsMarkers = caret && current != .value
-        // One IPC for the whole volatile half. The capabilities gate which
-        // slots are *used*, not which are fetched.
+        // One IPC for the volatile half; capabilities gate which slots are used, not fetched.
         var names = [
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
@@ -176,7 +168,6 @@ public enum Snapshotter {
         AX.childCount(of: element).map { $0 > 0 } ?? true
     }
 
-    /// The marker selection in `AXValue` offsets and the breaks it used, unaligned where they cannot be placed.
     private static func markerReads(of element: AXUIElement, text: String?, marked: AX.MarkedSelection) -> MarkerReads {
         // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
         guard let text, !text.utf16.contains(0xFFFC) else { return MarkerReads(breaks: nil, value: nil) }

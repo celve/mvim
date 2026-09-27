@@ -122,7 +122,7 @@ private extension PhysicalPlanner {
         /// The last predicted edit's range, in field offsets — the one in flight if the plan dies.
         var operand: Range<Int>?
 
-        /// Events posted since the last settle, still queued at the window server, which an AX write would overtake.
+        /// Posted events not yet settled, which an AX write would overtake at the window server.
         var keysQueued = false
 
         let webContent: Bool
@@ -278,8 +278,7 @@ private extension PhysicalPlanner {
         steps.contains { if case .press = $0 { return true }; return false }
     }
 
-    /// Before an edit replaces a selection: a misread caret puts keys and writes on other text while every offset
-    /// reads back as planned (LIN-1533), and the offsets belief learns from the mismatch.
+    /// A misread caret puts keys and writes on other text while every offset reads back as planned (LIN-1533).
     static func checkSelectedText(
         _ text: String, context: Context, profile: CapabilityProfile
     ) -> [PhysicalStep] {

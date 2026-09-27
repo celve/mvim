@@ -1,6 +1,5 @@
-/// The learner's two rules for one command, shared by the controller and the Sim.
+/// The learner's rules, shared by the Controller and the Sim.
 public enum Learning {
-    /// What a snapshot read about the offsets: the answer it started from, and the one it was taken under.
     public struct Observation: Equatable, Sendable {
         public var before: OffsetsAnswer
         public var source: OffsetsSource
@@ -19,7 +18,6 @@ public enum Learning {
     public static func observe(
         _ reads: FieldReads, before: OffsetsAnswer, source: OffsetsSource, newEngine: Bool
     ) -> Observation {
-        // A user override pins the answer, and a field with no children has no breaks to count.
         guard source.observes, let evidence = reads.evidence(current: before) else {
             return Observation(before: before, source: source)
         }
@@ -37,10 +35,9 @@ public enum Learning {
         case alreadyCommitted = "already-committed"
     }
 
-    /// What one command taught; `republish` asks for the binding to be resolved again.
     public struct Lesson: Equatable, Sendable {
         public var move: Move?
-        /// The read model was written, moved or first confirmed at this engine.
+        /// The read model was written, by a move or an anchor.
         public var recorded = false
         public var committed: Capability?
         public var skip: Skip?
@@ -48,7 +45,6 @@ public enum Learning {
         public var republish = false
     }
 
-    /// The trial rule for writes and keys, and the observation rule for offsets, applied to `store`.
     public static func learn(
         store: inout BeliefStore, rung: String, versions: Versions, model: ReadModel, observed snapshot: Observation,
         run: RunAttribution, overridden: (Capability) -> Bool, provenance: Provenance, tally: Tally
@@ -65,7 +61,7 @@ public enum Learning {
             if moved {
                 lesson.recorded = store.record(offsets: answer, at: rung, versions: versions, provenance: provenance, tally: tally)
             } else if snapshot.source == .start, answer != .value, snapshot.evidence?.informative == true {
-                // Dates the engine a starting answer was confirmed under, so a later engine can restore `value`.
+                // An anchor dates the engine, so a later engine can restore `value`.
                 lesson.recorded = store.record(
                     offsets: answer, at: rung, anchor: true, versions: versions, provenance: provenance, tally: tally
                 )
@@ -90,7 +86,6 @@ public enum Learning {
 // MARK: - Recorder
 
 extension Expectation.Verdict {
-    /// `neutral q=lineStartKey why=paragraph-lines`.
     var traceFields: String {
         switch self {
         case .blamed(let key): return "blamed q=\(key.traceName)"
@@ -100,7 +95,6 @@ extension Expectation.Verdict {
 }
 
 extension Learning.Lesson {
-    /// One `learn` line per thing learned; a republish rides the last.
     func traceLines(rung: String, versions: Versions, failed: Capability?) -> [String] {
         var lines: [String] = []
         if let move {

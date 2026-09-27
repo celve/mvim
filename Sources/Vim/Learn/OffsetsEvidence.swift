@@ -1,9 +1,7 @@
-/// What one observation says about the offsets question.
 public enum OffsetsEvidence: Equatable, Sendable {
     case supports(OffsetsAnswer, Why)
     /// No answer fits what the field read.
     case misfit(Why)
-    /// Says nothing either way.
     case neutral(Why)
 
     public enum Why: String, Equatable, Sendable {
@@ -32,14 +30,11 @@ public enum OffsetsEvidence: Equatable, Sendable {
     }
 }
 
-/// One snapshot's reads, before a read model interprets them.
 public struct FieldReads: Equatable, Sendable {
     public var text: String?
-    /// P: `AXSelectedTextRange`.
+    /// `AXSelectedTextRange`.
     public var plain: Range<Int>?
-    /// S: `AXSelectedText`.
     public var selectedText: String?
-    /// Nil where the markers were not read, or the field has none.
     public var markers: MarkerReads?
 
     public init(text: String? = nil, plain: Range<Int>? = nil, selectedText: String? = nil, markers: MarkerReads? = nil) {
@@ -50,11 +45,10 @@ public struct FieldReads: Equatable, Sendable {
     }
 }
 
-/// The text markers' view of the selection.
 public struct MarkerReads: Equatable, Sendable {
     /// Nil when the marker text did not line up with `AXValue`.
     public var breaks: ParagraphBreaks?
-    /// V: the marker selection in `AXValue` offsets; nil when unaligned or a boundary's side was unreadable.
+    /// The marker selection in `AXValue` offsets; nil when unaligned or a side was unreadable.
     public var value: Range<Int>?
     public var emptyParagraph: Bool
     public var textlessLeaves: Bool
@@ -68,7 +62,6 @@ public struct MarkerReads: Equatable, Sendable {
 }
 
 public extension FieldReads {
-    /// What the snapshot says, against the answer it was read under; nil when it read nothing comparable.
     func evidence(current: OffsetsAnswer) -> OffsetsEvidence? {
         let offsets = offsetsEvidence()
         let text = selectedTextEvidence(current: current)
@@ -81,7 +74,6 @@ public extension FieldReads {
         return offsets ?? text
     }
 
-    /// P against V and F, where F is V without the generated breaks.
     func offsetsEvidence() -> OffsetsEvidence? {
         guard let plain, let breaks = markers?.breaks, let value = markers?.value else { return nil }
         let field = breaks.fieldRange(value)
@@ -91,7 +83,6 @@ public extension FieldReads {
         return .neutral(.boundarySnap)
     }
 
-    /// S against what each answer predicts from `AXValue`, for a non-empty selection.
     func selectedTextEvidence(current: OffsetsAnswer) -> OffsetsEvidence? {
         guard let plain, !plain.isEmpty, let selectedText, let text else { return nil }
         let model = TextModel(text)
@@ -115,7 +106,6 @@ public extension FieldReads {
         String(decoding: text.utf16.filter { $0 != 0xFFFC }, as: UTF16.self)
     }
 
-    /// The selection and paragraph facts a snapshot takes under `answer`.
     func interpreted(under answer: OffsetsAnswer) -> (selection: Range<Int>?, breaks: ParagraphBreaks?, emptyParagraph: Bool, textlessLeaves: Bool) {
         switch answer {
         case .value:
@@ -129,7 +119,7 @@ public extension FieldReads {
     }
 }
 
-/// Under `value` a binding reads the markers only while they could say something, a few times, until they do.
+/// Under `value`, markers are read only where they could tell, until they do or `budget` reads say nothing.
 public struct OffsetsSampling: Equatable, Sendable {
     public static let budget = 3
 
@@ -137,14 +127,13 @@ public struct OffsetsSampling: Equatable, Sendable {
 
     public init() {}
 
-    /// A plain read before the first `\n` is in the first paragraph under any count, so no marker read tells anything.
+    /// Before the first `\n` both counts agree, so a marker read could tell nothing.
     public func samples(text: String?, plain: Range<Int>?) -> Bool {
         guard remaining > 0, let text, let plain else { return false }
         return text.utf16.prefix(plain.upperBound + 1).contains(10)
     }
 
-    /// After a sample: a field without markers, or one that has spoken, is sampled no more, and a silence counts only
-    /// from past a newline, where the markers had something to compare.
+    /// A silence counts only past a newline, where the markers had something to compare.
     public mutating func sampled(markers: Bool, evidence: OffsetsEvidence?, text: String?, plain: Range<Int>?) {
         if !markers || evidence?.informative == true {
             remaining = 0
@@ -157,7 +146,6 @@ public struct OffsetsSampling: Equatable, Sendable {
 // MARK: - Recorder
 
 extension OffsetsEvidence {
-    /// `supports=textContent why=plain=textContent`, `misfit why=selected-text`, `neutral why=no-breaks`.
     var traceFields: String {
         switch self {
         case .supports(let answer, let why): return "supports=\(answer.rawValue) why=\(why.rawValue)"

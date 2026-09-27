@@ -31,9 +31,7 @@ public final class Executor {
         }
     }
 
-    /// What the most recent `execute()` did: the learner's readings (`RunAttribution`), plus what the recorder needs
-    /// to explain them. Callers must copy this immediately after their execute: hygiene plans (cursor collapse,
-    /// stranded-selection repair) reuse this executor and reset it.
+    /// Copy it right after `execute()`: hygiene plans reuse this executor and reset it.
     public struct RunEvidence: Equatable, Sendable {
         public internal(set) var attribution = RunAttribution()
 

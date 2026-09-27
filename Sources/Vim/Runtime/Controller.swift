@@ -47,10 +47,10 @@ public final class Controller {
     private var state = VimState.initial
     private let executor = Executor()
 
-    /// Where the bound field reads text markers under `value`; a new element starts over.
+    /// Marker sampling for the bound field; a new element starts over.
     private var sampling = OffsetsSampling()
 
-    /// The offsets evidence each rung has seen this process, written with its read model.
+    /// Per-rung evidence this process, stored with the read model.
     private var tallies: [String: Tally] = [:]
 
     /// Mirror of the tracker's binding, held for unbind hygiene.
@@ -107,7 +107,6 @@ public final class Controller {
         tracker.reresolveCapabilities()
     }
 
-    /// A user override retires the belief it overrules; `readCaret`'s is the read model's.
     public func forgetBelief(_ capability: Capability, at rung: String) {
         Beliefs.forget(capability.rawValue, at: rung)
         if capability == .readCaret { Beliefs.forget(Belief.offsets, at: rung) }
@@ -386,11 +385,7 @@ public final class Controller {
         return nil
     }
 
-    /// Fold one command into the beliefs: the trial rule for the write or key a settle blamed, and the observation
-    /// rule for the offsets the snapshot read and a text check contradicted.
-    ///
-    /// A change is persisted and applied at once, so the next command routes around it. The re-resolve is
-    /// session-preserving (`.sameElement`), so it does not move the user mid-edit.
+    /// A change applies at once, keeping the session (`.sameElement`), so the next command routes around it.
     private func learn(
         from evidence: Executor.RunEvidence, reading: Snapshotter.Reading, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64

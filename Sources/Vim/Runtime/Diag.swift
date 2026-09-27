@@ -138,12 +138,10 @@ enum Diag {
         }
     }
 
-    /// A failure the key's lane exempts from blame: evidence for neither answer, with the reason.
     static func neutral(_ epoch: UInt64, _ seq: UInt64, _ verdict: Expectation.Verdict) {
         learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) \(verdict.traceFields, privacy: .public)")
     }
 
-    /// Every snapshot's offsets evidence; the ones that move a belief also log a `learned` line.
     static func observed(_ epoch: UInt64, _ seq: UInt64, _ evidence: OffsetsEvidence, under answer: OffsetsAnswer) {
         learn.debug("""
             e\(epoch, privacy: .public).c\(seq, privacy: .public) observe offsets=\(answer.rawValue, privacy: .public) \

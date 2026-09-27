@@ -221,7 +221,7 @@ public struct Expectation: Equatable, Sendable {
         public let leavesCaret: Bool
         /// A landing anywhere but the prediction is the key's too, where the field's lines are the model's.
         public let offTarget: Bool
-        /// Failures left out on purpose, which the learner logs as neutral evidence.
+        /// Failures left unblamed on purpose, logged as neutral evidence.
         public let exemptions: [Exemption]
 
         public init(
@@ -235,15 +235,13 @@ public struct Expectation: Equatable, Sendable {
             self.exemptions = exemptions
         }
 
-        /// Blames nothing, and logs every failure it would have blamed.
         var exempt: Bool { exemptions.contains(where: \.all) }
     }
 
-    /// A failure a blame leaves out: the field staying at `unmoved`, a landing elsewhere with `offTarget`, or with
-    /// `all` anything the blame names.
+    /// A failure left unblamed: staying at `unmoved`, landing elsewhere with `offTarget`, or any with `all`.
     public struct Exemption: Equatable, Sendable {
         public enum Reason: String, Equatable, Sendable {
-            /// One Chromium paragraph can be several `AXValue` lines (a mention chip), so a working key lands off the model's (#12).
+            /// One Chromium paragraph can be several `AXValue` lines (a mention chip).
             case paragraphLines = "paragraph-lines"
             /// `AXValue` can leave an empty paragraph out, so a key from one can seem to do nothing.
             case emptyParagraph = "empty-paragraph"
@@ -264,7 +262,6 @@ public struct Expectation: Equatable, Sendable {
         }
     }
 
-    /// What a failed settle says about the key it checks.
     public enum Verdict: Equatable, Sendable {
         case blamed(Capability)
         case neutral(Capability, Exemption.Reason)
@@ -302,14 +299,13 @@ public struct Expectation: Equatable, Sendable {
         return true
     }
 
-    /// Chromium writes a U+FFFC into `AXSelectedText` for each element with no text, which `AXValue` leaves out.
+    /// Chromium's `AXSelectedText` has a U+FFFC per text-less element, which `AXValue` leaves out.
     static func sameText(_ expected: String, _ observed: String?) -> Bool {
         guard let observed else { return false }
         return observed == expected
             || !expected.utf16.contains(0xFFFC) && FieldReads.withoutAttachments(observed) == expected
     }
 
-    /// Whether the range and length held, whatever the selected text read.
     public func rangeHeld(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
         var offsetsOnly = Expectation(landing: landing, length: length, edge: edge, blame: blame)
         offsetsOnly.longest = longest
@@ -339,7 +335,6 @@ public struct Expectation: Equatable, Sendable {
         return blame.capability
     }
 
-    /// `blamed`, or the exemption a failure fell under instead.
     public func verdict(observed: Range<Int>?) -> Verdict? {
         if let capability = blamed(observed: observed) { return .blamed(capability) }
         guard let blame, let observed else { return nil }
@@ -350,7 +345,6 @@ public struct Expectation: Equatable, Sendable {
         return exemption.map { .neutral(blame.capability, $0.reason) }
     }
 
-    /// The key this settle checks, unless its lane never blames it.
     public var checkedKey: Capability? {
         blame.flatMap { $0.exempt ? nil : $0.capability }
     }
@@ -369,7 +363,6 @@ extension Expectation {
     /// same shape.
     var traceFields: String { traceFields(text: false) }
 
-    /// With text recording on, `text="hello"`.
     func traceFields(text recording: Bool) -> String {
         let selection = landing.map(\.traceName) ?? "nil"
         var fields = "sel=\(selection) len=\(length.map(String.init) ?? "nil")"
