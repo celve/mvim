@@ -342,8 +342,8 @@ each type's file; `grep -rn '// MARK: - Recorder' Sources` is the index.
 
 Six categories: `bind` (a field became vim's, with its whole capability resolution),
 `cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
-answered instead), `learn` (a [belief](#learned-beliefs) changed, evidence that counted for
-neither answer, or the reason nothing was learned), `gate` (an
+answered instead), `learn` (the evidence a command gave, a [belief](#learned-beliefs) that
+changed, or the reason nothing was learned), `gate` (an
 element that did not become a binding, and a web field's walk to its site) and `system` (the
 tap or the login item failing). Every engine line carries `e<epoch>.c<seq>` — the binding
 and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
@@ -363,9 +363,10 @@ the learner anything. A `!` after a native key names that key, and a failure bla
 (`fail=lineStartKey`) when a caret key left a selection, when the field still reads as it did
 before the key although the key had somewhere to go, or when the key landed somewhere else. In
 Chromium's rich text a landing somewhere else aborts without learning. Where a key's lane exempts a
-failure from blame, a `learn` line says so: `neutral q=lineStartKey why=paragraph-lines` (a line key
-off target in Chromium's rich text), `why=empty-paragraph` (a key from a caret in an empty
-paragraph) or `why=web-content` (a word or paragraph key that stayed put in web content).
+failure from blame, a `learn` line says so: `evidence q=lineStartKey neutral why=paragraph-lines
+seen=settle@1` (a line key off target in Chromium's rich text), `why=empty-paragraph` (a key from a
+caret in an empty paragraph) or `why=web-content` (a word or paragraph key that stayed put in web
+content).
 
 Before an edit deletes or types over a selection, it checks the selected text: `ciw` is
 `W!!R!CCC` with AX selection writes and `P2P5!!P?CCC` without, where the second `!` waits for
@@ -487,6 +488,13 @@ or in one app natively — and keeps them in `fieldBeliefs`, a disposable cache:
 A write or key answer records the offsets answer it was judged under and holds only while that
 answer does: a demotion made while mvim misread the field's offsets reopens once the offsets answer
 changes. Demotions from before beliefs carry over as judged under `value`.
+
+Each piece of evidence is one `learn` line, `evidence q=<question> <outcome> why=<reason> seen=<where>`:
+the outcome is `supports`, `refutes` or `neutral`, and `seen` is `snapshot` or `settle@N`, the plan
+step. A failed settle's line is logged; passes and snapshot reads only at debug level. A struck
+write says why: `unanswered`, `length`, `moved` (the selection read back elsewhere) or `edge` (the
+offsets held but not the paragraph side). A struck key says `unmoved`, `left-selection`, `too-long` or
+`off-target`, and the `commit` line that sets it off repeats the reason.
 
 The bind line shows the read model as `offsets=<answer>/<source>`, where the source is `start`
 (the rule above), `learned`, `user` or `plain` (no children), followed by one `belief` line per

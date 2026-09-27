@@ -90,9 +90,11 @@ public struct Sim {
     public private(set) var settleFailures = 0
     public private(set) var unsupportedSteps = 0
 
+    /// The last command's evidence from its settles.
+    public private(set) var attribution = RunAttribution()
+
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
-    private var attribution = RunAttribution()
 
     /// The focus is the selection's lower bound.
     private var backward = false
@@ -455,7 +457,8 @@ public extension Sim {
         public var sampling = OffsetsSampling()
         public var tally = Tally()
         public internal(set) var resolved: ResolvedBeliefs?
-        public internal(set) var evidence: [OffsetsEvidence] = []
+        /// What each snapshot's reads said.
+        public internal(set) var evidence: [Evidence] = []
         public internal(set) var lessons: [Learning.Lesson] = []
 
         public init(
@@ -523,11 +526,13 @@ extension Sim {
 
     mutating func learn(from reading: Reading) {
         guard var learner else { return }
-        if attribution.textMismatch, reading.observed.source.observes { learner.tally.count(.misfit(.textCheck)) }
+        if reading.observed.source.observes {
+            for item in attribution.evidence { learner.tally.count(item) }
+        }
         let config = learner.config
         let lesson = Learning.learn(
             store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
-            observed: reading.observed, run: attribution,
+            observed: reading.observed, run: attribution.evidence,
             overridden: { config[$0]?.override != nil }, provenance: Provenance(), tally: learner.tally
         )
         learner.lessons.append(lesson)

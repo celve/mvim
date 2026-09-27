@@ -7,13 +7,43 @@ public enum OffsetsAnswer: String, Codable, CaseIterable, Equatable, Sendable {
     case untrusted
 }
 
+/// What a belief answers, stored as a capability's name or `offsets`.
+public enum Question: RawRepresentable, Codable, Hashable, Sendable {
+    case write(Capability)
+    case key(Capability)
+    case offsets
+
+    /// Stores only ever held writes and keys, so any capability but a native key reads as a write.
+    public init(_ capability: Capability) {
+        self = Capability.nativeKeys.contains(capability) ? .key(capability) : .write(capability)
+    }
+
+    public init?(rawValue: String) {
+        if rawValue == "offsets" {
+            self = .offsets
+        } else if let capability = Capability(rawValue: rawValue) {
+            self.init(capability)
+        } else {
+            return nil
+        }
+    }
+
+    public var rawValue: String { capability?.rawValue ?? "offsets" }
+
+    public var capability: Capability? {
+        switch self {
+        case .write(let capability), .key(let capability): return capability
+        case .offsets: return nil
+        }
+    }
+}
+
 /// A rung's learned answer: `broken` for a write or key, or the `offsets` read model.
 public struct Belief: Codable, Equatable, Sendable {
-    public static let offsets = "offsets"
     public static let broken = "broken"
 
     public var rung: String
-    public var question: String
+    public var question: Question
     public var answer: String
     /// The verdict holds only while the read model gives this answer.
     public var judgedUnder: OffsetsAnswer?
@@ -25,7 +55,7 @@ public struct Belief: Codable, Equatable, Sendable {
     public var anchor: Bool?
 
     public init(
-        rung: String, question: String, answer: String, judgedUnder: OffsetsAnswer? = nil,
+        rung: String, question: Question, answer: String, judgedUnder: OffsetsAnswer? = nil,
         versions: Versions, provenance: Provenance = Provenance(), tally: Tally? = nil, anchor: Bool? = nil
     ) {
         self.rung = rung
@@ -39,10 +69,10 @@ public struct Belief: Codable, Equatable, Sendable {
         self.anchor = anchor
     }
 
-    public var capability: Capability? { Capability(rawValue: question) }
+    public var capability: Capability? { question.capability }
 
     public var offsetsAnswer: OffsetsAnswer? {
-        question == Self.offsets ? OffsetsAnswer(rawValue: answer) : nil
+        question == .offsets ? OffsetsAnswer(rawValue: answer) : nil
     }
 
     /// The read model expires on this: Electron's framework version, else the app's.
@@ -71,11 +101,12 @@ public struct Tally: Codable, Equatable, Sendable {
 
     public init() {}
 
-    public mutating func count(_ evidence: OffsetsEvidence) {
-        switch evidence {
-        case .supports(.value, _): value += 1
-        case .supports(.textContent, _): textContent += 1
-        case .supports(.untrusted, _), .misfit: misfit += 1
+    public mutating func count(_ evidence: Evidence) {
+        guard evidence.question == .offsets else { return }
+        switch evidence.outcome {
+        case .supports(.value?): value += 1
+        case .supports(.textContent?): textContent += 1
+        case .supports, .refutes: misfit += 1
         case .neutral: neutral += 1
         }
     }
@@ -94,13 +125,13 @@ public struct Versions: Equatable, Sendable {
 }
 
 public extension OffsetsAnswer {
-    func next(_ evidence: OffsetsEvidence, newEngine: Bool) -> OffsetsAnswer {
-        switch evidence {
-        case .neutral:
+    func next(_ outcome: Evidence.Outcome, newEngine: Bool) -> OffsetsAnswer {
+        switch outcome {
+        case .neutral, .supports(nil):
             return self
-        case .misfit:
+        case .refutes:
             return .untrusted
-        case .supports(let answer, _):
+        case .supports(let answer?):
             guard answer != self else { return self }
             switch answer {
             case .value: return newEngine ? .value : .untrusted
@@ -202,7 +233,7 @@ public extension BeliefStore {
     }
 
     func offsetsBelief(at rung: String) -> Belief? {
-        beliefs.first { $0.rung == rung && $0.question == Belief.offsets }
+        beliefs.first { $0.rung == rung && $0.question == .offsets }
     }
 
     /// False when that verdict already stood.
@@ -212,9 +243,9 @@ public extension BeliefStore {
     ) -> Bool {
         let app = versions.app ?? ""
         // An app update reopens every trial at the rung.
-        beliefs.removeAll { $0.rung == rung && $0.question != Belief.offsets && $0.appVersion != app }
+        beliefs.removeAll { $0.rung == rung && $0.question != .offsets && $0.appVersion != app }
         let verdict = Belief(
-            rung: rung, question: capability.rawValue, answer: Belief.broken, judgedUnder: offsets,
+            rung: rung, question: Question(capability), answer: Belief.broken, judgedUnder: offsets,
             versions: versions, provenance: provenance
         )
         guard let index = beliefs.firstIndex(where: { $0.rung == rung && $0.question == verdict.question }) else {
@@ -233,10 +264,10 @@ public extension BeliefStore {
         tally: Tally
     ) -> Bool {
         let belief = Belief(
-            rung: rung, question: Belief.offsets, answer: answer.rawValue,
+            rung: rung, question: .offsets, answer: answer.rawValue,
             versions: versions, provenance: provenance, tally: tally, anchor: anchor ? true : nil
         )
-        guard let index = beliefs.firstIndex(where: { $0.rung == rung && $0.question == Belief.offsets }) else {
+        guard let index = beliefs.firstIndex(where: { $0.rung == rung && $0.question == .offsets }) else {
             beliefs.append(belief)
             return true
         }
@@ -249,16 +280,16 @@ public extension BeliefStore {
     /// The old learner read plain `AXValue` offsets, so its demotions were judged under `value`.
     init(demotions: [(rung: String, version: String, capability: String)]) {
         self.init(beliefs: demotions.compactMap { demotion in
-            guard Capability(rawValue: demotion.capability) != nil else { return nil }
+            guard let capability = Capability(rawValue: demotion.capability) else { return nil }
             return Belief(
-                rung: demotion.rung, question: demotion.capability, answer: Belief.broken, judgedUnder: .value,
+                rung: demotion.rung, question: Question(capability), answer: Belief.broken, judgedUnder: .value,
                 versions: Versions(app: demotion.version), provenance: Provenance(tag: "migrated")
             )
         })
     }
 
     @discardableResult
-    mutating func forget(_ question: String, at rung: String) -> Bool {
+    mutating func forget(_ question: Question, at rung: String) -> Bool {
         let before = beliefs.count
         beliefs.removeAll { $0.rung == rung && $0.question == question }
         return beliefs.count != before
@@ -275,7 +306,7 @@ extension ReadModel {
 
 extension Belief {
     var traceFields: String {
-        var fields = "q=\(question) a=\(answer)"
+        var fields = "q=\(question.rawValue) a=\(answer)"
         if let judgedUnder { fields += " judged=\(judgedUnder.rawValue)" }
         fields += " ver=\(appVersion.isEmpty ? "nil" : appVersion)"
         if let engineVersion { fields += " engine=\(engineVersion)" }

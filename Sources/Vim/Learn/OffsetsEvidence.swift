@@ -1,35 +1,3 @@
-public enum OffsetsEvidence: Equatable, Sendable {
-    case supports(OffsetsAnswer, Why)
-    /// No answer fits what the field read.
-    case misfit(Why)
-    case neutral(Why)
-
-    public enum Why: String, Equatable, Sendable {
-        case plainIsTextContent = "plain=textContent"
-        case plainIsValue = "plain=value"
-        case selectedText = "selected-text"
-        /// A settle's range held and its selected text did not.
-        case textCheck = "text-check"
-        case noBreaks = "no-breaks"
-        /// The plain read is neither: Chromium's element-boundary snap.
-        case boundarySnap = "boundary-snap"
-        case textAgrees = "text-agrees"
-        case unaligned = "unaligned"
-        case readsDisagree = "reads-disagree"
-    }
-
-    public var informative: Bool {
-        if case .neutral = self { return false }
-        return true
-    }
-
-    public var why: Why {
-        switch self {
-        case .supports(_, let why), .misfit(let why), .neutral(let why): return why
-        }
-    }
-}
-
 public struct FieldReads: Equatable, Sendable {
     public var text: String?
     /// `AXSelectedTextRange`.
@@ -62,28 +30,28 @@ public struct MarkerReads: Equatable, Sendable {
 }
 
 public extension FieldReads {
-    func evidence(current: OffsetsAnswer) -> OffsetsEvidence? {
+    func evidence(current: OffsetsAnswer) -> Evidence? {
         let offsets = offsetsEvidence()
         let text = selectedTextEvidence(current: current)
-        if case .misfit? = text { return text }
-        if case .supports(let answer, _)? = offsets {
-            if case .supports(let other, _)? = text, other != answer { return .misfit(.readsDisagree) }
+        if text?.outcome == .refutes { return text }
+        if case .supports(let answer)? = offsets?.outcome {
+            if case .supports(let other)? = text?.outcome, other != answer { return .offsets(.refutes, .readsDisagree) }
             return offsets
         }
-        if case .supports? = text { return text }
+        if case .supports? = text?.outcome { return text }
         return offsets ?? text
     }
 
-    func offsetsEvidence() -> OffsetsEvidence? {
+    func offsetsEvidence() -> Evidence? {
         guard let plain, let breaks = markers?.breaks, let value = markers?.value else { return nil }
         let field = breaks.fieldRange(value)
-        if field == value { return .neutral(.noBreaks) }
-        if plain == field { return .supports(.textContent, .plainIsTextContent) }
-        if plain == value { return .supports(.value, .plainIsValue) }
-        return .neutral(.boundarySnap)
+        if field == value { return .offsets(.neutral, .noBreaks) }
+        if plain == field { return .offsets(.supports(.textContent), .plainIsTextContent) }
+        if plain == value { return .offsets(.supports(.value), .plainIsValue) }
+        return .offsets(.neutral, .boundarySnap)
     }
 
-    func selectedTextEvidence(current: OffsetsAnswer) -> OffsetsEvidence? {
+    func selectedTextEvidence(current: OffsetsAnswer) -> Evidence? {
         guard let plain, !plain.isEmpty, let selectedText, let text else { return nil }
         let model = TextModel(text)
         let observed = Self.withoutAttachments(selectedText)
@@ -93,11 +61,11 @@ public extension FieldReads {
             textContentFits = Self.withoutAttachments(breaks.fieldText(model.substring(value), at: value)) == observed
         }
         switch (valueFits, textContentFits) {
-        case (true, true?), (true, nil): return .neutral(.textAgrees)
-        case (true, false?): return .supports(.value, .selectedText)
-        case (false, true?): return .supports(.textContent, .selectedText)
-        case (false, false?): return .misfit(.selectedText)
-        case (false, nil): return current == .value ? .misfit(.selectedText) : .neutral(.unaligned)
+        case (true, true?), (true, nil): return .offsets(.neutral, .textAgrees)
+        case (true, false?): return .offsets(.supports(.value), .selectedText)
+        case (false, true?): return .offsets(.supports(.textContent), .selectedText)
+        case (false, false?): return .offsets(.refutes, .selectedText)
+        case (false, nil): return current == .value ? .offsets(.refutes, .selectedText) : .offsets(.neutral, .unaligned)
         }
     }
 
@@ -134,23 +102,11 @@ public struct OffsetsSampling: Equatable, Sendable {
     }
 
     /// A silence counts only past a newline, where the markers had something to compare.
-    public mutating func sampled(markers: Bool, evidence: OffsetsEvidence?, text: String?, plain: Range<Int>?) {
+    public mutating func sampled(markers: Bool, evidence: Evidence?, text: String?, plain: Range<Int>?) {
         if !markers || evidence?.informative == true {
             remaining = 0
         } else if let text, let plain, text.utf16.prefix(plain.lowerBound).contains(10) {
             remaining = max(0, remaining - 1)
-        }
-    }
-}
-
-// MARK: - Recorder
-
-extension OffsetsEvidence {
-    var traceFields: String {
-        switch self {
-        case .supports(let answer, let why): return "supports=\(answer.rawValue) why=\(why.rawValue)"
-        case .misfit(let why): return "misfit why=\(why.rawValue)"
-        case .neutral(let why): return "neutral why=\(why.rawValue)"
         }
     }
 }

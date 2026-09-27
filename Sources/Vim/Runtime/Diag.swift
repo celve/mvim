@@ -130,31 +130,31 @@ enum Diag {
 
     // MARK: - The learner
 
-    static func learned(
-        _ epoch: UInt64, _ seq: UInt64, _ lesson: Learning.Lesson, rung: String, versions: Versions, failed: Capability?
-    ) {
-        for line in lesson.traceLines(rung: rung, versions: versions, failed: failed) {
+    static func learned(_ epoch: UInt64, _ seq: UInt64, _ lesson: Learning.Lesson, rung: String, versions: Versions) {
+        for line in lesson.traceLines(rung: rung, versions: versions) {
             learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) \(line, privacy: .public)")
         }
     }
 
-    static func neutral(_ epoch: UInt64, _ seq: UInt64, _ verdict: Expectation.Verdict) {
-        learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) \(verdict.traceFields, privacy: .public)")
-    }
-
-    static func observed(_ epoch: UInt64, _ seq: UInt64, _ evidence: OffsetsEvidence, under answer: OffsetsAnswer) {
-        learn.debug("""
-            e\(epoch, privacy: .public).c\(seq, privacy: .public) observe offsets=\(answer.rawValue, privacy: .public) \
-            \(evidence.traceFields, privacy: .public)
-            """)
+    /// One line per item; only a settle that did not pass reaches the default level.
+    static func evidence(_ epoch: UInt64, _ seq: UInt64, _ items: [Evidence]) {
+        for item in items {
+            if item.seen == .snapshot || item.outcome == .supports(nil) {
+                learn.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) evidence \(item.traceFields, privacy: .public)")
+            } else {
+                learn.log("e\(epoch, privacy: .public).c\(seq, privacy: .public) evidence \(item.traceFields, privacy: .public)")
+            }
+        }
     }
 
     /// Each reason is a way the probe-and-learn system can be silently inert.
-    static func notLearned(_ epoch: UInt64, _ seq: UInt64, reason: String, failed: Capability?) {
-        learn.log("""
-            e\(epoch, privacy: .public).c\(seq, privacy: .public) skip=\(reason, privacy: .public) \
-            fail=\(failed?.traceName ?? "nil", privacy: .public)
-            """)
+    static func notLearned(_ epoch: UInt64, _ seq: UInt64, reason: String, _ items: [Evidence]) {
+        for item in items {
+            learn.log("""
+                e\(epoch, privacy: .public).c\(seq, privacy: .public) skip=\(reason, privacy: .public) \
+                q=\(item.question.rawValue, privacy: .public) why=\(item.why.rawValue, privacy: .public)
+                """)
+        }
     }
 
     // MARK: - The gate
