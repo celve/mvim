@@ -44,13 +44,15 @@ public final class FocusTracker {
         /// under the answers already resolved against it.
         public let surface: Surface
 
-        /// The learner's TTL: an app update re-opens every write demotion
-        /// concluded against the old build.
-        public let appVersion: String?
+        /// An app update reopens every trial, an engine update the read model.
+        public let versions: Versions
 
         /// Provenance behind `capabilities`, for the menu's badge rows.
         /// nil for forced bindings — empty profile, nothing resolved.
         public let capabilityReport: CapabilityReport?
+
+        /// Nil for forced bindings, which learn nothing.
+        public let beliefs: ResolvedBeliefs?
 
         public let isChromium: Bool
     }
@@ -163,17 +165,7 @@ public final class FocusTracker {
         resolveAndPublish(revalidateGate: true)
     }
 
-    /// A capability answer changed — a menu override, or a demotion the learner
-    /// just committed: rebuild the bound element's profile and republish.
-    /// `resolveAndPublish`'s same-element short-circuit deliberately never
-    /// re-probes, so this is its own entry.
-    ///
-    /// The republish is **session-preserving**: it hands `publish` the same
-    /// element, so the edge is `.sameElement` and `carried(across:)` returns the
-    /// field untouched — mode, marks and drawn cursor all survive. That is what
-    /// lets the learner apply a demotion mid-edit without bouncing the user out
-    /// of Normal. Forced bindings carry no profile; a dead or de-gated element
-    /// falls back to the full resolve.
+    /// Re-probes and republishes the same element (`.sameElement`), so mode, marks and cursor survive.
     public func reresolveCapabilities() {
         guard enabled, let bound = binding, !bound.isForced else { return }
         let gate = FieldProber.gate(bound.element)
@@ -189,7 +181,7 @@ public final class FocusTracker {
             role: gate.role,
             identifier: gate.identifier
         )
-        let resolved = FieldProber.resolve(bound.element, surface: surface, appVersion: identity.version)
+        let resolved = FieldProber.resolve(bound.element, surface: surface, versions: identity.versions, chromium: gate.isChromium)
         publish(Binding(
             element: bound.element,
             pid: bound.pid,
@@ -204,8 +196,9 @@ public final class FocusTracker {
             // resolve.
             window: Self.documentWindow(of: bound.element, profile: resolved.profile),
             surface: surface,
-            appVersion: identity.version,
+            versions: identity.versions,
             capabilityReport: resolved.report,
+            beliefs: resolved.beliefs,
             isChromium: gate.isChromium
         ))
     }
@@ -239,7 +232,7 @@ public final class FocusTracker {
             role: gate.role,
             identifier: gate.identifier
         )
-        let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
+        let resolved = FieldProber.resolve(element, surface: surface, versions: identity.versions, chromium: gate.isChromium)
         let candidate = Binding(
             element: element,
             pid: current.pid,
@@ -249,8 +242,9 @@ public final class FocusTracker {
             windowID: current.windowID,
             window: Self.documentWindow(of: element, profile: resolved.profile),
             surface: surface,
-            appVersion: identity.version,
+            versions: identity.versions,
             capabilityReport: resolved.report,
+            beliefs: resolved.beliefs,
             isChromium: gate.isChromium
         )
         guard transition(from: current, to: candidate) == .sameDocument else { return nil }
@@ -311,7 +305,7 @@ public final class FocusTracker {
             && NSRunningApplication(processIdentifier: pid)?.activationPolicy == .accessory
         let identity = Self.appIdentity(for: pid)
         let (surface, walk) = Self.surface(for: element, gate: gate, bundleID: identity.bundleID)
-        let resolved = FieldProber.resolve(element, surface: surface, appVersion: identity.version)
+        let resolved = FieldProber.resolve(element, surface: surface, versions: identity.versions, chromium: gate.isChromium)
         publish(Binding(
             element: element,
             pid: pid,
@@ -321,8 +315,9 @@ public final class FocusTracker {
             windowID: 0,
             window: Self.documentWindow(of: element, profile: resolved.profile),
             surface: surface,
-            appVersion: identity.version,
+            versions: identity.versions,
             capabilityReport: resolved.report,
+            beliefs: resolved.beliefs,
             isChromium: gate.isChromium
         ))
         // After the publish, so it carries its own binding's epoch, not the outgoing one.
@@ -355,11 +350,15 @@ public final class FocusTracker {
 
     /// Resolved only at real publish sites — the same-element short-circuit
     /// returns first, so ⌃[ reverifies never touch the app's Info.plist.
-    private static func appIdentity(for pid: pid_t) -> (bundleID: String?, version: String?) {
-        guard let app = NSRunningApplication(processIdentifier: pid) else { return (nil, nil) }
+    private static func appIdentity(for pid: pid_t) -> (bundleID: String?, versions: Versions) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return (nil, Versions()) }
         let version = app.bundleURL.flatMap(Bundle.init(url:))?
             .infoDictionary?["CFBundleShortVersionString"] as? String
-        return (app.bundleIdentifier, version)
+        // Electron ships its engine as a framework; a Chromium browser's engine changes with the app.
+        let engine = app.bundleURL
+            .flatMap { Bundle(url: $0.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")) }?
+            .infoDictionary?["CFBundleVersion"] as? String
+        return (app.bundleIdentifier, Versions(app: version, engine: engine))
     }
 
     /// Has the app explicitly denied `fieldIsSession` — i.e. told us its
@@ -436,8 +435,9 @@ public final class FocusTracker {
             // App-only: a forced binding has no real element, so there is no
             // role and nothing to resolve an origin from.
             surface: Surface(bundleID: bundleID),
-            appVersion: nil,   // the learner ignores forced bindings
+            versions: Versions(),
             capabilityReport: nil,
+            beliefs: nil,
             isChromium: false
         ))
     }

@@ -31,23 +31,14 @@ public final class Executor {
         }
     }
 
-    /// What the most recent `execute()` did — the lazy write probe's raw
-    /// readings, plus what the recorder needs to explain them. Only the two
-    /// capability fields feed the learner. Attribution is positional: the most
-    /// recent attributable step before a settle (`.setSelection` →
-    /// writeSelection, `.replaceSelection` → insertText; anything else
-    /// clears it), and each settle consumes it. A planner shape that ever
-    /// interleaves other steps between write and settle fails toward NO
-    /// evidence — never a false strike. Zero-settle plans say nothing.
-    /// A settle that names a native key (`Expectation.blame`) attributes to it instead.
-    /// Callers must copy this immediately after their execute: hygiene
-    /// plans (cursor collapse, stranded-selection repair) reuse this
-    /// executor and reset it.
+    /// Copy it right after `execute()`: hygiene plans reuse this executor and reset it.
     public struct RunEvidence: Equatable, Sendable {
-        public internal(set) var failedCapability: Capability?
-        public internal(set) var settledCapabilities: Set<Capability> = []
+        public internal(set) var attribution = RunAttribution()
 
-        /// Recorder only — the learner reads the two fields above.
+        public var failedCapability: Capability? { attribution.failed }
+        public var settledCapabilities: Set<Capability> { attribution.settled }
+
+        /// Recorder only.
         public internal(set) var abortedAt: Int?
 
         /// Hard and soft: a soft one rings nothing and aborts nothing, so it was invisible.
@@ -121,7 +112,6 @@ public final class Executor {
         lastObserved = nil
         self.paragraphs = paragraphs
         kept = [:]
-        var attribution: Capability?
         for (index, next) in plan.steps.enumerated() {
             var step = next
             if case .settle(let expectation) = next { step = .settle(expectation.resolving(kept)) }
@@ -129,22 +119,15 @@ public final class Executor {
             if passed, case .settle(let expectation) = step, let slot = expectation.keeps, let caret = lastObserved?.lowerBound {
                 kept[slot] = caret
             }
+            let failure = passed ? nil : lastRun.settleFailures.last
+            lastRun.attribution.record(
+                step, passed: passed, selection: lastObserved, length: failure?.observedLength,
+                selectedText: failure?.observedSelectedText
+            )
             switch step {
-            case .setSelection:
-                attribution = .writeSelection
-            case .replaceSelection:
-                attribution = .insertText
-            case .settle(let expectation):
-                if passed, let attributed = expectation.blame?.capability ?? attribution {
-                    lastRun.settledCapabilities.insert(attributed)
-                } else if !passed {
-                    lastRun.failedCapability = expectation.blame == nil
-                        ? attribution : expectation.blamed(observed: lastObserved)
-                }
-                attribution = nil
-                lastWriteError = nil
+            case .setSelection, .replaceSelection:
+                break
             default:
-                attribution = nil
                 // The settle consumes the error; any other step ends its reach.
                 lastWriteError = nil
             }
@@ -325,8 +308,8 @@ public final class Executor {
             if let slot = lengthSlot {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
-            // Chromium adds a U+FFFC here for each text-less leaf; the plan, read from `AXValue`, has none.
-            let text = textSlot.flatMap { reads.string($0) }.map { paragraphs ? MarkerText.plain($0) : $0 }
+            // Chromium adds a U+FFFC here for each text-less leaf, which `Expectation.matches` looks past.
+            let text = textSlot.flatMap { reads.string($0) }
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)

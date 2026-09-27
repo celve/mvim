@@ -263,12 +263,9 @@ final class AppModel: ObservableObject {
         CapabilityConfig.setUserOverride(
             override, at: rung, on: surface, capability: capability.rawValue
         )
-        // Disposing of the learner's suggestion retires it. Promoting it (Off)
-        // makes the same denial a permanent decision, and overruling it (On)
-        // rejects it outright — either way the inference has served its purpose
-        // and should not linger to be re-applied if the user returns to Auto.
+        // An override retires the belief behind the row, so returning to Auto does not revive it.
         if override != nil, let rung = surface.roleRung {
-            LearnedPriors.forget(rung: rung, capability: capability.rawValue)
+            controller.forgetBelief(capability, at: rung)
         }
         controller.refreshCapabilities()
         refreshCapabilityRows()

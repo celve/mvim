@@ -51,6 +51,20 @@ public struct Sim {
         return reads == nil ? selected : selected.filter { $0 != "\n" }
     }
 
+    /// The field answers text-marker reads: the real selection, every `\n` a generated break.
+    public var markers = false
+
+    /// Selection writes land in `reads`' coordinates, as Chromium's do.
+    public var writesInReadOffsets = false
+
+    public var hasChildren = true
+
+    /// Used only when no learner runs.
+    public var readModel: OffsetsAnswer = .value
+
+    /// Learns from each command and re-resolves `profile` from its beliefs.
+    public private(set) var learner: Learner?
+
     /// Where the last command's run ended early, if it did.
     public private(set) var abortedStep: PhysicalStep?
 
@@ -78,6 +92,7 @@ public struct Sim {
 
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
+    private var attribution = RunAttribution()
 
     /// The focus is the selection's lower bound.
     private var backward = false
@@ -99,6 +114,17 @@ public struct Sim {
     }
 
     public var caret: Int { selection.lowerBound }
+
+    public mutating func learn(with learner: Learner) {
+        self.learner = learner
+        resolveBeliefs()
+    }
+
+    public mutating func update(to versions: Versions) {
+        learner?.versions = versions
+        learner?.sampling = OffsetsSampling()
+        resolveBeliefs()
+    }
 
     /// Feed each character of `keys` as one token.
     public mutating func type(_ keys: String) {
@@ -165,18 +191,22 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
+        let reading = read()
         // Same cursor match-stamp as the runtime's Snapshotter.
         var cursor: Range<Int>?
-        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == readSelection {
+        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == reading.selection {
             cursor = drawn
         }
         let snapshot = FieldSnapshot(
             capabilities: profile,
             text: text,
-            selection: readSelection,
+            selection: reading.selection,
             anchor: anchor,
             cursor: cursor,
-            webContent: webContent || reads != nil
+            webContent: webContent || reads != nil,
+            breaks: reading.breaks,
+            caretInEmptyParagraph: reading.emptyParagraph,
+            textlessLeaves: reading.textlessLeaves
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
@@ -185,6 +215,8 @@ private extension Sim {
         captures = [:]
         let abortedAt = execute(physical)
         abortedStep = abortedAt.map { physical.steps[$0] }
+        // After the hygiene below, as the Controller's is.
+        defer { learn(from: reading) }
         guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
             if planned.abortedAtTextCheck(abortedAt) {
@@ -298,12 +330,14 @@ private extension Sim {
     /// The index of the step that ended the run, nil when every step ran.
     mutating func execute(_ plan: PhysicalPlan) -> Int? {
         var kept: [Int: Int] = [:]
+        attribution = RunAttribution()
         for (index, step) in plan.steps.enumerated() {
+            if case .settle = step {} else { attribution.record(step) }
             switch step {
             case .setSelection(let range):
                 guard !swallowsSelect else { break }
                 let model = TextModel(text)
-                selection = model.clamp(range.lowerBound)..<model.clamp(range.upperBound)
+                selection = model.clamp(landing(range.lowerBound))..<model.clamp(landing(range.upperBound))
                 backward = false
 
             case .replaceSelection(let replacement):
@@ -337,7 +371,10 @@ private extension Sim {
                 let expectation = planned.resolving(kept)
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
-                if !expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText) {
+                let passed = expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText)
+                attribution.record(.settle(expectation), passed: passed, selection: observed, length: text.utf16.count,
+                                   selectedText: readSelectedText)
+                if !passed {
                     settleFailures += 1
                     if let key = expectation.blamed(observed: observed) { blamed.append(key) }
                     drainResidency(of: plan, after: index)
@@ -360,6 +397,12 @@ private extension Sim {
             }
         }
         return nil
+    }
+
+    /// In `reads`' coordinates a boundary offset lands at the next paragraph's start.
+    func landing(_ offset: Int) -> Int {
+        guard writesInReadOffsets, let reads else { return offset }
+        return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
     }
 
     /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
@@ -395,5 +438,111 @@ private extension Sim {
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
         backward = false
+    }
+}
+
+// MARK: - The learner
+
+public extension Sim {
+    /// The Controller's learner for one field.
+    struct Learner: Equatable, Sendable {
+        public var store: BeliefStore
+        public var rung: String
+        public var versions: Versions
+        public var chromium: Bool
+        public var probed: CapabilityProfile
+        public var config: [Capability: ConfigChoice] = [:]
+        public var sampling = OffsetsSampling()
+        public var tally = Tally()
+        public internal(set) var resolved: ResolvedBeliefs?
+        public internal(set) var evidence: [OffsetsEvidence] = []
+        public internal(set) var lessons: [Learning.Lesson] = []
+
+        public init(
+            store: BeliefStore = BeliefStore(), rung: String = "sim|role:AXTextArea", versions: Versions = Versions(app: "1"),
+            chromium: Bool = false, probed: CapabilityProfile
+        ) {
+            self.store = store
+            self.rung = rung
+            self.versions = versions
+            self.chromium = chromium
+            self.probed = probed
+            // A policy the profile leaves out is seeded off, as `nativeMotions` is everywhere.
+            for policy in Capability.allCases where policy.species == .policy && !probed.has(policy) {
+                config[policy] = ConfigChoice(seededOff: true)
+            }
+        }
+
+        public var model: ReadModel { resolved?.readModel ?? ReadModel(answer: chromium ? .textContent : .value) }
+    }
+
+    struct Reading {
+        let selection: Range<Int>?
+        let breaks: ParagraphBreaks?
+        let emptyParagraph: Bool
+        let textlessLeaves: Bool
+        let observed: Learning.Observation
+    }
+}
+
+extension Sim {
+    /// The learner observes these reads before the snapshot interprets them.
+    mutating func read() -> Reading {
+        let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
+            ?? (readModel, .start)
+        let plain = unreadableSelection ? nil : readSelection
+        let sampled = current == .value && source.observes && learner?.sampling.samples(text: text, plain: plain) == true
+        let reads = FieldReads(
+            text: text,
+            plain: plain,
+            selectedText: readSelectedText,
+            markers: markers && (current != .value || sampled) ? markerReads : nil
+        )
+        var observed = Learning.Observation(before: current, source: source)
+        if var learner {
+            observed = Learning.observe(reads, before: current, source: source, newEngine: learner.model.newEngine)
+            if sampled { learner.sampling.sampled(markers: markers, evidence: observed.evidence, text: text, plain: plain) }
+            if let evidence = observed.evidence {
+                learner.tally.count(evidence)
+                learner.evidence.append(evidence)
+            }
+            self.learner = learner
+        }
+        let interpreted = reads.interpreted(under: observed.after)
+        return Reading(
+            // A snapshot takes the plain read even where a settle would find none.
+            selection: observed.after == .value ? readSelection : interpreted.selection,
+            breaks: interpreted.breaks, emptyParagraph: interpreted.emptyParagraph, textlessLeaves: interpreted.textlessLeaves,
+            observed: observed
+        )
+    }
+
+    var markerReads: MarkerReads {
+        MarkerReads(breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection)
+    }
+
+    mutating func learn(from reading: Reading) {
+        guard var learner else { return }
+        if attribution.textMismatch, reading.observed.source.observes { learner.tally.count(.misfit(.textCheck)) }
+        let config = learner.config
+        let lesson = Learning.learn(
+            store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
+            observed: reading.observed, run: attribution,
+            overridden: { config[$0]?.override != nil }, provenance: Provenance(), tally: learner.tally
+        )
+        learner.lessons.append(lesson)
+        self.learner = learner
+        if lesson.republish { resolveBeliefs() }
+    }
+
+    mutating func resolveBeliefs() {
+        guard var learner else { return }
+        let resolved = learner.store.resolve(
+            rungs: [learner.rung], rung: learner.rung, versions: learner.versions, chromium: learner.chromium,
+            children: hasChildren, userPinsOffsets: learner.config[.readCaret]?.override != nil
+        )
+        learner.resolved = resolved
+        profile = CapabilityResolver.resolve(probed: learner.probed, config: learner.config, beliefs: resolved).profile
+        self.learner = learner
     }
 }
