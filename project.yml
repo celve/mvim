@@ -30,7 +30,7 @@ settings:
 
 targets:
   # Shared foundation (mvim's copy, split from loom): the input tap + key model,
-  # text I/O (AX/Clipboard/Synth), support utilities, and the neutral Prefs store.
+  # text I/O (AX/Synth), capability config, and the neutral Prefs store.
   # Deliberately carries NO Keychain — this app keeps no secrets.
   LoomCore:
     type: framework
@@ -57,7 +57,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomVim
         GENERATE_INFOPLIST_FILE: YES
 
-  # The menu-bar app: composition root + settings UI. Embeds the two frameworks and Sparkle.
+  # The menu-bar app: composition root + the menu, its whole UI. Embeds the two frameworks and Sparkle.
   mvim:
     type: application
     platform: macOS
@@ -87,8 +87,8 @@ targets:
     settings:
       base:
         PRODUCT_NAME: mvim
-        # Renamed from com.loom.Norm: the identifier keys the defaults domain, the TCC
-        # grants and the login item, and nothing migrates them (README, Upgrading from Norm).
+        # The identifier keys the defaults domain, the TCC grants and the login item: changing
+        # it strands all three, and nothing migrates them.
         PRODUCT_BUNDLE_IDENTIFIER: com.loom.mvim
         GENERATE_INFOPLIST_FILE: YES
         # Merged into the generated plist: Sparkle's feed and key, from the settings below.
