@@ -119,7 +119,7 @@ public final class Controller {
     /// steady paths (insert typing, unbound apps, ⌘-chords); one bounded
     /// resolve on Esc and one verify before running a completed command.
     public func handle(_ event: KeyEvent) -> Bool {
-        // The user's own paste, which the app reads the pasteboard for, ends a register paste's loan even while disabled.
+        // The user's own paste reads the pasteboard, so it ends a register paste's loan first, even while disabled.
         if event.kind == .keyDown, event.mods.contains(.command), event.characters.lowercased() == "v" || event.keyCode == 9 {
             PasteboardLoan.shared.restore()
         }

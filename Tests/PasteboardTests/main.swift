@@ -1,6 +1,6 @@
 import AppKit
 
-// On a private named pasteboard, never the user's; a child process of this binary plays the lazy owner and the slow target.
+// A private named pasteboard, never the user's; a child of this binary plays the lazy owner and the slow target.
 
 typealias Flavours = [[(NSPasteboard.PasteboardType, Data)]]
 
@@ -143,7 +143,6 @@ func run() {
     precondition(pasteboard.string(forType: .string) == "provided lazily" && provided.count == 1
                  && provided[0].contains { $0.0 == privateType && $0.1 == Data([7, 7, 7]) }, describe(provided))
 
-    // A newer writer wins, and the next put saves what it wrote.
     pasteboard.clearContents()
     pasteboard.setString("mine", forType: .string)
     loan.put("REG")

@@ -1,7 +1,6 @@
 import AppKit
 
-/// What a register paste borrowed from the pasteboard; nothing says when the target has read it, since AppKit calls a
-/// lazy provider only on the main thread, which the executor holds until the plan ends.
+/// A register paste's pasteboard loan; AppKit runs lazy providers only on the busy main thread, so none can time it.
 @MainActor
 final class PasteboardLoan {
     static let shared = PasteboardLoan(.general)
@@ -38,7 +37,6 @@ final class PasteboardLoan {
         restore(after: Self.unconfirmedHold)
     }
 
-    /// A settle saw the paste land, so the target has read it.
     func landed() {
         restore(after: 0)
     }

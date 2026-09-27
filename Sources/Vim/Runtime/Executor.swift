@@ -89,8 +89,7 @@ public final class Executor {
         return false
     }
 
-    /// Only a caret landing, read straight after the paste, says the target has read it: an equal-length replacement
-    /// (`g~j` in Chromium rich text, where the settle checks length alone) matches its length before it lands.
+    /// Only a caret landing straight after the paste proves the target read it: a length can match before it lands.
     private func confirmPaste(_ outcome: SettleOutcome, _ expectation: Expectation, at index: Int) {
         guard pastedAt == index - 1, outcome.converged, expectation.landing != nil else { return }
         PasteboardLoan.shared.landed()
@@ -187,10 +186,7 @@ public final class Executor {
 
         case .clipboardInsert(let content):
             if let content {
-                // Set → ⌘V → return. No pre-⌘V sleep: setString is
-                // synchronous, and the app reads the pasteboard only when IT
-                // processes the ⌘V, which the event queue orders after the
-                // write. Giving it back is the loan's, not a wait.
+                // No sleep before ⌘V: the app reads the pasteboard only as it handles the ⌘V, queued after the write.
                 PasteboardLoan.shared.put(content)
                 pastedAt = index
                 Synth.commandV()

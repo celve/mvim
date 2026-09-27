@@ -23,9 +23,7 @@ public enum PhysicalStep: Equatable, Sendable {
     /// Post ⌘C — copy without mutating. Fire-and-forget, as above.
     case clipboardCopy
 
-    /// Set pasteboard → ⌘V → return (the executor's `PasteboardLoan` gives the user's contents back).
-    /// `nil` pastes whatever the user has on the pasteboard as-is (registers `+`/`*`
-    /// and pasteboard markers), with no set.
+    /// Paste text on a `PasteboardLoan`; `nil` pastes the user's pasteboard as-is (`+`, `*`, markers).
     case clipboardInsert(String?)
 
     /// AX: read the selected text into the slot without touching anything.
