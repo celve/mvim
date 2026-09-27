@@ -3288,7 +3288,12 @@ for capability in Capability.allCases {
     precondition(question.rawValue == capability.rawValue && Question(rawValue: capability.rawValue) == question)
     precondition(question == (Capability.nativeKeys.contains(capability) ? .key(capability) : .write(capability)))
 }
-precondition(Question(rawValue: "offsets") == .offsets && Question.offsets.rawValue == "offsets" && Question(rawValue: "offset") == nil)
+precondition(Question(rawValue: "offsets") == .offsets && Question.offsets.rawValue == "offsets")
+precondition(Question(rawValue: "offset") == .unknown("offset") && Question.unknown("offset").rawValue == "offset")
+var laterBuild = BeliefStore(beliefs: [Belief(rung: learnRung, question: Question(rawValue: "offset"), answer: Belief.broken,
+                                              versions: learnVersions)])
+precondition(committing(&laterBuild, .writeSelection) && laterBuild.beliefs.count == 2 && broken(laterBuild) == [.writeSelection],
+             "a question this build does not know is kept and ignored")
 
 // The resolver's table before beliefs, which it must still match.
 func previousTable(probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>)

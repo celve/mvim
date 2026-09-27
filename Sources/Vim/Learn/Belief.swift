@@ -12,28 +12,36 @@ public enum Question: RawRepresentable, Codable, Hashable, Sendable {
     case write(Capability)
     case key(Capability)
     case offsets
+    /// A name another build wrote, kept and ignored so the store reads back as written.
+    case unknown(String)
 
     /// Stores only ever held writes and keys, so any capability but a native key reads as a write.
     public init(_ capability: Capability) {
         self = Capability.nativeKeys.contains(capability) ? .key(capability) : .write(capability)
     }
 
-    public init?(rawValue: String) {
+    public init(rawValue: String) {
         if rawValue == "offsets" {
             self = .offsets
         } else if let capability = Capability(rawValue: rawValue) {
             self.init(capability)
         } else {
-            return nil
+            self = .unknown(rawValue)
         }
     }
 
-    public var rawValue: String { capability?.rawValue ?? "offsets" }
+    public var rawValue: String {
+        switch self {
+        case .write(let capability), .key(let capability): return capability.rawValue
+        case .offsets: return "offsets"
+        case .unknown(let name): return name
+        }
+    }
 
     public var capability: Capability? {
         switch self {
         case .write(let capability), .key(let capability): return capability
-        case .offsets: return nil
+        case .offsets, .unknown: return nil
         }
     }
 }
