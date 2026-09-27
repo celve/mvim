@@ -1,69 +1,169 @@
 # mvim
 
-System-wide **Vim mode** for macOS — a native SwiftUI **menu bar** app. mvim layers modal
-editing (Normal / Insert / Visual, operators, motions, registers, `/` search) over every
-text field on the system.
+Vim's modal editing in the text fields of your Mac. mvim lives in the menu bar: it reads and edits the
+focused field through Accessibility, and takes the keys it needs with a keyboard event tap.
 
-mvim is one half of the former **Loom** app — the other half is **Vibe**, the
-voice-dictation app. It was split out of `celve/loom` @ `1a2fcfe`. The Xcode project is
-generated from [`project.yml`](project.yml) via
-[XcodeGen](https://github.com/yonaskolb/XcodeGen) and built with `xcodebuild`.
+A field starts in Insert mode, unless you reach it from another block of the same document.
+**⌃[, not Esc, enters Normal mode.**
 
-## Requirements
+There is no release yet, so [build it from source](#install). mvim needs macOS 14 or later, and it is
+free software under the [GNU GPL](#license).
 
-- macOS 14.0 or later
-- Xcode 16 or later
-- XcodeGen — `brew install xcodegen`
+## Install
 
-## Build
+You need Xcode 16 or later (the full app, not only its command-line tools),
+[XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`), and an **Apple
+Development** signing certificate, which Xcode → Settings → Accounts → Manage Certificates… creates.
+
+1. Clone this repository and set `DEVELOPMENT_TEAM` in [`project.yml`](project.yml) to your team ID,
+   the `OU=` value this prints. macOS keeps mvim's permissions only while its signature stays the
+   same, and an ad-hoc signature changes with every build ([Signing](#signing)).
+
+   ```sh
+   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   ```
+
+2. Build it and copy it to where it will live, since [Start at Login](#start-at-login) remembers the
+   path:
+
+   ```sh
+   make release
+   rm -rf /Applications/mvim.app && ditto .release/mvim.app /Applications/mvim.app
+   open /Applications/mvim.app
+   ```
+
+3. Allow **Input Monitoring** when macOS asks. mvim does not ask for **Accessibility**: choose **Open
+   Accessibility Settings** in its menu and switch mvim on there.
+4. Quit mvim and open it again, since it creates its keyboard tap only at launch. The menu should now
+   read `Input tap: running`, `Accessibility: granted` and `Input Monitoring: granted`.
+
+To update, quit mvim, run `git pull --autostash && make release` and copy the app again; the
+permissions carry over while the same Apple Development identity signs it. To uninstall, switch
+**Start at Login** off, quit and delete the app, remove it from Accessibility and Input Monitoring in
+System Settings → Privacy & Security, and run `defaults delete com.loom.mvim`.
+
+## Using it
+
+**⌃[** enters Normal mode, leaves Visual mode and cancels a half-typed command. It is Control and the
+key to the right of P, whatever the keyboard layout. **Esc is never mvim's**, so apps keep it for
+their own cancels and dialogs. The menu-bar icon shows the mode: a keyboard while mvim is not in a
+field, otherwise **i**, **n** or **v** in a square. Where mvim can set the selection, Normal mode also
+draws a block cursor. Nothing shows a half-typed command, or a `/` search as you type it. Moving
+between the blocks of one document, as in Notion, keeps the mode you were in.
+
+In Insert mode mvim takes only ⌃[. In Normal and Visual mode apps still keep every ⌘ and ⌥
+combination, Esc, Home, End, Page Up and Page Down, the function keys, and every ⌃ combination but
+⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while [the app's own page keys](#native-word-paragraph-and-page-keys)
+are on. So ⌃A, ⌃E and ⌃K work as in any Mac text field, and a key mvim does not know beeps instead
+of typing.
+
+The menu is mvim's whole interface. **Vim Mode** turns mvim off everywhere until you turn it back on
+or mvim starts again. **Vim in _App_** chooses, per app:
+
+- **Auto**: mvim works in text fields, text areas and combo boxes, but never in password fields.
+- **Off**: mvim leaves the app alone. Terminals and code editors start Off: Terminal, iTerm2, kitty,
+  Alacritty, WezTerm, Ghostty, Warp, Visual Studio Code, Cursor, Xcode, Zed, VimR, Neovide and the
+  JetBrains IDEs.
+- **Force**: for apps that expose no text field to Accessibility. mvim drives the front window
+  without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
+
+**Capabilities in _App_** shows what mvim can do in the current field and lets you override it (see
+[Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
+both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
+mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
+
+## What works
+
+A subset of Vim. In a field mvim can read and write, as in most native Mac apps:
+
+| | |
+|---|---|
+| **Move** | `h` `j` `k` `l` and the arrow keys, `w` `W` `e` `E` `b` `B`, `0` `^` `$` `g_`, `gg` `G`, `+` `-` ⏎, `f` `F` `t` `T` `;` `,` |
+| **Search** | `/` or `?`, the text, ⏎; then `n` `N`. Literal text, case-sensitive, wrapping around the end |
+| **Marks** | `m` and a letter; then `'` or `` ` `` and the letter to jump back, in the same field, until its text is edited |
+| **Operators** | `d` `c` `y` `g~` `gu` `gU` with a motion, `iw` `aw` `iW` `aW`, or doubled (`dd` `cc` `yy` `g~~` `guu` `gUU`), but not yet with `gg`, `g_` or a search as the motion |
+| **Edit** | `x` `X` `s` `S` `r` `C` `D` `Y` `J` `gJ` `~` `p` `P` `.`, and `u` and ⌃R, which press the app's own ⌘Z and ⇧⌘Z |
+| **Insert** | `i` `a` `I` `A` `o` `O` `gi` |
+| **Visual** | `v`, motions or `iw` `aw`, then `d` `c` `y` `~` `u` `U` `>` `<`. A selection can end one character short of Vim's, and `V` and ⌃V select characters, not lines or blocks |
+| **Counts** | Most commands take one. `gg` `G` `C` `D`, the Insert commands, `u` and ⌃R ignore it |
+| **Registers** | `"a`–`"z` (`"A`–`"Z` append), `"0`–`"9`, `"-`, `"_`, `".`, `"/`, kept until mvim quits. `"+p` and `"*p` paste the Mac clipboard, but a yank does not copy to it |
+
+These beep instead: `:` and `q`, after which the keys you type run as Normal-mode commands; `@`; `z`
+commands; the operators `=` `!` `gq` `gw`; text objects other than words (`ip` `i(` `i"` `it` …); the
+motions `ge` `%` `(` `)` `H` `M` `L` `*` `#` `[[` `]]`; and `g-` `g+` `&` `gR` `Q`. So do `{` `}` `gj`
+`gk`, unless [the app's own keys](#native-word-paragraph-and-page-keys) are on.
+
+## Browsers and Electron apps
+
+Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field but not set
+its selection. There mvim runs the same Normal-mode commands by pressing keys (arrows, ⌃A and ⌃E, ⌘↑
+and ⌘↓), and checks the field after each step: when the field does not answer as planned, it beeps and
+stops rather than edit the wrong text. There is no block cursor there, and `o` and `O` paste their
+new line, because ⏎ could send a message. In a field mvim cannot read at all, and under **Force**,
+moves are approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
+search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
+is a separate field.
+
+mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
+check (it lands wrong, or not within a quarter of a second), mvim switches that capability off for
+fields like the one it failed in, and **Capabilities** marks it `✗ learned` until the app updates.
+Some failures only stop the command: a key landing elsewhere in Chromium's rich text, a word key
+doing nothing in web content, anything under **Force**, and any capability you set yourself.
+**On …** and **Off …** override what mvim detected or learned, for one field, fields like it, a site
+or the whole app, and `defaults delete com.loom.mvim learnedCapabilityPriors` forgets everything
+learned. **App's word, paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj`
+`gk` ⌃F ⌃B to the app's own keys: see
+[Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
+
+## Privacy
+
+mvim needs **Accessibility**, to read and edit the focused field and to post keys, and **Input
+Monitoring**, for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed
+into a field it is working in. mvim has no microphone, keychain or networking code, and
+[Sparkle](#updates) is built in but inactive until the first release. Its settings and its log name
+the apps and websites you use. The log also records the Normal-mode commands you type, but never the
+text you insert or a command's operand, count or register (a unit test holds it to that), unless you
+turn on [text recording](#diagnostics); if mvim ever mistook the mode, some of your words could reach
+it as commands. mvim pastes through the clipboard into fields it cannot write, and restores the
+clipboard afterwards; in fields it cannot read, cut and copy use the clipboard itself.
+
+## Reporting a bug
+
+Open an [issue](https://github.com/celve/mvim/issues) with your macOS version, the output of
+`git rev-parse --short HEAD`, the app (and the site, in a browser), the keys you typed, what happened
+and what you expected, and a screenshot of the **Capabilities** menu. A command that fails is always
+logged, so attach the last hour of mvim's log, after reading it, since it names apps and sites:
 
 ```sh
-make build
+log show --predicate 'subsystem == "com.loom.mvim"' --last 1h --info --debug > mvim.log
 ```
 
-This generates `mvim.xcodeproj` from `project.yml` and builds the app. The binary lands at:
+Never post a `log collect` archive: it holds your whole system log. To log the commands that succeed
+as well, see [Diagnostics](#diagnostics).
 
-```
-build/Build/Products/Debug/mvim.app
-```
+## Development
 
-### Run
+The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen and built with
+`xcodebuild`. `mvim.xcodeproj` is git-ignored: edit `project.yml`, then regenerate.
 
-```sh
-make run
-```
+| Command          | Description                                                          |
+| ---------------- | -------------------------------------------------------------------- |
+| `make gen`       | Generate `mvim.xcodeproj` from `project.yml`                         |
+| `make build`     | Generate, then build Debug to `build/Build/Products/Debug/mvim.app`  |
+| `make run`       | Build, then launch the Debug `mvim.app`                              |
+| `make test`      | Run the pure engine's tests: no Xcode project, no permissions        |
+| `make release`   | Build Release, copy it to `.release/mvim.app`                        |
+| `make dist`      | `release`, then stage its update in `dist/`                          |
+| `make publish`   | `release`, then stage its update and release it on GitHub            |
+| `make clean`     | Remove `build/`, `dist/` and the `.xcodeproj`                        |
+| `make distclean` | `clean`, plus remove `.release/`                                     |
 
-### Release
+`make release` launches and installs nothing. `make clean` leaves `.release/` alone (see
+[Start at login](#start-at-login)); `make distclean` removes it too. The Release build number is the
+commit count, which is how [updates](#updates) are ordered. `make dist` and `make publish` need the
+GitHub CLI, `gh`.
 
-```sh
-make release
-```
-
-The Release build is copied to a short, stable path:
-
-```
-.release/mvim.app
-```
-
-Nothing is launched or installed — open it yourself. `make clean` leaves `.release/`
-alone (see [Start at login](#start-at-login)); `make distclean` removes it too. Its build
-number is the commit count, which is how [updates](#updates) are ordered.
-
-### Other targets
-
-| Command          | Description                                    |
-| ---------------- | ---------------------------------------------- |
-| `make gen`       | Generate `mvim.xcodeproj` from `project.yml`   |
-| `make build`     | Generate + build a Debug binary                |
-| `make run`       | Build, then launch the Debug `mvim.app`        |
-| `make test`      | Run the pure Vim engine tests                  |
-| `make release`   | Build Release, copy it to `.release/mvim.app`  |
-| `make dist`      | `release`, then stage its update in `dist/`    |
-| `make publish`   | `dist`, then release it on GitHub              |
-| `make clean`     | Remove `build/`, `dist/` and the `.xcodeproj`  |
-| `make distclean` | `clean`, plus remove `.release/`               |
-
-### Manual invocation
+By hand:
 
 ```sh
 xcodegen generate
@@ -71,21 +171,24 @@ xcodebuild -project mvim.xcodeproj -scheme mvim -configuration Debug \
   -derivedDataPath build build
 ```
 
-## Project layout
+### Project layout
 
 ```
 mvim/
 ├── project.yml                 # XcodeGen spec — 2 framework targets + the app
-├── Makefile                    # gen / build / run / release / dist / publish / clean / …
+├── Makefile                    # gen / build / run / test / release / dist / publish / clean / …
 ├── Info.plist                  # Sparkle's feed and key, merged into the generated plist
 ├── mvim.entitlements           # intentionally empty — mvim runs non-sandboxed
+├── LICENSE                     # GPL-3.0
 ├── scripts/
 │   └── sparkle-release.sh      # stages and publishes an update (make dist / publish)
 ├── Sources/
-│   ├── Core/                   # LoomCore framework — shared, feature-agnostic:
-│   │                           #   InputHub (one shared CGEventTap), KeyEvent/Mods/Trigger,
-│   │                           #   AX/Clipboard/Synth, Prefs store, LoginItem (start at
-│   │                           #   login). NO Keychain in mvim's copy.
+│   ├── Core/                   # LoomCore framework — what the engine stands on: InputHub
+│   │                           #   (one shared CGEventTap), KeyEvent/Mods, field reads
+│   │                           #   (AX, MarkerText, WebAreaWalk), Synth (posted keys), Prefs,
+│   │                           #   capability config and learning (Surface, CapabilityConfig,
+│   │                           #   CapabilitySeeds, LearnedPriors, StrikeLedger), SecureInput,
+│   │                           #   LoginItem, Log. NO Keychain in mvim's copy.
 │   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
@@ -94,88 +197,59 @@ mvim/
 │   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
 │                               #   menu, the whole UI), its AppModel, and Updater (Sparkle)
+├── Tests/
+│   └── VimEngineTests/         # `make test`: the engine driven through Sim, as preconditions
 └── Resources/
-    └── Assets.xcassets         # App icon + accent color (placeholders)
+    └── Assets.xcassets         # App icon + accent color (both still empty)
 ```
 
 ### Modules
 
-`mvim (app) → LoomVim → LoomCore`, one-way and compiler-enforced. The framework names keep
-their Loom heritage — they are internal targets, invisible at runtime. Vim's pure engine
-(everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX dependency and is
-unit-tested standalone via `make test`. Only the app links [Sparkle](https://sparkle-project.org),
-pinned to an exact version in `project.yml`.
+`mvim (app) → LoomVim → LoomCore`, one-way and compiler-enforced; the app also imports LoomCore
+directly. The framework names keep their Loom heritage — they are internal targets, invisible at
+runtime — and so does the `com.loom` prefix, which names the bundle ID, the defaults domain and the
+log subsystem. Vim's pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX
+dependency and is unit-tested standalone via `make test`, with the pure Core files the Makefile
+lists. Only the app links [Sparkle](https://sparkle-project.org), pinned to an exact version in
+`project.yml`.
 
-The generated `mvim.xcodeproj` is intentionally git-ignored — it is a build artifact. Edit
-`project.yml` to change build settings, then regenerate.
+### Signing
 
-## Permissions, trust, first launch
+The project signs with a stable **Apple Development** identity (`CODE_SIGN_STYLE: Automatic`,
+team in `project.yml`) so the Accessibility / Input Monitoring grants persist across
+rebuilds — an ad-hoc signature would change every build and macOS would revoke the grants
+each time. To build under a different team, change `DEVELOPMENT_TEAM` in `project.yml`: every
+`make build` and `make release` regenerates the Xcode project from it, so a team picked in Xcode
+does not stick. Keep that change out of pull requests.
 
-mvim needs **Accessibility** (read/drive text fields via AX, post synthesized events) and
-**Input Monitoring** (its consuming `CGEventTap`). That is the whole list — by construction
-mvim contains **no microphone or keychain code**, its only network traffic is the
-[update check](#updates), and its Info.plist carries no microphone usage string. After granting a permission for the first time, relaunch the app —
-an already-created event tap cannot retro-enable itself.
+### Start at login
 
-### Upgrading from Norm
-
-This app was called **Norm**. The rename moved the bundle identifier from `com.loom.Norm` to
-`com.loom.mvim`, and macOS keys the privacy grants, the preferences domain and the login item
-on it, so nothing carries across by itself — there is no migration code:
-
-1. **In Norm's menu, switch Start at Login off, then quit Norm.** Two copies would each
-   install a consuming event tap and fight over every keystroke. Then delete the old `Norm.app` —
-   `.release/Norm.app` survives `make clean`. An item left behind can be removed under System
-   Settings → General → Login Items.
-2. **Before launching mvim, carry your settings across** — per-app Auto / Off / Force,
-   capability overrides, learned priors. They stay in the `com.loom.Norm` domain, which is left
-   in place; skip this to start fresh, re-entering policies and overrides from the menu while the
-   priors are learned again:
-
-   ```sh
-   defaults export com.loom.Norm - | defaults import com.loom.mvim -
-   ```
-
-   The import merges: a key both domains hold takes Norm's value, and every other key is kept.
-3. **Launch mvim, grant it Accessibility and Input Monitoring**, then relaunch it. Norm's rows in
-   System Settings → Privacy & Security (and the combined Loom app's, if still there) are
-   orphans — remove them manually.
-
-Diagnostics move with the identifier: logs from before the rename stay under subsystem
-`com.loom.Norm`, and the text-recording flag is now `mvimRecordText`. A `sudo log config` you
-set for `com.loom.Norm` stays in force on that subsystem: clear it with
-`sudo log config --reset --subsystem com.loom.Norm`, then re-apply it to `com.loom.mvim` (see
-[Diagnostics](#diagnostics)).
-
-## Start at login
-
-The menu's **Start at Login** toggle registers mvim with `SMAppService.mainApp`, the
-API that replaced `SMLoginItemSetEnabled`. The system owns the bit — nothing is
-mirrored into `Prefs`, and the menu re-reads the real status every time it opens.
+The menu's **Start at Login** toggle registers mvim with `SMAppService.mainApp`, the API that
+replaced `SMLoginItemSetEnabled`. The system owns the bit — nothing is mirrored into `Prefs`.
 Three consequences worth knowing:
 
-- **It needs a real signature.** `SMAppService` requires a properly code-signed
-  bundle and fails with `kSMErrorInvalidSignature` otherwise, so the toggle needs a
-  build made with the Apple Development identity — see [Signing](#signing).
-- **Registration records the bundle's path.** Register from
-  `build/Build/Products/Debug/mvim.app` and a `make clean` strands the login item;
-  move the app afterwards and it still points at the old location. `.release/mvim.app`
-  is the stable path `make clean` spares — but it still lives inside the repo, so
-  `make distclean` or deleting the clone strands the item just the same. Register
-  from wherever mvim will actually live.
-- **A denial in System Settings is one-way from mvim's side.** Switching the item off
-  under System Settings → General → Login Items leaves the status at
-  `requiresApproval` — registered but denied — and `register()` cannot clear it. The
-  menu shows the toggle unchecked and grows an **Approve mvim in Login Items
-  Settings** row.
+- **It needs a real signature.** `SMAppService` fails with `kSMErrorInvalidSignature` on a bundle
+  that is not properly code-signed, so the toggle needs a build made with an Apple Development
+  identity — see [Signing](#signing).
+- **Registration records the bundle's path.** Move the app afterwards and the item still points at
+  the old location; `make clean` strands one registered from `build/`, and `make distclean` or
+  deleting the clone one registered from `.release/`. Register from wherever mvim will actually
+  live, such as `/Applications`.
+- **A denial in System Settings is one-way from mvim's side.** Switching the item off under System
+  Settings → General → Login Items leaves the status at `requiresApproval` — registered but denied —
+  and `register()` cannot clear it. The menu shows the toggle unchecked and grows an **Approve mvim
+  in Login Items Settings** row.
 
-A login-launched mvim keeps its Accessibility and Input Monitoring grants: same
-bundle, same signature.
+A login-launched mvim keeps its Accessibility and Input Monitoring grants: same bundle, same
+signature.
 
-## Updates
+### Updates
 
-Release builds update themselves with [Sparkle](https://sparkle-project.org) from this
-repository's GitHub releases: the feed is the `appcast.xml` attached to the latest one.
+Every build embeds [Sparkle](https://sparkle-project.org), but a build has update items only when
+its Info.plist names both a feed and a public key. `project.yml` gives both to Release builds
+alone, and `SPARKLE_PUBLIC_KEY` stays empty until the first release, so no build updates yet. Once
+it is set, Release builds update themselves from this repository's GitHub releases: the feed is the
+`appcast.xml` attached to the latest one.
 
 - **Sparkle asks first.** On mvim's second launch it asks whether to check once a day, and
   whether to install what it finds without asking. **Check for Updates Automatically** in the
@@ -185,12 +259,10 @@ repository's GitHub releases: the feed is the `appcast.xml` attached to the late
   forward, so Sparkle would otherwise open its window behind your work.
 - **Grants survive an update** because TCC holds them against the app's designated requirement,
   and `make publish` refuses a build that fails the current release's — see below.
-- **Debug builds never update.** `project.yml` gives the feed and key to Release only, and a
-  build missing either has no update items — as does a Release build made before the key is set.
 - **What goes out:** a request to github.com for the feed, and the download when you install.
   Sparkle's anonymous system profiling stays off.
 
-### Publishing an update
+#### Publishing an update
 
 Once, on the Mac you will publish from:
 
@@ -211,20 +283,25 @@ For each release, from a clean checkout of `main` on a Mac holding the signing c
 3. `make publish` stages the same, then creates release `v<version>` holding the zip and the
    appcast. Installed copies find it at their next check.
 
-`make publish` refuses to release when:
+`make dist` and `make publish` both stop when `gh` is missing, `SUPublicEDKey` is empty, the feed
+is not a GitHub latest-release asset, the app is ad-hoc signed — every install would lose its
+grants on updating — GitHub can write no release notes for `HEAD` because it is not pushed, or the
+appcast item came out unsigned because the key is not the one `SUPublicEDKey` names.
 
-- the app is ad-hoc signed, or does not satisfy the designated requirement of the latest
-  release's app — TCC holds Accessibility and Input Monitoring against that requirement, so every
-  install would lose both. An Apple Development requirement names the certificate's holder, so
+`make publish` also refuses to release when:
+
+- the app does not satisfy the designated requirement of the latest release's app — TCC holds
+  Accessibility and Input Monitoring against that requirement, so every install would lose both. An Apple Development requirement names the certificate's holder, so
   publish from the same person's certificate; for a deliberate change, such as moving to
   Developer ID, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
-- the appcast item came out unsigned — the key is not the one `SUPublicEDKey` names — or
-  `SUPublicEDKey` is not the latest release's: installs verify with the key they shipped with, so
-  either way every install would reject the update. On a new Mac, import the original key with
+- `SUPublicEDKey` is not the latest release's: installs verify with the key they shipped with, so
+  every install would reject the update. On a new Mac, import the original key with
   `generate_keys -f <backup>`; never paste a freshly generated one into `project.yml`;
 - the tree has uncommitted changes, `HEAD` is not on `main`, `v<version>` exists, or the build
   number does not exceed the one the latest release offers, which installs would ignore;
 - GitHub cannot answer any of those questions: a failed read refuses rather than guesses.
+
+The first release skips the checks against the latest release.
 
 `SPARKLE_KEY_FILE=<file>` signs with a key file instead of the keychain.
 
@@ -233,7 +310,7 @@ GitHub in a browser opens only after **Open Anyway** in System Settings → Priv
 Updates Sparkle installs are not quarantined. Notarizing takes a `Developer ID Application`
 certificate, the hardened runtime and `notarytool`.
 
-## Diagnostics
+### Diagnostics
 
 mvim records one line per **command decision** to `os_log`, under subsystem
 `com.loom.mvim`. The unit is the decision, not the keystroke: what a reader wants back is
@@ -241,7 +318,7 @@ mvim records one line per **command decision** to `os_log`, under subsystem
 
 ```sh
 log show --predicate 'subsystem == "com.loom.mvim"' --last 1h --info --debug
-log collect --last 2h --output mvim.logarchive     # to send somewhere
+log collect --last 2h --output mvim.logarchive     # the whole system log: share it privately
 ```
 
 A command that did **not** fully succeed logs at `.default` and is persisted to disk for
@@ -254,12 +331,13 @@ sudo log config --subsystem com.loom.mvim --mode "level:default"    # off again 
 ```
 
 The renderers live on the engine types themselves, under a `// MARK: - Recorder` banner in
-each type's file; `grep -rn '// MARK: - Recorder' Sources/Vim` is the index.
+each type's file; `grep -rn '// MARK: - Recorder' Sources` is the index.
 
-Five categories: `bind` (a field became vim's, with its whole capability resolution),
+Six categories: `bind` (a field became vim's, with its whole capability resolution),
 `cmd` (the anchor event), `settle` (a prediction the field did not meet, and what it
 answered instead), `learn` (a demotion committed, or the reason one was not), `gate` (an
-element that did not become a binding). Every line carries `e<epoch>.c<seq>` — the binding
+element that did not become a binding, and a web field's walk to its site) and `system` (the
+tap or the login item failing). Every engine line carries `e<epoch>.c<seq>` — the binding
 and the command — so `grep -E 'e12\b'` is the whole join. A bind line is `e12 …` and a
 command line `e12.c47 …`; the word boundary catches both and keeps `e120` out.
 
@@ -274,9 +352,9 @@ X clipboardCut   Y clipboardCopy      V clipboardInsert            G captureSele
 Order is the diagnostic — a `!` directly after a counted arrow `P` is a hard settle verifying
 a blind keypress, which can never name the capability it failed, so it rings without teaching
 the learner anything. A `!` after a native key names that key, and a failure blames it
-(`fail=lineStartKey`) when a caret key left a selection, or, outside web content, when the field
-still reads as it did before the key although the key had somewhere to go. A landing somewhere
-else aborts without learning.
+(`fail=lineStartKey`) when a caret key left a selection, when the field still reads as it did
+before the key although the key had somewhere to go, or when the key landed somewhere else. In
+Chromium's rich text a landing somewhere else aborts without learning.
 
 When keys made the selection an edit is about to delete or type over, the edit first checks
 the selected text: `ciw` without AX selection writes is `P2P5!!P?CCC`, where the second `!`
@@ -289,9 +367,7 @@ whose `sel` and `len` agree failed on the text.
 
 `abort@N` names the step that ended the run, and the `C`s behind it did **not** all die with
 it: a commit carrying residency still lands (`VimEffect.survivesAbort`), which is why an
-aborted line can read `ok=0` and `mode=normal→insert` together. Before that, the mode change
-sat behind the settle and a lying field decided which mode mvim was in — `mode=normal→normal`
-on a `steps=W!R!CCC abort@3` line is the signature of that bug.
+aborted line can read `ok=0` and `mode=normal→insert` together.
 
 A Chromium rich-text field (a contenteditable in Chrome, Dia or an Electron app; its bind
 line says `chromium=1`) names its selection in text content: `AXValue` without the `\n`
@@ -340,7 +416,7 @@ defaults delete com.loom.mvim mvimRecordText
 it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
 does not stop an mvim that is already running.
 
-## Native keys
+### Native keys
 
 When a field can be read but not written, mvim moves by line and document with the standard
 Cocoa bindings instead of counting arrow presses: ⌃A/⌃E to the start and end of the caret's
@@ -360,8 +436,8 @@ somewhere else only aborts the command, because one paragraph can be several `AX
 mention chip) and a working key lands off the model's line; turn such a key off from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
-paragraph breaks before it (LIN-1533); mvim reads it through text markers and puts the breaks back
-(LIN-1564), and where that fails the caret is unknown and the command goes blind. Keys are pressed
+paragraph breaks before it; mvim reads it through text markers and puts the breaks back,
+and where that fails the caret is unknown and the command goes blind. Keys are pressed
 even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
 the caret the command starts from. An empty paragraph can be missing from `AXValue`, and a caret
 in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
@@ -372,9 +448,9 @@ the text the field selected.
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
 until it holds text, so the settles after it do not check the length.
 
-## Native word, paragraph and page keys
+### Native word, paragraph and page keys
 
-Off by default. **Capabilities in <app> › App's word, paragraph & page keys** turns it on for one
+Off by default. **Capabilities in _App_ › App's word, paragraph & page keys** turns it on for one
 field, fields like it, a site or the whole app. With it on, mvim presses the app's own keys
 instead of counting arrows or ringing, and the app decides where they land:
 
@@ -382,15 +458,15 @@ instead of counting arrows or ringing, and the app decides where they land:
 |---|---|
 | `w` `e` / `b` | ⌥→ / ⌥← |
 | `iw` (`ciw` `diw` `yiw` `viw`) | ⌥→ ⌥← to the word's start, then ⌥→ ⇧⌥← over it, then ⌘X or ⌘C |
-| `dw` `de` `cw` `ce` `yw` / `db` `cb` `yb` | ⇧⌥→ / ⇧⌥←, then ⌘X or ⌘C. From a word's edge, and in Chinese, Japanese or Thai, ⌥→ and ⌥← go out and back first |
+| `dw` `de` `cw` `ce` `yw` / `db` `cb` `yb` | ⇧⌥→ / ⇧⌥←, then ⌘X or ⌘C. From a word's edge, and in scripts written without spaces (Chinese, Japanese, Thai, Lao, Myanmar, Khmer), ⌥→ and ⌥← go out and back first |
 | `{` `}` | ⌥↑ / ⌥↓ |
 | `gj` `gk` | ↓ / ↑ |
 | `j` `k` | ↓ / ↑, only where ⌃E/⌃A are demoted and mvim cannot land them on a line |
 | `^F` `^B` | ⌥PgDn / ⌥PgUp. Without the option, ⌃F and ⌃B stay the app's |
 
 - **Where it applies.** Words switch only in fields mvim can read but not select in, such as
-  Chromium and Electron editors. A field that sets its selection exactly keeps vim's words; the
-  paragraph, row and page keys work in every field.
+  Chromium and Electron editors, and `iw` also in fields it cannot read. A field that sets its
+  selection exactly keeps vim's words; the paragraph, row and page keys work in every field.
 - **`j` and `k`** keep moving by line wherever mvim can land them on one: exact writes, or the
   ⌃E/⌃A hops in a field it reads but cannot select in. Only where those keys are demoted do they
   move by screen row.
@@ -405,31 +481,17 @@ instead of counting arrows or ringing, and the app decides where they land:
   started from. A word selection must be exactly what ⌥← and ⌥→ delimited or, mid-word, what the
   text says is left of the word; where neither can be known, as inside `foo,bar`, the command
   rings. If a key leaves the field unmoved when it should have moved, or selects more than that,
-  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then reads `✗ learned`. Words go
-  back to counting and paragraphs to ringing until you override it or the app updates.
+  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then reads
+  `✗ learned`. In web content, where reads cannot tell a key that did nothing, only a move that
+  leaves a selection behind is demoted. Words go back to counting and paragraphs to ringing until
+  you override it or the app updates.
 
-## Running alongside Vibe
+### Synthesized events
 
-- **`SynthTag.magic` is a cross-app ABI.** Both apps tag their synthesized CGEvents with the
-  same magic (`0x4C4F_4F4D`, in each repo's `Sources/Core/Synth.swift`) and bypass tagged
-  events before any handler runs. mvim's consuming tap must bypass Vibe's synthesized
-  typing — otherwise vim Normal mode would consume a transcript as commands. **Never change
-  the magic in one app without the other.**
-- **Bare-modifier-tap triggers in Vibe can false-fire around vim.** Both apps install
-  head-insert event taps; their relative order depends on launch order. When mvim consumes a
-  key-down (Normal mode), Vibe's tap never observes it — e.g. vim consuming `⌃[` makes the
-  surrounding `⌃` press look like a clean bare tap. Prefer Vibe's default `⌃⌥D` combo (a
-  Carbon hotkey — no tap at all), an `Fn`/🌐 tap, or a double-tap. This is a documented
-  limitation; the apps deliberately share no IPC.
-- Clipboard transactions are serialized per-process only. A simultaneous mvim register paste
-  and Vibe insertion fallback could interleave in principle; humanly this does not occur.
-
-## Signing
-
-The project signs with a stable **Apple Development** identity (`CODE_SIGN_STYLE: Automatic`,
-team in `project.yml`) so the Accessibility / Input Monitoring grants persist across
-rebuilds — an ad-hoc signature would change every build and macOS would revoke the grants
-each time. To build under a different team, change `DEVELOPMENT_TEAM` in `project.yml`.
+mvim tags every event it posts with `SynthTag.magic` (`0x4C4F_4F4D`, in `Sources/Core/Synth.swift`),
+and its tap passes tagged events through before any handler runs. **The magic is a cross-app ABI:**
+Vibe, the author's dictation app, tags its typing with the same value, so Normal mode never runs a
+transcript as commands. Never change the magic in one app without the other.
 
 ## License
 
@@ -440,4 +502,4 @@ Public License as published by the Free Software Foundation, either version 3 of
 your option) any later version. It is distributed WITHOUT ANY WARRANTY; see [LICENSE](LICENSE) for
 the full terms.
 
-Release builds embed [Sparkle](https://sparkle-project.org), which carries its own MIT license.
+Builds embed [Sparkle](https://sparkle-project.org), which carries its own MIT license.
