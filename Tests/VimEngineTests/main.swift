@@ -1502,10 +1502,11 @@ private func expectToken(
     _ chord: KeyNotation.Chord,
     _ characters: String,
     _ expected: String?,
+    escapeEngages: Bool = false,
     file: StaticString = #file,
     line: UInt = #line
 ) {
-    let token = KeyNotation.token(keyCode: keyCode, chord: chord, characters: characters)
+    let token = KeyNotation.token(keyCode: keyCode, chord: chord, characters: characters, escapeEngages: escapeEngages)
     precondition(
         token == expected,
         "Unexpected token for keyCode \(keyCode) chord \(chord.rawValue): \(token ?? "nil")",
@@ -1524,8 +1525,16 @@ expectToken(38, [.shift], "J", "J")
 expectToken(123, [], "", "<Left>")
 expectToken(36, [], "\r", "<CR>")
 expectToken(48, [], "\t", "\t")          // bare Tab stays vim's — deliberate scope
-expectToken(53, [], "\u{1B}", nil)       // physical Esc is never vim's
+expectToken(53, [], "\u{1B}", nil)       // physical Esc is the app's unless chosen
 expectToken(38, [.command], "j", nil)
+
+expectToken(53, [], "\u{1B}", "<Esc>", escapeEngages: true)
+expectToken(53, [.shift], "\u{1B}", "<Esc>", escapeEngages: true)
+expectToken(53, [.option], "\u{1B}", nil, escapeEngages: true)
+expectToken(53, [.command], "\u{1B}", nil, escapeEngages: true)
+expectToken(53, [.control], "\u{1B}", "<C-[>")
+expectToken(33, [.control], "\u{1B}", "<C-[>", escapeEngages: true)
+expectToken(38, [], "j", "j", escapeEngages: true)
 
 // ⇧ is transparent on the navigation cluster…
 expectToken(123, [.shift], "", "<Left>")
@@ -1637,11 +1646,18 @@ monitor.cancelPending()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
 
-// Esc cancels a pending command; on an idle buffer it dispatches.
+// Esc cancels a pending command; idle, it is the app's in Normal and leaves Visual.
 precondition(monitor.feed("d", mode: .normal) == .pending)
 precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)
-precondition(monitor.feed("<Esc>", mode: .normal) ==
+precondition(monitor.feed("<Esc>", mode: .normal) == .passthrough)
+precondition(monitor.feed("/", mode: .normal) == .pending)
+precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)
+precondition(monitor.feed("i", mode: .visual) == .pending)
+precondition(monitor.feed("<Esc>", mode: .visual) == .cancelled)
+precondition(monitor.feed("<Esc>", mode: .visual) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"))))
+precondition(monitor.feed("\u{1B}", mode: .normal) ==
+    .command(RawMonitor.Completed(command: RawCommand("\u{1B}"))))
 
 // Visual: bare operators fire on the selection; i/a await their object.
 precondition(monitor.feed("d", mode: .visual) ==
@@ -1698,8 +1714,7 @@ monitor.reset()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "")))
 
-// <C-[> is the runtime's engage key (physical Esc never reaches the
-// monitor): it must complete insert, cancel pending, and dispatch alone.
+// <C-[> must complete insert, cancel pending, and dispatch alone, even idle in Normal.
 precondition(monitor.feed("h", mode: .insert) == .passthrough)
 precondition(monitor.feed("<C-[>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
@@ -1858,6 +1873,18 @@ precondition(sim.selection == 10..<11)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "bye"))
 precondition(sim.settleFailures == 0 && sim.bells == 0 && sim.unsupportedSteps == 0)
+
+var esc = Sim(text: "say hello world", caret: 4, profile: axProfile)
+esc.type("vl")
+esc.feed("<Esc>")
+precondition(esc.state.field.mode == .normal && esc.selection == 5..<6)
+esc.type("d")
+esc.feed("<Esc>")
+esc.type("x")
+precondition(esc.text == "say hllo world")
+esc.feed("<Esc>")
+precondition(esc.text == "say hllo world" && esc.selection == 5..<6 && esc.state.field.mode == .normal)
+precondition(esc.settleFailures == 0 && esc.bells == 0 && esc.unsupportedSteps == 0)
 
 /// Types `change`, ends it with ⌃[, then types `then`.
 func replayed(_ text: String, caret: Int = 0, _ change: String, then keys: String) -> Sim {

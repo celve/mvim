@@ -4,9 +4,9 @@
 /// never reach it, nor in `Runtime/`, which `make test` cannot compile.
 ///
 /// This is a **gate, not a translator**. Returning a token *is* the decision
-/// to consume the key: `RawMonitor.feedCommand` has no passthrough exit in
-/// Normal/Visual, and `RawCommand`'s parse is total, so an unrecognized token
-/// becomes `.custom` → `.bell(.unsupported)` → consumed anyway. Every `nil`
+/// to consume the key: `RawMonitor.feedCommand` hands back only an idle
+/// Normal-mode `<Esc>`, and `RawCommand`'s parse is total, so an unrecognized
+/// token becomes `.custom` → `.bell(.unsupported)` → consumed anyway. Every `nil`
 /// below is a key the app keeps; every token is a promise that vim does
 /// something with it.
 ///
@@ -38,7 +38,8 @@ public enum KeyNotation {
     /// layouts resolve without a keycode table; `keyCode` is consulted only
     /// for keys that carry no usable character of their own.
     public static func token(
-        keyCode: Int, chord: Chord, characters: String, profile: CapabilityProfile = CapabilityProfile()
+        keyCode: Int, chord: Chord, characters: String, profile: CapabilityProfile = CapabilityProfile(),
+        escapeEngages: Bool = false
     ) -> String? {
         // ⌘ belongs to the system, whatever the key rides with it.
         if chord.contains(.command) { return nil }
@@ -59,6 +60,9 @@ public enum KeyNotation {
         // character — ⌥j resolves to "∆" — so it must be rejected before the
         // character path, never after.
         if chord.contains(.option) { return nil }
+
+        // Physical Esc is vim's only when the user chose it; apps keep it for their cancels otherwise.
+        if keyCode == escape { return escapeEngages ? "<Esc>" : nil }
 
         // Keys with no character identity of their own. They must be decided
         // by keycode, because macOS resolves them to control characters:
@@ -121,6 +125,7 @@ public enum KeyNotation {
 private extension KeyNotation {
     static let tab = 48            // kVK_Tab
     static let leftBracket = 33    // kVK_ANSI_LeftBracket
+    static let escape = 53         // kVK_Escape
 
     /// The navigation cluster, vim's when unchorded. Return and keypad Enter
     /// ride along: bare Enter stays vim's for the same reason bare Tab does —
@@ -133,12 +138,8 @@ private extension KeyNotation {
         36: "<CR>", 76: "<CR>"                       // Return, keypad Enter
     ]
 
-    /// Keys vim never binds, bare or chorded. Escape leads the list: the app
-    /// keeps its cancels, dialogs and TUI escapes — ⌃[ above is vim's sole
-    /// engage key. Adding a keycode here is either a fix or a no-op, never a
-    /// regression.
+    /// Keys vim never binds, bare or chorded; adding one is a fix or a no-op, never a regression.
     static let foreignKeys: Set<Int> = [
-        53,                                 // kVK_Escape — never vim's
         115, 116, 119, 121, 114,            // Home, PgUp, End, PgDn, Help
         71, 110,                            // keypad Clear, contextual menu
         72, 73, 74,                         // volume up/down, mute

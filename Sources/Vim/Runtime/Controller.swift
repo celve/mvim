@@ -21,6 +21,9 @@ public final class Controller {
         }
     }
 
+    /// Physical Esc engages Normal mode alongside ⌃[: the menu's Normal Mode Key.
+    public var escapeEngages = false
+
     /// Mode channel for the menu-bar indicator; nil = unbound. Setting the
     /// callback publishes immediately — the tracker may have bound during
     /// init, before the app model could wire in.
@@ -112,7 +115,7 @@ public final class Controller {
     public func handle(_ event: KeyEvent) -> Bool {
         guard enabled, event.kind == .keyDown else { return false }
         // ⌃f/⌃b always tokenize; the field a command runs on may hand them back below.
-        guard let token = KeyNotation.token(for: event, profile: Self.readsAppKeys) else {
+        guard let token = gate(event, profile: Self.readsAppKeys) else {
             // The app gets this key, so a half-typed command must not outlive
             // it: the app may move the caret, and a later key would complete
             // the command against a position the user never aimed at (`d`,
@@ -122,10 +125,8 @@ public final class Controller {
             return false
         }
 
-        // ⌃[ is the mode-engaging key — the one keystroke where a stale
-        // binding has teeth. Rate-limited full re-check (secure/enabled too).
-        // Physical Esc never gets here: KeyNotation returns nil for it.
-        if token == "<C-[>" { tracker.reverify() }
+        // An engage key is where a stale binding has teeth: a rate-limited full re-check.
+        if Self.engageTokens.contains(token) { tracker.reverify() }
 
         guard var binding = tracker.bindingForKeydown() else { return false }
 
@@ -151,7 +152,7 @@ public final class Controller {
         case .passthrough:
             return false
         case .pending, .cancelled:
-            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+            guard gate(event, profile: binding.capabilities) != nil else {
                 monitor.cancelPending()
                 return false
             }
@@ -160,11 +161,8 @@ public final class Controller {
             // Numbered here, not in `run`, so the three silent drops below are too.
             seq &+= 1
             let commandSeq = seq
-            // Verify-before-run: never mutate a field focus has left. An
-            // overlay summoned over a bound Normal-mode field emits no event
-            // the tracker can see, so a completed command buys one bounded
-            // resolve. ⌃[ already reverified this very event.
-            if token != "<C-[>" {
+            // Never mutate a field focus has left (an overlay emits no event); an engage key already reverified.
+            if !Self.engageTokens.contains(token) {
                 if binding.isForced {
                     // AX-silent apps resolve no focused element — the
                     // element check would swallow every command. Verify at
@@ -195,7 +193,7 @@ public final class Controller {
                     }
                 }
             }
-            guard KeyNotation.token(for: event, profile: binding.capabilities) != nil else {
+            guard gate(event, profile: binding.capabilities) != nil else {
                 Diag.dropped(tracker.epoch, commandSeq, command: completed.command, reason: "app-key")
                 return false
             }
@@ -208,6 +206,12 @@ public final class Controller {
     }
 
     private static let readsAppKeys = CapabilityProfile(available: [.nativeMotions])
+
+    private static let engageTokens: Set<String> = ["<C-[>", "<Esc>"]
+
+    private func gate(_ event: KeyEvent, profile: CapabilityProfile) -> String? {
+        KeyNotation.token(for: event, profile: profile, escapeEngages: escapeEngages)
+    }
 
     /// A completed command verify-before-run threw away, then handed to its reverify.
     private func drop(_ completed: RawMonitor.Completed, _ seq: UInt64, _ reason: String) {
