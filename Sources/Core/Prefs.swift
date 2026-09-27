@@ -7,6 +7,11 @@ public enum VimPolicy: String, CaseIterable, Sendable {
     case auto, off, forced
 }
 
+/// The key that enters Normal mode: ⌃[ always does, and `escape` adds Esc.
+public enum NormalModeKey: String, CaseIterable, Sendable {
+    case controlBracket, escape
+}
+
 /// The neutral Prefs store — LoomCore's UserDefaults-backed configuration
 /// surface. First resident: the per-app vim policy, consulted by the
 /// runtime at *binding* time (never per keystroke).
@@ -15,6 +20,7 @@ public enum Prefs {
     static let disabledPrefixesKey = "disabledBundleIDPrefixes"
     static let enabledIDsKey = "enabledBundleIDs"
     static let forcedIDsKey = "forcedBundleIDs"
+    static let normalModeKeyKey = "normalModeKey"
 
     /// Apps where engaging vim is destructive by default: terminals (Esc
     /// must reach the shell, or the real vim running inside) and editors
@@ -46,6 +52,14 @@ public enum Prefs {
             enabledIDsKey: [String](),
             forcedIDsKey: [String](),   // forced is opt-in: never seeded
         ])
+    }
+
+    public static var normalModeKey: NormalModeKey {
+        get {
+            UserDefaults.standard.string(forKey: normalModeKeyKey).flatMap(NormalModeKey.init(rawValue:))
+                ?? .controlBracket
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: normalModeKeyKey) }
     }
 
     public static func policy(for bundleID: String) -> VimPolicy {

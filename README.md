@@ -4,7 +4,7 @@ Vim's modal editing in the text fields of your Mac. mvim lives in the menu bar: 
 focused field through Accessibility, and takes the keys it needs with a keyboard event tap.
 
 A field starts in Insert mode, unless you reach it from another block of the same document.
-**⌃[, not Esc, enters Normal mode.**
+**⌃[ enters Normal mode**, and Esc does too if you choose it in the menu.
 
 There is no release yet, so [build it from source](#install). mvim needs macOS 14 or later, and it is
 free software under the [GNU GPL](#license).
@@ -45,20 +45,24 @@ System Settings → Privacy & Security, and run `defaults delete com.loom.mvim`.
 ## Using it
 
 **⌃[** enters Normal mode, leaves Visual mode and cancels a half-typed command. It is Control and the
-key to the right of P, whatever the keyboard layout. **Esc is never mvim's**, so apps keep it for
-their own cancels and dialogs. The menu-bar icon shows the mode: a keyboard while mvim is not in a
-field, otherwise **i**, **n** or **v** in a square. Where mvim can set the selection, Normal mode also
-draws a block cursor. Nothing shows a half-typed command, or a `/` search as you type it. Moving
-between the blocks of one document, as in Notion, keeps the mode you were in.
+key to the right of P, whatever the keyboard layout. By default **Esc stays the app's**, for its own
+cancels and dialogs. Choose **Esc** under **Normal Mode Key** in the menu and Esc does what ⌃[ does,
+except in Normal mode with nothing half-typed, where it still goes to the app: press Esc twice to
+close a dialog, a popup or Spotlight from a field. ⌃[ keeps working either way. The menu-bar icon
+shows the mode: a keyboard while mvim is not in a field, otherwise **i**, **n** or **v** in a square.
+Where mvim can set the selection, Normal mode also draws a block cursor. Nothing shows a half-typed
+command, or a `/` search as you type it. Moving between the blocks of one document, as in Notion,
+keeps the mode you were in.
 
-In Insert mode mvim takes only ⌃[. In Normal and Visual mode apps still keep every ⌘ and ⌥
-combination, Esc, Home, End, Page Up and Page Down, the function keys, and every ⌃ combination but
-⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while [the app's own page keys](#native-word-paragraph-and-page-keys)
-are on. So ⌃A, ⌃E and ⌃K work as in any Mac text field, and a key mvim does not know beeps instead
-of typing.
+In Insert mode mvim takes only ⌃[, and Esc if you chose it. In Normal and Visual mode apps still keep
+every ⌘ and ⌥ combination, Esc unless you chose it, Home, End, Page Up and Page Down, the function
+keys, and every ⌃ combination but ⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while
+[the app's own page keys](#native-word-paragraph-and-page-keys) are on. So ⌃A, ⌃E and ⌃K work as in
+any Mac text field, and a key mvim does not know beeps instead of typing.
 
 The menu is mvim's whole interface. **Vim Mode** turns mvim off everywhere until you turn it back on
-or mvim starts again. **Vim in _App_** chooses, per app:
+or mvim starts again. **Normal Mode Key** chooses ⌃[ or Esc for every app. **Vim in _App_** chooses,
+per app:
 
 - **Auto**: mvim works in text fields, text areas and combo boxes, but never in password fields.
 - **Off**: mvim leaves the app alone. Terminals and code editors start Off: Terminal, iTerm2, kitty,

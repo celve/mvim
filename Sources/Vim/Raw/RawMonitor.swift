@@ -144,13 +144,14 @@ private extension RawMonitor {
 
 private extension RawMonitor {
     mutating func feedCommand(_ token: String, visual: Bool) -> Verdict {
-        // Esc on a non-empty buffer cancels the pending command (and, for
-        // free, an open prompt). On an empty buffer it dispatches: Normal
-        // no-ops, Visual exits.
+        // Esc cancels a pending command or an open prompt.
         if isEscape(token), !pendingKeys.isEmpty {
             pendingKeys = ""
             return .cancelled
         }
+
+        // Idle, physical Esc in Normal is the app's, so a second Esc reaches its cancel; ⌃[ still dispatches.
+        if token == "<Esc>", !visual { return .passthrough }
 
         // Backspace edits an open prompt; on an emptied prompt it cancels.
         // Outside prompts it stays a motion token (`d<BS>` is delete-left).
