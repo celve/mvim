@@ -1,7 +1,7 @@
 import Foundation
 
 /// The user's overrides and the learned beliefs, in a JSON file the user may edit; mvim rereads it at every resolve.
-struct Beliefs {
+final class Beliefs {
     static let shared = Beliefs(url: .applicationSupportDirectory.appending(path: "mvim/beliefs.json"), defaults: .standard)
     /// Where the menu kept overrides before the file.
     static let overridesKey = "capabilityOverrides"
@@ -9,6 +9,8 @@ struct Beliefs {
     static let beliefsKey = "fieldBeliefs"
     /// The old learner's schema 2 demotions.
     static let legacyKey = "learnedCapabilityPriors"
+    /// The last version that read, applied while the file does not, across relaunches too.
+    static let lastGoodKey = "beliefsLastGood"
 
     /// Overrides are rung → capability → `on` or `off`, as `CapabilityConfig` reads them.
     struct Contents: Codable, Equatable {
@@ -28,38 +30,48 @@ struct Beliefs {
         }
     }
 
-    struct Unusable: Error, CustomStringConvertible {
+    struct Failure: Error, CustomStringConvertible {
         let description: String
     }
 
     let url: URL
     let defaults: UserDefaults
+    private lazy var lastGood: Contents? = defaults.string(forKey: Self.lastGoodKey).flatMap {
+        try? JSONDecoder().decode(Contents.self, from: Data($0.utf8))
+    }
+
+    init(url: URL, defaults: UserDefaults) {
+        self.url = url
+        self.defaults = defaults
+    }
+
+    /// What mvim applies: the file, else the last version that read, with why the file itself is not used.
+    func current() -> (contents: Contents, problem: Error?) {
+        do {
+            return (try load(), nil)
+        } catch {
+            return (lastGood ?? migrated(), error)
+        }
+    }
 
     /// With no file, writes one from what the defaults held, which stay until it is written.
     func load() throws -> Contents {
         if let contents = try read() { return contents }
         let contents = migrated()
-        try save(contents)
-        for key in [Self.overridesKey, Self.beliefsKey, Self.legacyKey] { defaults.removeObject(forKey: key) }
+        guard try write(contents, over: nil) else { return try read() ?? contents }
         return contents
     }
 
-    /// Never writes over a file that does not read, so a broken edit waits for the user.
-    func save(_ contents: Contents) throws {
-        _ = try read()
-        // Through a symlink, so a file kept elsewhere stays linked.
-        let target = url.resolvingSymlinksInPath()
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try (encoder.encode(contents) + Data("\n".utf8)).write(to: target, options: .atomic)
-    }
-
+    /// Applies `change` again to a version saved meanwhile, so neither edit is lost.
     func update(_ change: (inout Contents) -> Void) throws {
-        var contents = try load()
-        let before = contents
-        change(&contents)
-        if contents != before { try save(contents) }
+        for _ in 0..<3 {
+            let before = try load()
+            var contents = before
+            change(&contents)
+            if contents == before { return }
+            if try write(contents, over: before) { return }
+        }
+        throw Failure(description: "kept changing while mvim wrote it")
     }
 
     /// Nil when there is no file.
@@ -70,18 +82,19 @@ struct Beliefs {
         decoder.allowsJSON5 = true
         let contents = try decoder.decode(Contents.self, from: Data(contentsOf: url))
         guard contents.schema == BeliefStore.currentSchema else {
-            throw Unusable(description: "schema \(contents.schema), not \(BeliefStore.currentSchema)")
+            throw Failure(description: "schema \(contents.schema), not \(BeliefStore.currentSchema)")
         }
         // A name this build does not know is kept and ignored; a value no name takes is a typo.
         for belief in contents.beliefs where !belief.answerFits {
-            throw Unusable(description: "\(belief.question.rawValue) cannot be \(belief.answer) at \(belief.rung)")
+            throw Failure(description: "\(belief.question.rawValue) cannot be \(belief.answer) at \(belief.rung)")
         }
         for (rung, choices) in contents.overrides {
             // `CapabilityConfig.Override`, which LoomCore keeps out of this file's reach.
             for (capability, value) in choices where value != "on" && value != "off" {
-                throw Unusable(description: "\(capability) cannot be \(value) at \(rung)")
+                throw Failure(description: "\(capability) cannot be \(value) at \(rung)")
             }
         }
+        remember(contents)
         return contents
     }
 
@@ -94,6 +107,29 @@ struct Beliefs {
         guard let version = info["CFBundleShortVersionString"] as? String else { return nil }
         return (info["CFBundleVersion"] as? String).map { "\(version) (\($0))" } ?? version
     }()
+
+    /// False, writing nothing, once the file no longer holds `expected`; it never writes over one that does not read.
+    private func write(_ contents: Contents, over expected: Contents?) throws -> Bool {
+        guard try read() == expected else { return false }
+        // Through a symlink, so a file kept elsewhere stays linked.
+        let target = url.resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try (encoder.encode(contents) + Data("\n".utf8)).write(to: target, options: .atomic)
+        remember(contents)
+        return true
+    }
+
+    /// Once a file reads, the defaults it replaced could only bring back what deleting it drops.
+    private func remember(_ contents: Contents) {
+        for key in [Self.overridesKey, Self.beliefsKey, Self.legacyKey] where defaults.object(forKey: key) != nil {
+            defaults.removeObject(forKey: key)
+        }
+        guard contents != lastGood, let json = try? JSONEncoder().encode(contents) else { return }
+        lastGood = contents
+        defaults.set(String(decoding: json, as: UTF8.self), forKey: Self.lastGoodKey)
+    }
 
     private struct Legacy: Decodable {
         struct Record: Decodable {

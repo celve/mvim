@@ -89,12 +89,26 @@ let full = Beliefs.Contents(overrides: ["com.example.app": ["nativeMotions": "on
     Belief(rung: rung, question: .unknown("fromLaterBuild"), answer: "x", versions: versions),
 ])
 let saved = fresh()
-try! saved.save(full)
+try! saved.update { $0 = full }
 precondition(try! saved.load() == full)
 precondition(text(saved).hasSuffix("}\n") && text(saved).contains("\"schema\" : 3"))
 
+var tries = 0
+try! saved.update {
+    if tries == 0 { write(file(overrides: #""other.app": {"wordKeys": "off"}"#), to: saved) }
+    tries += 1
+    $0.overrides[rung] = ["insertText": "off"]
+}
+precondition(tries == 2 && (try! saved.load()).overrides == ["other.app": ["wordKeys": "off"], rung: ["insertText": "off"]],
+             "an edit saved between mvim's read and its write is kept")
+precondition((try? saved.update {
+    tries += 1
+    write(file(overrides: #""app\#(tries)": {"wordKeys": "off"}"#), to: saved)
+    $0.overrides[rung] = ["insertText": "on"]
+}) == nil && (try! saved.load()).overrides == ["app\(tries)": ["wordKeys": "off"]], "a file that keeps changing is left to its writer")
+
 let menu = fresh()
-try! menu.save(full)
+try! menu.update { $0 = full }
 try! menu.update {
     $0.overrides = CapabilityConfig.setting(.off, at: rung, on: surface, capability: "readCaret", in: $0.overrides)
     $0.retire(.readCaret, at: rung)
@@ -120,13 +134,17 @@ for unusable in [
     file(overrides: #""\#(rung)": {"insertText": "Off"}"#),
 ] {
     let broken = fresh()
+    try! broken.update { $0 = full }
     write(unusable, to: broken)
-    precondition((try? broken.load()) == nil && (try? broken.save(full)) == nil && (try? broken.update { $0 = full }) == nil)
+    precondition((try? broken.load()) == nil && (try? broken.update { $0 = Beliefs.Contents() }) == nil)
     precondition(text(broken) == unusable, "a broken edit waits for the user")
+    let fallback = broken.current()
+    precondition(fallback.contents == full && fallback.problem != nil, "the last version that read stays in force")
+    precondition(Beliefs(url: broken.url, defaults: broken.defaults).current().contents == full, "and survives a relaunch")
 }
 let occupied = fresh()
 try! FileManager.default.createDirectory(at: occupied.url, withIntermediateDirectories: true)
-precondition((try? occupied.load()) == nil && (try? occupied.save(full)) == nil)
+precondition((try? occupied.load()) == nil && (try? occupied.update { $0 = full }) == nil)
 
 let storeJSON = String(decoding: try! JSONEncoder().encode(full.store), as: UTF8.self)
 let moved = fresh()
@@ -140,6 +158,15 @@ stuck.defaults.set(storeJSON, forKey: Beliefs.beliefsKey)
 stuck.defaults.set(full.overrides, forKey: Beliefs.overridesKey)
 precondition((try? stuck.load()) == nil, "no file and none can be written is not a usable one")
 precondition(stuck.defaults.string(forKey: Beliefs.beliefsKey) == storeJSON && stuck.defaults.object(forKey: Beliefs.overridesKey) != nil)
+precondition(stuck.current().contents == full && stuck.current().problem != nil)
+let upgraded = fresh()
+write(file(overrides: #""com.example.app": {"insertText": "on"}"#), to: upgraded)
+upgraded.defaults.set(storeJSON, forKey: Beliefs.beliefsKey)
+upgraded.defaults.set(full.overrides, forKey: Beliefs.overridesKey)
+_ = try! upgraded.load()
+precondition(upgraded.defaults.object(forKey: Beliefs.beliefsKey) == nil && upgraded.defaults.object(forKey: Beliefs.overridesKey) == nil)
+try! FileManager.default.removeItem(at: upgraded.url)
+precondition(try! upgraded.load() == Beliefs.Contents(), "deleting the file drops every choice, the stale defaults' too")
 
 let legacy = fresh()
 legacy.defaults.set(#"{"schema":2,"records":[{"rung":"\#(rung)","version":"1.2","capability":"writeSelection"}]}"#,
@@ -158,7 +185,7 @@ try! FileManager.default.createDirectory(at: elsewhere.deletingLastPathComponent
 try! FileManager.default.createDirectory(at: linked.url.deletingLastPathComponent(), withIntermediateDirectories: true)
 try! FileManager.default.createSymbolicLink(at: linked.url, withDestinationURL: elsewhere)
 write(file(), to: Beliefs(url: elsewhere, defaults: linked.defaults))
-try! linked.save(full)
+try! linked.update { $0 = full }
 precondition((try? FileManager.default.destinationOfSymbolicLink(atPath: linked.url.path)) == elsewhere.path)
 precondition(try! Beliefs(url: elsewhere, defaults: linked.defaults).read() == full)
 

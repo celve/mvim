@@ -579,17 +579,19 @@ File** in the menu opens it:
 
 mvim rereads the file whenever it binds a field, so an edit applies when you next focus one. An
 override you write lasts, as one chosen in the menu does, and beats a belief. A belief you write is
-treated as learned: evidence can move an offsets answer, and an app update reopens a verdict. The
-menu writes the file too, and mvim rereads it before each write, so it keeps an edit you saved.
+treated as learned: evidence can move an offsets answer, and an app update reopens a verdict. mvim
+writes the file for the menu and for what it learns, but only over the version it read: an edit you
+save in between is read back, and the change is made to it instead.
 
-A file mvim cannot use applies nothing, neither overrides nor beliefs, and is never written over:
-bad JSON, a missing key, another `schema`, an answer its question cannot take, or an override other
-than `on` or `off`. The menu item then reads **Open Beliefs File — unreadable, ignored**, each bind
-logs a `beliefs-file` line in `learn` with the reason, and neither lessons nor menu choices are
-saved until the file reads again. A question or capability name mvim does not know is
-kept and ignored. Builds before the file kept overrides and beliefs in the `capabilityOverrides` and
-`fieldBeliefs` defaults, which move to the file on first launch. To forget what mvim learned, empty
-`beliefs`; deleting the file drops your choices as well:
+A file mvim cannot use is never written over: bad JSON, a missing key, another `schema`, an answer
+its question cannot take, or an override other than `on` or `off`. mvim goes on applying the last
+version that read, across relaunches too, and the menu shows its choices under **Open Beliefs File —
+unreadable, last good version in use**. Each bind logs a `beliefs-file` line in `learn` with the
+reason, and neither lessons nor menu choices are saved until the file reads again. A question or
+capability name mvim does not know is kept and ignored. Builds before the file kept overrides and
+beliefs in the `capabilityOverrides` and `fieldBeliefs` defaults, which move to the file on first
+launch and are dropped once a file reads. To forget what mvim learned, empty `beliefs`; deleting the
+file drops your choices as well:
 
 ```sh
 rm ~/Library/Application\ Support/mvim/beliefs.json

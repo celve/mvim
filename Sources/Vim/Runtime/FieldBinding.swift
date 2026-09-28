@@ -30,13 +30,9 @@ public enum FieldProber {
         _ element: AXUIElement, surface: Surface, versions: Versions, chromium: Bool
     ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs) {
         let probed = probe(element)
-        let contents: Beliefs.Contents
-        do {
-            contents = try Beliefs.shared.load()
-        } catch {
-            Diag.beliefsFile(error)
-            contents = Beliefs.Contents()
-        }
+        let current = Beliefs.shared.current()
+        if let problem = current.problem { Diag.beliefsFile(problem) }
+        let contents = current.contents
         let config = CapabilityConfig.resolveAll(
             surface, capabilities: Capability.allCases.map(\.rawValue), overrides: contents.overrides
         )

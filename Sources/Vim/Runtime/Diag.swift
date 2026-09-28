@@ -147,7 +147,7 @@ enum Diag {
         }
     }
 
-    /// The beliefs file would not read or write; one that does not read resolves as none.
+    /// The beliefs file would not read or write; mvim applies the last version that read.
     static func beliefsFile(_ error: Error) {
         learn.error("beliefs-file \(String(describing: error), privacy: .public)")
     }

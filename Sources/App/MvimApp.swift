@@ -62,7 +62,7 @@ struct MvimApp: App {
                     }
                 }
             }
-            Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, ignored") {
+            Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, last good version in use") {
                 model.openBeliefsFile()
             }
             Divider()
@@ -284,7 +284,7 @@ final class AppModel: ObservableObject {
     }
 
     func openBeliefsFile() {
-        beliefsReadable = controller.fileOverrides() != nil
+        beliefsReadable = controller.appliedOverrides().fromFile
         NSWorkspace.shared.open(controller.beliefsURL)
     }
 
@@ -317,8 +317,8 @@ final class AppModel: ObservableObject {
     /// badge is "—" until a field of the front app binds. An overlay's
     /// binding (other pid) must not label the front app's rows.
     private func refreshCapabilityRows() {
-        let overrides = controller.fileOverrides()
-        beliefsReadable = overrides != nil
+        let applied = controller.appliedOverrides()
+        beliefsReadable = applied.fromFile
         guard frontApp != nil else {
             capabilityRows = []
             clearActions = []
@@ -329,7 +329,7 @@ final class AppModel: ObservableObject {
         let report = controller.boundSurface?.bundleID == frontApp?.bundleID
             ? controller.capabilityReport : nil
         let config = CapabilityConfig.resolveAll(
-            surface, capabilities: Capability.allCases.map(\.rawValue), overrides: overrides ?? [:]
+            surface, capabilities: Capability.allCases.map(\.rawValue), overrides: applied.overrides
         )
 
         capabilityRows = Capability.allCases.map { capability in
