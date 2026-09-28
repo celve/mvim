@@ -2586,12 +2586,12 @@ precondition(broken(trials) == [.insertText])
 var passed = RunAttribution()
 passed.record(.replaceSelection(""))
 passed.record(.settle(Expectation(selection: 4..<4)), passed: true, selection: 4..<4)
-precondition(passed.settled == [.insertText] && passed.failed == nil)
+precondition(passed.evidence == [Evidence(.write(.insertText), .supports(nil), why: .settled, seen: .settle(1))])
 for start in [BeliefStore(), trials] {
     var store = start
     let lesson = Learning.learn(
         store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        observed: Learning.Observation(before: .value, source: .start), run: passed, overridden: { _ in false },
+        observed: Learning.Observation(before: .value, source: .start), run: passed.evidence, overridden: { _ in false },
         provenance: Provenance(), tally: Tally()
     )
     precondition(store == start && !lesson.republish && lesson.committed == nil)
@@ -2610,12 +2610,12 @@ precondition(perRung.beliefs.contains { $0.rung == otherRung }, "other rungs kee
 var struck = RunAttribution()
 struck.record(.setSelection(4..<9))
 struck.record(.settle(Expectation(selection: 4..<9)), passed: false, selection: 0..<0)
-precondition(struck.failed == .writeSelection)
+precondition(struck.evidence == [Evidence(.write(.writeSelection), .refutes, why: .moved, seen: .settle(1))])
 for overridden in [true, false] {
     var store = BeliefStore()
     let lesson = Learning.learn(
         store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        observed: Learning.Observation(before: .value, source: .start), run: struck, overridden: { _ in overridden },
+        observed: Learning.Observation(before: .value, source: .start), run: struck.evidence, overridden: { _ in overridden },
         provenance: Provenance(), tally: Tally()
     )
     precondition(overridden ? lesson.skip == .userOverride && store.beliefs.isEmpty
@@ -3070,27 +3070,27 @@ precondition(Expectation(landing: .caretAfter(2, strict: true)).traceFields == "
 
 // MARK: - The belief model
 
-let supportsValue = OffsetsEvidence.supports(.value, .plainIsValue)
-let supportsTextContent = OffsetsEvidence.supports(.textContent, .plainIsTextContent)
+let supportsValue = Evidence.offsets(.supports(.value), .plainIsValue)
+let supportsTextContent = Evidence.offsets(.supports(.textContent), .plainIsTextContent)
 for answer in OffsetsAnswer.allCases {
     for newEngine in [false, true] {
-        precondition(answer.next(.neutral(.noBreaks), newEngine: newEngine) == answer)
-        precondition(answer.next(.misfit(.selectedText), newEngine: newEngine) == .untrusted)
-        precondition(answer.next(supportsTextContent, newEngine: newEngine) == .textContent, "textContent fits again from \(answer)")
+        precondition(answer.next(.neutral, newEngine: newEngine) == answer)
+        precondition(answer.next(.refutes, newEngine: newEngine) == .untrusted)
+        precondition(answer.next(supportsTextContent.outcome, newEngine: newEngine) == .textContent, "textContent fits again from \(answer)")
     }
-    precondition(answer.next(supportsValue, newEngine: true) == .value)
+    precondition(answer.next(supportsValue.outcome, newEngine: true) == .value)
 }
-precondition(OffsetsAnswer.value.next(supportsValue, newEngine: false) == .value)
-precondition(OffsetsAnswer.textContent.next(supportsValue, newEngine: false) == .untrusted, "value needs a new engine")
-precondition(OffsetsAnswer.untrusted.next(supportsValue, newEngine: false) == .untrusted)
+precondition(OffsetsAnswer.value.next(supportsValue.outcome, newEngine: false) == .value)
+precondition(OffsetsAnswer.textContent.next(supportsValue.outcome, newEngine: false) == .untrusted, "value needs a new engine")
+precondition(OffsetsAnswer.untrusted.next(supportsValue.outcome, newEngine: false) == .untrusted)
 
 // In "ab\ncd" a caret before `d` is 4 in `AXValue` and 3 without the break.
 let beforeD = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 4..<4)
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: beforeD).evidence(current: .value) == supportsTextContent)
 precondition(FieldReads(text: "ab\ncd", plain: 4..<4, markers: beforeD).evidence(current: .textContent) == supportsValue)
-precondition(FieldReads(text: "ab\ncd", plain: 0..<0, markers: beforeD).evidence(current: .textContent) == .neutral(.boundarySnap))
+precondition(FieldReads(text: "ab\ncd", plain: 0..<0, markers: beforeD).evidence(current: .textContent) == .offsets(.neutral, .boundarySnap))
 precondition(FieldReads(text: "ab\ncd", plain: 1..<1, markers: MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 1..<1))
-    .evidence(current: .value) == .neutral(.noBreaks))
+    .evidence(current: .value) == .offsets(.neutral, .noBreaks))
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3).evidence(current: .value) == nil, "a caret without markers compares nothing")
 precondition(FieldReads(text: "ab\ncd", plain: 3..<3, markers: MarkerReads(breaks: nil, value: nil)).evidence(current: .textContent) == nil)
 // A list marker the side read skips is no break.
@@ -3100,15 +3100,15 @@ precondition(FieldReads(text: "• ab\n• cd", plain: 6..<6, markers: MarkerRea
 
 let cd = MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 3..<5)
 precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd", markers: cd).evidence(current: .value) == supportsTextContent)
-precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .value) == .misfit(.selectedText),
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .value) == .offsets(.refutes, .selectedText),
              "with value the only candidate, a mismatch fits nothing")
-precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .textContent) == .neutral(.unaligned))
-precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "cd").selectedTextEvidence(current: .value) == .neutral(.textAgrees))
-precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "c\u{FFFC}d").selectedTextEvidence(current: .value) == .neutral(.textAgrees),
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "cd").selectedTextEvidence(current: .textContent) == .offsets(.neutral, .unaligned))
+precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "cd").selectedTextEvidence(current: .value) == .offsets(.neutral, .textAgrees))
+precondition(FieldReads(text: "ab\ncd", plain: 3..<5, selectedText: "c\u{FFFC}d").selectedTextEvidence(current: .value) == .offsets(.neutral, .textAgrees),
              "Chromium's U+FFFC for a leaf with no text is no disagreement")
 precondition(FieldReads(text: "ab\nab", plain: 2..<4, selectedText: "\na", markers: MarkerReads(breaks: ParagraphBreaks(offsets: [2]), value: 3..<5))
-    .evidence(current: .textContent) == .misfit(.readsDisagree))
-precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "zz", markers: cd).evidence(current: .textContent) == .misfit(.selectedText),
+    .evidence(current: .textContent) == .offsets(.refutes, .readsDisagree))
+precondition(FieldReads(text: "ab\ncd", plain: 2..<4, selectedText: "zz", markers: cd).evidence(current: .textContent) == .offsets(.refutes, .selectedText),
              "a selected-text misfit outranks the offsets")
 precondition(FieldReads(text: "ab", plain: 0..<1, selectedText: "a", markers: MarkerReads(breaks: nil, value: nil))
     .interpreted(under: .textContent) == (nil, ParagraphBreaks(), false, false))
@@ -3118,10 +3118,10 @@ var sampling = OffsetsSampling()
 precondition(!sampling.samples(text: "ab", plain: 1..<1) && !sampling.samples(text: "ab\ncd", plain: nil))
 precondition(!sampling.samples(text: "ab\ncd", plain: 1..<1), "a plain read before the first newline is paragraph 1's under any count")
 precondition(sampling.samples(text: "ab\ncd", plain: 2..<2) && sampling.samples(text: "ab\ncd", plain: 0..<2))
-sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 0..<2)
+sampling.sampled(markers: true, evidence: .offsets(.neutral, .noBreaks), text: "ab\ncd", plain: 0..<2)
 precondition(sampling.remaining == OffsetsSampling.budget, "a silence at paragraph 1's end costs nothing")
 for _ in 1..<OffsetsSampling.budget {
-    sampling.sampled(markers: true, evidence: .neutral(.noBreaks), text: "ab\ncd", plain: 3..<3)
+    sampling.sampled(markers: true, evidence: .offsets(.neutral, .noBreaks), text: "ab\ncd", plain: 3..<3)
     precondition(sampling.samples(text: "ab\ncd", plain: 3..<3))
 }
 sampling.sampled(markers: true, evidence: nil, text: "ab\ncd", plain: 4..<4)
@@ -3141,7 +3141,7 @@ var dependent = BeliefStore()
 precondition(committing(&dependent, .writeSelection))
 precondition(resolving(dependent).broken == [.writeSelection] && resolving(dependent).reopened.isEmpty)
 let reopenedAtStart = resolving(dependent, starting: .textContent)
-precondition(reopenedAtStart.broken.isEmpty && reopenedAtStart.reopened.map(\.question) == ["writeSelection"])
+precondition(reopenedAtStart.broken.isEmpty && reopenedAtStart.reopened.map(\.question) == [.write(.writeSelection)])
 precondition(dependent.record(offsets: .textContent, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
 let learnedTextContent = resolving(dependent)
 precondition(learnedTextContent.readModel.answer == .textContent && learnedTextContent.readModel.source == .learned)
@@ -3149,7 +3149,7 @@ precondition(learnedTextContent.broken.isEmpty, "a verdict judged under value re
 precondition(committing(&dependent, .writeSelection, under: .textContent), "a new strike re-judges it under the answer in force")
 precondition(resolving(dependent).broken == [.writeSelection])
 precondition(dependent.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
-precondition(resolving(dependent).broken.isEmpty && resolving(dependent).reopened.map(\.question) == ["writeSelection"],
+precondition(resolving(dependent).broken.isEmpty && resolving(dependent).reopened.map(\.question) == [.write(.writeSelection)],
              "any change of the offsets answer reopens what the old one judged")
 var judgedUntrusted = dependent
 precondition(committing(&judgedUntrusted, .writeSelection, under: .untrusted) && resolving(judgedUntrusted).broken == [.writeSelection])
@@ -3160,7 +3160,7 @@ let upgraded = resolving(dependent, versions: Versions(app: learnVersions.app, e
 precondition(upgraded.readModel.answer == .value && upgraded.readModel.source == .start && upgraded.readModel.newEngine)
 let pinned = resolving(dependent, starting: .textContent, pins: true)
 precondition(pinned.readModel.answer == .textContent && pinned.readModel.source == .user)
-precondition(dependent.forget(Belief.offsets, at: learnRung) && resolving(dependent).readModel.source == .start)
+precondition(dependent.forget(.offsets, at: learnRung) && resolving(dependent).readModel.source == .start)
 
 var anchored = BeliefStore()
 precondition(anchored.record(offsets: .textContent, at: learnRung, anchor: true, versions: learnVersions, provenance: Provenance(), tally: Tally()))
@@ -3183,8 +3183,8 @@ let migrated = BeliefStore(demotions: [(learnRung, "1.49.1", "writeSelection"), 
 precondition(migrated.beliefs.count == 1 && migrated.beliefs[0].judgedUnder == .value && migrated.beliefs[0].provenance.tag == "migrated")
 precondition(resolving(migrated).broken == [.writeSelection] && resolving(migrated, starting: .textContent).broken.isEmpty)
 
-func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, OffsetsEvidence?, OffsetsAnswer),
-            source: OffsetsSource = .start, run: RunAttribution = RunAttribution()) -> Learning.Lesson {
+func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, Evidence?, OffsetsAnswer),
+            source: OffsetsSource = .start, run: [Evidence] = []) -> Learning.Lesson {
     let observed = Learning.Observation(before: snapshot.0, source: source, evidence: snapshot.1, after: snapshot.2)
     return Learning.learn(store: &store, rung: learnRung, versions: learnVersions, model: model, observed: observed, run: run,
                           overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"), tally: Tally())
@@ -3206,54 +3206,94 @@ var textChecked = RunAttribution()
 textChecked.record(.setSelection(0..<4))
 textChecked.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                    selection: 0..<4, length: 7, selectedText: "two\n")
-precondition(textChecked.textMismatch && textChecked.failed == nil, "the offsets answer for a text mismatch, not the write")
+precondition(textChecked.evidence == [.offsets(.refutes, .textCheck, seen: .settle(1))], "the offsets answer for a text mismatch, not the write")
 var mismatched = BeliefStore()
-let charged = lesson(&mismatched, model: ReadModel(answer: .value), snapshot: (.value, nil, .value), run: textChecked)
+let charged = lesson(&mismatched, model: ReadModel(answer: .value), snapshot: (.value, nil, .value), run: textChecked.evidence)
 precondition(charged.move == Learning.Move(from: .value, to: .untrusted, why: .textCheck) && charged.committed == nil)
 var userPinned = BeliefStore()
 precondition(lesson(&userPinned, model: ReadModel(answer: .value, source: .user, pinned: true), snapshot: (.value, nil, .value),
-                    source: .user, run: textChecked).move == nil && userPinned.beliefs.isEmpty, "a user override pins the answer")
+                    source: .user, run: textChecked.evidence).move == nil && userPinned.beliefs.isEmpty, "a user override pins the answer")
 var plainField = BeliefStore()
 precondition(lesson(&plainField, model: ReadModel(answer: .value, source: .plain), snapshot: (.value, nil, .value),
-                    source: .plain, run: textChecked).move == nil && plainField.beliefs.isEmpty,
+                    source: .plain, run: textChecked.evidence).move == nil && plainField.beliefs.isEmpty,
              "a field with no children has no breaks to learn about")
 var wrongRange = RunAttribution()
 wrongRange.record(.setSelection(0..<4))
 wrongRange.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                   selection: 1..<5, length: 7, selectedText: "ne\nt")
-precondition(!wrongRange.textMismatch && wrongRange.failed == .writeSelection)
+precondition(wrongRange.evidence == [Evidence(.write(.writeSelection), .refutes, why: .moved, seen: .settle(1))])
 var unanswered = RunAttribution()
 unanswered.record(.setSelection(0..<4))
 unanswered.record(.settle(Expectation(selection: 0..<4, length: 7, selectedText: "one\n")), passed: false,
                   selection: 0..<4, length: 7, selectedText: nil)
-precondition(!unanswered.textMismatch && unanswered.failed == nil)
+precondition(unanswered.evidence.isEmpty)
 var sideOnly = RunAttribution()
 sideOnly.record(.settle(Expectation(selection: 0..<4, length: 7, edge: .paragraphEnd, selectedText: "one")), passed: false,
                 selection: 0..<4, length: 7, selectedText: "one")
-precondition(!sideOnly.textMismatch && sideOnly.failed == nil)
+precondition(sideOnly.evidence.isEmpty)
 
 let offLine = Expectation(landing: .exact(4..<4), blame: Expectation.Blame(
     capability: .lineStartKey, unmoved: [], leavesCaret: true, exemptions: [.init(.paragraphLines, offTarget: true)]))
-precondition(offLine.verdict(observed: 2..<2) == .neutral(.lineStartKey, .paragraphLines) && offLine.blamed(observed: 2..<2) == nil)
-precondition(offLine.verdict(observed: 2..<5) == .blamed(.lineStartKey), "a selection left behind is still blamed")
-precondition(offLine.verdict(observed: 4..<4) == nil)
+func judged(_ expectation: Expectation, _ observed: Range<Int>) -> Evidence? {
+    var run = RunAttribution()
+    run.record(.settle(expectation), passed: false, selection: observed)
+    return run.evidence.first
+}
+func key(_ capability: Capability, _ outcome: Evidence.Outcome, _ why: Evidence.Why) -> Evidence {
+    Evidence(.key(capability), outcome, why: why, seen: .settle(0))
+}
+precondition(judged(offLine, 2..<2) == key(.lineStartKey, .neutral, .paragraphLines) && offLine.blamed(observed: 2..<2) == nil)
+precondition(judged(offLine, 2..<5) == key(.lineStartKey, .refutes, .leftSelection), "a selection left behind is still blamed")
+precondition(judged(offLine, 4..<4) == nil)
 let fromEmpty = Expectation(landing: .exact(7..<7), blame: Expectation.Blame(
     capability: .lineEndKey, unmoved: [], exemptions: [.init(.emptyParagraph, unmoved: [5..<5])]))
-precondition(fromEmpty.verdict(observed: 5..<5) == .neutral(.lineEndKey, .emptyParagraph) && fromEmpty.verdict(observed: 6..<6) == nil)
+precondition(judged(fromEmpty, 5..<5) == key(.lineEndKey, .neutral, .emptyParagraph) && judged(fromEmpty, 6..<6) == nil)
 var webWord = Expectation(landing: .exact(0..<3), blame: Expectation.Blame(
     capability: .wordKeys, unmoved: [0..<0], exemptions: [.init(.webContent, all: true)]))
 webWord.longest = 3
 precondition(webWord.blamed(observed: 0..<0) == nil && webWord.checkedKey == nil)
-precondition(webWord.verdict(observed: 0..<5) == .neutral(.wordKeys, .webContent) && webWord.verdict(observed: 1..<2) == nil)
+precondition(judged(webWord, 0..<5) == key(.wordKeys, .neutral, .webContent) && judged(webWord, 1..<2) == nil)
 var neutralRun = RunAttribution()
 neutralRun.record(.press(.paragraphStart, count: 1))
 neutralRun.record(.settle(offLine), passed: false, selection: 2..<2)
-precondition(neutralRun.neutral == .neutral(.lineStartKey, .paragraphLines) && neutralRun.failed == nil)
+precondition(neutralRun.evidence == [Evidence(.key(.lineStartKey), .neutral, why: .paragraphLines, seen: .settle(1))])
 let chipLine = webPhysical("0", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: chromiumBreak)
 precondition(chipLine.steps.contains {
     guard case .settle(let expectation) = $0 else { return false }
-    return expectation.verdict(observed: 5..<5) == .neutral(.lineStartKey, .paragraphLines)
+    return judged(expectation, 5..<5) == key(.lineStartKey, .neutral, .paragraphLines)
 }, "an off-target line key in Chromium rich text is neutral")
+func writeStrike(_ expectation: Expectation, selection: Range<Int>?, length: Int?) -> Evidence.Why? {
+    var run = RunAttribution()
+    run.record(.replaceSelection("x"))
+    run.record(.settle(expectation), passed: false, selection: selection, length: length)
+    return run.evidence.first?.why
+}
+let afterX = Expectation(selection: 5..<5, length: 11)
+precondition(writeStrike(afterX, selection: nil, length: 11) == .unanswered && writeStrike(afterX, selection: 5..<5, length: nil) == .unanswered)
+precondition(writeStrike(afterX, selection: 4..<4, length: 10) == .length, "unchanged text outranks where the caret read")
+precondition(writeStrike(afterX, selection: 4..<4, length: 11) == .moved)
+precondition(writeStrike(Expectation(selection: 5..<5, length: 11, edge: .paragraphEnd), selection: 5..<5, length: 11) == .edge)
+let stuckWord = Expectation(landing: .caretAfter(3, strict: true), blame: Expectation.Blame(capability: .wordKeys, unmoved: [3..<3]))
+precondition(judged(stuckWord, 3..<3) == key(.wordKeys, .refutes, .unmoved))
+var wideWord = Expectation(landing: .exact(0..<3), blame: Expectation.Blame(capability: .wordKeys, unmoved: []))
+wideWord.longest = 3
+precondition(judged(wideWord, 0..<5) == key(.wordKeys, .refutes, .tooLong))
+let aimedEnd = Expectation(landing: .exact(4..<4), blame: Expectation.Blame(capability: .lineEndKey, unmoved: [], offTarget: true))
+precondition(judged(aimedEnd, 6..<6) == key(.lineEndKey, .refutes, .offTarget) && aimedEnd.blamed(observed: 6..<6) == .lineEndKey)
+precondition(Learning.teaches(supportsValue) && Learning.teaches(textChecked.evidence[0]) && !Learning.teaches(.offsets(.neutral, .noBreaks)))
+precondition(Learning.teaches(struck.evidence[0]) && !Learning.teaches(passed.evidence[0]) && !Learning.teaches(neutralRun.evidence[0]))
+
+for capability in Capability.allCases {
+    let question = Question(capability)
+    precondition(question.rawValue == capability.rawValue && Question(rawValue: capability.rawValue) == question)
+    precondition(question == (Capability.nativeKeys.contains(capability) ? .key(capability) : .write(capability)))
+}
+precondition(Question(rawValue: "offsets") == .offsets && Question.offsets.rawValue == "offsets")
+precondition(Question(rawValue: "offset") == .unknown("offset") && Question.unknown("offset").rawValue == "offset")
+var laterBuild = BeliefStore(beliefs: [Belief(rung: learnRung, question: Question(rawValue: "offset"), answer: Belief.broken,
+                                              versions: learnVersions)])
+precondition(committing(&laterBuild, .writeSelection) && laterBuild.beliefs.count == 2 && broken(laterBuild) == [.writeSelection],
+             "a question this build does not know is kept and ignored")
 
 // The resolver's table before beliefs, which it must still match.
 func previousTable(probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>)
@@ -3318,15 +3358,15 @@ precondition(CapabilityResolver.resolve(probed: axProfile, config: [.readCaret: 
     .profile.has(.readCaret))
 
 let judgedBelief = Belief(
-    rung: learnRung, question: "writeSelection", answer: Belief.broken, judgedUnder: .value, versions: Versions(app: "1.49.1"),
+    rung: learnRung, question: .write(.writeSelection), answer: Belief.broken, judgedUnder: .value, versions: Versions(app: "1.49.1"),
     provenance: Provenance(build: "1.0.0 (812)", learnedAt: "2026-09-24T10:00:00Z", tag: "e3.c7")
 )
 precondition(judgedBelief.traceFields
     == "q=writeSelection a=broken judged=value ver=1.49.1 build=1.0.0(812) at=2026-09-24T10:00:00Z tag=e3.c7")
 var tallied = Tally()
 tallied.count(supportsTextContent)
-tallied.count(.neutral(.noBreaks))
-let offsetsBelief = Belief(rung: learnRung, question: Belief.offsets, answer: "textContent",
+tallied.count(.offsets(.neutral, .noBreaks))
+let offsetsBelief = Belief(rung: learnRung, question: .offsets, answer: "textContent",
                            versions: Versions(app: "1.32.4", engine: "41.3.0"), tally: tallied, anchor: true)
 precondition(offsetsBelief.traceFields == "q=offsets a=textContent ver=1.32.4 engine=41.3.0 tally=v0,tc1,misfit0,neutral1 anchor")
 precondition(ReadModel(answer: .textContent).traceName == "textContent/start")
@@ -3337,15 +3377,18 @@ precondition(resolving(shown, versions: Versions(app: "1.49.1")).traceLines == [
     "belief q=writeSelection a=broken judged=value ver=1.49.1 build=1.0.0(812) at=2026-09-24T10:00:00Z tag=e3.c7 reopened offsets=textContent",
     "belief q=offsets a=textContent ver=1.49.1 tag=e4.c1 tally=v0,tc0,misfit0,neutral0 in-force",
 ])
-precondition(supportsTextContent.traceFields == "supports=textContent why=plain=textContent")
-precondition(OffsetsEvidence.misfit(.textCheck).traceFields == "misfit why=text-check")
-precondition(Expectation.Verdict.neutral(.lineStartKey, .paragraphLines).traceFields == "neutral q=lineStartKey why=paragraph-lines")
-precondition(moved.traceLines(rung: learnRung, versions: learnVersions, failed: nil)
+precondition(supportsTextContent.traceFields == "q=offsets supports=textContent why=plain=textContent seen=snapshot")
+precondition(textChecked.evidence[0].traceFields == "q=offsets refutes why=text-check seen=settle@1")
+precondition(neutralRun.evidence[0].traceFields == "q=lineStartKey neutral why=paragraph-lines seen=settle@1")
+precondition(struck.evidence[0].traceFields == "q=writeSelection refutes why=moved seen=settle@1")
+precondition(passed.evidence[0].traceFields == "q=insertText supports why=settled seen=settle@1")
+precondition(moved.traceLines(rung: learnRung, versions: learnVersions)
     == ["offsets value→textContent why=plain=textContent rung=\(learnRung) engine=1.49.1 → republish"])
-precondition(Learning.Lesson(committed: .insertText, republish: true).traceLines(rung: learnRung, versions: learnVersions, failed: .insertText)
-    == ["commit q=insertText rung=\(learnRung) ver=1.49.1 → republish"])
-precondition(Learning.Lesson(skip: .alreadyCommitted).traceLines(rung: learnRung, versions: learnVersions, failed: .insertText)
-    == ["skip=already-committed fail=insertText"])
+let lengthStrike = Evidence(.write(.insertText), .refutes, why: .length, seen: .settle(3))
+precondition(Learning.Lesson(refuted: lengthStrike, republish: true).traceLines(rung: learnRung, versions: learnVersions)
+    == ["commit q=insertText why=length rung=\(learnRung) ver=1.49.1 → republish"])
+precondition(Learning.Lesson(refuted: lengthStrike, skip: .alreadyCommitted).traceLines(rung: learnRung, versions: learnVersions)
+    == ["skip=already-committed q=insertText why=length"])
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields(text: true)
     == "sel=10..15 len=21 text=\"hello\"")
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields == "sel=10..15 len=21 text=(5)")
@@ -3435,7 +3478,7 @@ var reopening = chromiumSim(workedExample, caret: 16, profile: axProfile, marker
 precondition(!reopening.profile.has(.writeSelection), "in force while plain reads stand")
 reopening.type("l")
 precondition(reopening.learner!.model.answer == .textContent && reopening.profile.has(.writeSelection))
-precondition(reopening.learner!.resolved!.reopened.map(\.question) == ["writeSelection"])
+precondition(reopening.learner!.resolved!.reopened.map(\.question) == [.write(.writeSelection)])
 reopening.type("ciwthere")
 precondition(reopening.text == "a\nb\nc\nd\ne\nhello there" && reopening.settleFailures == 0)
 
@@ -3468,7 +3511,7 @@ var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
 chipKey.type("0")
 precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)
-precondition(chipKey.learner!.lessons.last?.neutral == .neutral(.lineStartKey, .paragraphLines))
+precondition(chipKey.attribution.evidence.contains { $0.question == .key(.lineStartKey) && $0.outcome == .neutral && $0.why == .paragraphLines })
 precondition(chipKey.learner!.lessons.last?.committed == nil && chipKey.profile.has(.lineStartKey))
 
 print("Vim engine tests passed")

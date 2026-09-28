@@ -111,8 +111,8 @@ public final class Controller {
     }
 
     public func forgetBelief(_ capability: Capability, at rung: String) {
-        Beliefs.forget(capability.rawValue, at: rung)
-        if capability == .readCaret { Beliefs.forget(Belief.offsets, at: rung) }
+        Beliefs.forget(Question(capability), at: rung)
+        if capability == .readCaret { Beliefs.forget(.offsets, at: rung) }
     }
 
     /// The `InputHub` handler: returns the consume verdict. Zero AX on the
@@ -394,24 +394,23 @@ public final class Controller {
         from evidence: Executor.RunEvidence, reading: Snapshotter.Reading, on binding: FocusTracker.Binding,
         epoch: UInt64, seq: UInt64
     ) {
-        let run = evidence.attribution
+        let run = evidence.attribution.evidence
         let observed = reading.observed
-        if let neutral = run.neutral { Diag.neutral(epoch, seq, neutral) }
+        let items = (observed.evidence.map { [$0] } ?? []) + run
+        Diag.evidence(epoch, seq, items)
         // A forced binding resolves nothing to learn against.
         guard let beliefs = binding.beliefs else { return }
         let model = beliefs.readModel
-        let teaches = observed.evidence?.informative == true || run.textMismatch || run.failed != nil
+        let teaching = items.filter(Learning.teaches)
         // No role means no stable key to accumulate against.
         guard let rung = binding.surface.roleRung else {
-            if teaches { Diag.notLearned(epoch, seq, reason: "no-rung", failed: run.failed) }
+            Diag.notLearned(epoch, seq, reason: "no-rung", teaching)
             return
         }
-        if let evidence = observed.evidence {
-            tallies[rung, default: Tally()].count(evidence)
-            Diag.observed(epoch, seq, evidence, under: observed.before)
+        if observed.source.observes {
+            for item in items { tallies[rung, default: Tally()].count(item) }
         }
-        if run.textMismatch, observed.source.observes { tallies[rung, default: Tally()].count(.misfit(.textCheck)) }
-        guard teaches || observed.after != model.answer else { return }
+        guard !teaching.isEmpty || observed.after != model.answer else { return }
         var store = Beliefs.load()
         let stored = store
         let lesson = Learning.learn(
@@ -421,7 +420,7 @@ public final class Controller {
             provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()
         )
         if store != stored { Beliefs.save(store) }
-        Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions, failed: run.failed)
+        Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions)
         if lesson.republish { tracker.reresolveCapabilities() }
     }
 

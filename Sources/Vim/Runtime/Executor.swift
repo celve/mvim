@@ -35,8 +35,12 @@ public final class Executor {
     public struct RunEvidence: Equatable, Sendable {
         public internal(set) var attribution = RunAttribution()
 
-        public var failedCapability: Capability? { attribution.failed }
-        public var settledCapabilities: Set<Capability> { attribution.settled }
+        public var failedCapability: Capability? {
+            attribution.evidence.first { $0.outcome == .refutes }?.question.capability
+        }
+        public var settledCapabilities: Set<Capability> {
+            Set(attribution.evidence.compactMap { $0.outcome == .supports(nil) ? $0.question.capability : nil })
+        }
 
         /// Recorder only.
         public internal(set) var abortedAt: Int?

@@ -29,7 +29,7 @@ enum Beliefs {
         UserDefaults.standard.set(json, forKey: storeKey)
     }
 
-    static func forget(_ question: String, at rung: String) {
+    static func forget(_ question: Question, at rung: String) {
         var store = load()
         guard store.forget(question, at: rung) else { return }
         save(store)

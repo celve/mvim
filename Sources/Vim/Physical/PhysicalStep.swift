@@ -240,31 +240,17 @@ public struct Expectation: Equatable, Sendable {
 
     /// A failure left unblamed: staying at `unmoved`, landing elsewhere with `offTarget`, or any with `all`.
     public struct Exemption: Equatable, Sendable {
-        public enum Reason: String, Equatable, Sendable {
-            /// One Chromium paragraph can be several `AXValue` lines (a mention chip).
-            case paragraphLines = "paragraph-lines"
-            /// `AXValue` can leave an empty paragraph out, so a key from one can seem to do nothing.
-            case emptyParagraph = "empty-paragraph"
-            /// Raw reads in web content cannot tell a key that did nothing (LIN-1564).
-            case webContent = "web-content"
-        }
-
-        public let reason: Reason
+        public let reason: Evidence.Why
         public let unmoved: [Range<Int>]
         public let offTarget: Bool
         public let all: Bool
 
-        public init(_ reason: Reason, unmoved: [Range<Int>] = [], offTarget: Bool = false, all: Bool = false) {
+        public init(_ reason: Evidence.Why, unmoved: [Range<Int>] = [], offTarget: Bool = false, all: Bool = false) {
             self.reason = reason
             self.unmoved = unmoved
             self.offTarget = offTarget
             self.all = all
         }
-    }
-
-    public enum Verdict: Equatable, Sendable {
-        case blamed(Capability)
-        case neutral(Capability, Exemption.Reason)
     }
 
     public init(selection: Range<Int>? = nil, length: Int? = nil, edge: Edge? = nil, selectedText: String? = nil) {
@@ -331,28 +317,44 @@ public struct Expectation: Equatable, Sendable {
 
     /// The key a non-converged settle blames, given the last selection it read.
     public func blamed(observed: Range<Int>?) -> Capability? {
-        guard let blame, !blame.exempt, let observed, names(blame, observed) else { return nil }
-        return blame.capability
+        guard let observed, strike(observed) != nil else { return nil }
+        return blame?.capability
     }
 
-    public func verdict(observed: Range<Int>?) -> Verdict? {
-        if let capability = blamed(observed: observed) { return .blamed(capability) }
-        guard let blame, let observed else { return nil }
-        let exemption = blame.exemptions.first { exemption in
-            exemption.all ? names(blame, observed)
+    /// The rule a failed settle's read broke, which strikes its key; nil when exempt.
+    public func strike(_ observed: Range<Int>) -> Evidence.Why? {
+        guard let blame, !blame.exempt else { return nil }
+        return broken(blame, observed)
+    }
+
+    /// The exemption that leaves a failed settle's key unblamed.
+    public func exemption(_ observed: Range<Int>) -> Evidence.Why? {
+        guard let blame, strike(observed) == nil else { return nil }
+        return blame.exemptions.first { exemption in
+            exemption.all ? broken(blame, observed) != nil
                 : exemption.offTarget && landing?.matches(observed) == false || exemption.unmoved.contains(observed)
-        }
-        return exemption.map { .neutral(blame.capability, $0.reason) }
+        }?.reason
+    }
+
+    /// Why a failed settle after a write missed, when its selected text is not the reason.
+    public func miss(selection observed: Range<Int>?, length observedLength: Int?) -> Evidence.Why {
+        if landing != nil && observed == nil || length != nil && observedLength == nil { return .unanswered }
+        if let length, observedLength != length { return .length }
+        if let landing, let observed, !landing.matches(observed) { return .moved }
+        if let longest, let observed, observed.count > longest { return .tooLong }
+        return .edge
     }
 
     public var checkedKey: Capability? {
         blame.flatMap { $0.exempt ? nil : $0.capability }
     }
 
-    private func names(_ blame: Blame, _ observed: Range<Int>) -> Bool {
-        blame.offTarget && landing?.matches(observed) == false || blame.unmoved.contains(observed)
-            || (blame.leavesCaret && !observed.isEmpty)
-            || longest.map({ observed.count > $0 }) == true
+    private func broken(_ blame: Blame, _ observed: Range<Int>) -> Evidence.Why? {
+        if blame.unmoved.contains(observed) { return .unmoved }
+        if blame.leavesCaret && !observed.isEmpty { return .leftSelection }
+        if let longest, observed.count > longest { return .tooLong }
+        if blame.offTarget && landing?.matches(observed) == false { return .offTarget }
+        return nil
     }
 }
 
