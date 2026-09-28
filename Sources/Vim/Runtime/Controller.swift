@@ -110,9 +110,37 @@ public final class Controller {
         tracker.reresolveCapabilities()
     }
 
-    public func forgetBelief(_ capability: Capability, at rung: String) {
-        Beliefs.forget(Question(capability), at: rung)
-        if capability == .readCaret { Beliefs.forget(.offsets, at: rung) }
+    /// The menu's On, Off or Auto, written to the beliefs file with the belief it retires.
+    public func setOverride(
+        _ override: CapabilityConfig.Override?, at rung: String?, on surface: Surface, for capability: Capability
+    ) {
+        updateBeliefs { contents in
+            contents.overrides = CapabilityConfig.setting(
+                override, at: rung, on: surface, capability: capability.rawValue, in: contents.overrides
+            )
+            if override != nil, let role = surface.roleRung { contents.retire(capability, at: role) }
+        }
+    }
+
+    public func clearOverrides(atAndBelow rung: String, on surface: Surface) {
+        updateBeliefs { $0.overrides = CapabilityConfig.clearing(atAndBelow: rung, on: surface, in: $0.overrides) }
+    }
+
+    /// The beliefs file, for the menu to open.
+    public var beliefsURL: URL { Beliefs.shared.url }
+
+    /// The overrides mvim applies; not from the file while it does not read, but from the last version that did.
+    public func appliedOverrides() -> (overrides: SurfaceLadder.UserStore, fromFile: Bool) {
+        let current = Beliefs.shared.current()
+        return (current.contents.overrides, current.problem == nil)
+    }
+
+    private func updateBeliefs(_ change: (inout Beliefs.Contents) -> Void) {
+        do {
+            try Beliefs.shared.update(change)
+        } catch {
+            Diag.beliefsFile(error)
+        }
     }
 
     /// The `InputHub` handler: returns the consume verdict. Zero AX on the
@@ -415,15 +443,26 @@ public final class Controller {
             for item in items { tallies[rung, default: Tally()].count(item) }
         }
         guard !teaching.isEmpty || observed.after != model.answer else { return }
-        var store = Beliefs.load()
-        let stored = store
-        let lesson = Learning.learn(
-            store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
-            // The user has the last word: once they set an atom, stop inferring about it.
-            overridden: { CapabilityConfig.resolve(binding.surface, capability: $0.rawValue).override != nil },
-            provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()
-        )
-        if store != stored { Beliefs.save(store) }
+        var lesson = Learning.Lesson()
+        do {
+            try Beliefs.shared.update { contents in
+                var store = contents.store
+                let overrides = contents.overrides
+                lesson = Learning.learn(
+                    store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
+                    // The user has the last word: once they set an atom, stop inferring about it.
+                    overridden: {
+                        CapabilityConfig.resolve(binding.surface, capability: $0.rawValue, overrides: overrides).override != nil
+                    },
+                    provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()
+                )
+                contents.store = store
+            }
+        } catch {
+            Diag.beliefsFile(error)
+            Diag.notLearned(epoch, seq, reason: "beliefs-file", teaching)
+            return
+        }
         Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions)
         if lesson.republish { tracker.reresolveCapabilities() }
     }

@@ -30,14 +30,18 @@ public enum FieldProber {
         _ element: AXUIElement, surface: Surface, versions: Versions, chromium: Bool
     ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs) {
         let probed = probe(element)
-        // One store read for every atom: the ladder is the same for each.
-        let config = CapabilityConfig.resolveAll(surface, capabilities: Capability.allCases.map(\.rawValue))
+        let current = Beliefs.shared.current()
+        if let problem = current.problem { Diag.beliefsFile(problem) }
+        let contents = current.contents
+        let config = CapabilityConfig.resolveAll(
+            surface, capabilities: Capability.allCases.map(\.rawValue), overrides: contents.overrides
+        )
         let choices = Dictionary(uniqueKeysWithValues: Capability.allCases.map { capability -> (Capability, ConfigChoice) in
             let resolution = config[capability.rawValue] ?? .auto
             let override = resolution.override.map { $0 == .on ? ConfigChoice.Override.on : .off }
             return (capability, ConfigChoice(override: override, seededOff: resolution.isSeededOff))
         })
-        let beliefs = Beliefs.load().resolve(
+        let beliefs = contents.store.resolve(
             rungs: surface.rungs, rung: surface.roleRung, versions: versions, chromium: chromium,
             children: Snapshotter.hasParagraphs(element), userPinsOffsets: choices[.readCaret]?.override != nil
         )

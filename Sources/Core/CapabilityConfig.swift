@@ -1,9 +1,5 @@
-import Foundation
-
-/// Shipped seeds plus the user's persisted overrides, in raw strings since LoomCore cannot see `Capability`.
+/// Shipped seeds plus the user's overrides from the beliefs file, in raw strings since LoomCore cannot see `Capability`.
 public enum CapabilityConfig {
-    static let storeKey = "capabilityOverrides"
-
     /// A user's per-(surface, capability) choice. Absent = auto: defer to the
     /// probe and the seeds.
     public enum Override: String, Sendable {
@@ -23,27 +19,20 @@ public enum CapabilityConfig {
         public static let auto = Resolution(override: nil, overrideRung: nil, seededOffRung: nil)
     }
 
-    /// Both ladder walks for one capability, narrowest first.
-    ///
-    /// Kept as two independent walks on purpose — see `SurfaceLadder.seedEntry`.
-    /// Merging them would let a seed at a narrow rung beat a user's `.on` at a
-    /// wide one, contradicting the law that an explicit `.on` un-seeds.
-    public static func resolve(_ surface: Surface, capability: String) -> Resolution {
-        resolve(surface, rungs: surface.rungs, store: load(), capability: capability)
+    /// Both ladder walks for one capability, kept apart so a user's `.on` always un-seeds (see `SurfaceLadder.seedEntry`).
+    public static func resolve(
+        _ surface: Surface, capability: String, overrides: SurfaceLadder.UserStore
+    ) -> Resolution {
+        resolve(surface, rungs: surface.rungs, store: overrides, capability: capability)
     }
 
-    /// Every capability against one surface, reading the store once.
-    ///
-    /// The batching instinct the AX layer already follows: nine separate
-    /// `resolve` calls would re-read and re-cast the defaults dictionary nine
-    /// times per bind, and the rungs are the same for all of them.
+    /// Every capability against one surface, computing its rungs once.
     public static func resolveAll(
-        _ surface: Surface, capabilities: [String]
+        _ surface: Surface, capabilities: [String], overrides: SurfaceLadder.UserStore
     ) -> [String: Resolution] {
         let rungs = surface.rungs
-        let store = load()
         return Dictionary(uniqueKeysWithValues: capabilities.map {
-            ($0, resolve(surface, rungs: rungs, store: store, capability: $0))
+            ($0, resolve(surface, rungs: rungs, store: overrides, capability: $0))
         })
     }
 
@@ -60,36 +49,18 @@ public enum CapabilityConfig {
         )
     }
 
-    /// Store a choice at `rung`, clearing the same capability at every narrower
-    /// rung so the menu's checkmark cannot lie (the `Prefs.setPolicy`
-    /// invariant). `override` of `nil` is Auto: clear it at every rung.
-    public static func setUserOverride(
-        _ override: Override?, at rung: String?, on surface: Surface, capability: String
-    ) {
-        save(SurfaceLadder.setting(
-            override?.rawValue, capability, at: rung, rungs: surface.rungs, store: load()
-        ))
+    /// A choice at `rung` clears narrower rungs so the menu's checkmark cannot lie; nil is Auto, cleared everywhere.
+    public static func setting(
+        _ override: Override?, at rung: String?, on surface: Surface, capability: String,
+        in overrides: SurfaceLadder.UserStore
+    ) -> SurfaceLadder.UserStore {
+        SurfaceLadder.setting(override?.rawValue, capability, at: rung, rungs: surface.rungs, store: overrides)
     }
 
-    /// Drop every capability stored at `rung` and at every narrower rung — the
-    /// menu's "Clear overrides…" actions.
-    public static func clearOverrides(atAndBelow rung: String, on surface: Surface) {
-        save(SurfaceLadder.clearing(atAndBelow: rung, rungs: surface.rungs, store: load()))
-    }
-
-    // MARK: - Persistence
-
-    private static func load() -> SurfaceLadder.UserStore {
-        UserDefaults.standard.dictionary(forKey: storeKey) as? SurfaceLadder.UserStore ?? [:]
-    }
-
-    private static func save(_ store: SurfaceLadder.UserStore) {
-        // `SurfaceLadder` already prunes emptied rungs, so an empty store here
-        // means the user has no choices left and the key should go entirely.
-        if store.isEmpty {
-            UserDefaults.standard.removeObject(forKey: storeKey)
-        } else {
-            UserDefaults.standard.set(store, forKey: storeKey)
-        }
+    /// The menu's "Clear overrides…": every capability at `rung` and every narrower rung.
+    public static func clearing(
+        atAndBelow rung: String, on surface: Surface, in overrides: SurfaceLadder.UserStore
+    ) -> SurfaceLadder.UserStore {
+        SurfaceLadder.clearing(atAndBelow: rung, rungs: surface.rungs, store: overrides)
     }
 }

@@ -219,7 +219,7 @@ public extension Surface {
 /// Capabilities are raw strings here for the same reason they are there —
 /// LoomCore cannot see the engine's `Capability` type.
 public enum SurfaceLadder {
-    /// A user's stored choice, as it sits in the defaults dictionary.
+    /// The user's stored choices, as the beliefs file's `overrides` hold them.
     public typealias UserStore = [String: [String: String]]
     /// Compiled-in curation: rung → the capabilities it denies.
     public typealias Seeds = [String: Set<String>]
@@ -254,18 +254,7 @@ public enum SurfaceLadder {
         return nil
     }
 
-    /// Store `value` for `capability` at `rung`, clearing the same capability
-    /// at every **narrower** rung. `value` of `nil` is Auto: clear it at every
-    /// rung instead.
-    ///
-    /// The clearing is what upholds the invariant `Prefs` states outright —
-    /// "the picker must never show a lie". Without it, choosing Off for a whole
-    /// app while a narrower rung held On would leave the capability on and the
-    /// checkmark wrong. Mildly destructive of the narrower choice, and that is
-    /// accepted: the checkmark moving is the feedback.
-    ///
-    /// Returns a new store; emptied entries are pruned so `defaults read` shows
-    /// exactly the choices the user has made.
+    /// Stores `value` at `rung` and clears narrower rungs, so "the picker must never show a lie" (`Prefs`); nil clears every rung.
     public static func setting(
         _ value: String?,
         _ capability: String,

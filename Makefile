@@ -17,7 +17,7 @@ ifneq ($(and $(SIGN),$(filter dist publish,$(MAKECMDGOALS))),)
 $(error SIGN is for local builds: installs keep their grants only under project.yml's identity)
 endif
 
-.PHONY: all gen build run release dist publish clean distclean test test-pasteboard
+.PHONY: all gen build run release dist publish clean distclean test test-pasteboard test-beliefs
 
 all: build
 
@@ -28,7 +28,7 @@ VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 # listed here one at a time, and only when they are pure enough to link against
 # nothing but the stdlib — Surface.swift holds the rung algebra and precedence
 # walks, which are the part of per-surface config worth pinning.
-CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift
+CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/CapabilityConfig.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift
 
 # Permission-free unit tests for the pure Vim engine. No Xcode/app build, no Accessibility grant.
 test:
@@ -41,6 +41,12 @@ test-pasteboard:
 	@mkdir -p $(DERIVED)
 	@swiftc -o $(DERIVED)/pasteboard-test Sources/Vim/Runtime/PasteboardLoan.swift Tests/PasteboardTests/main.swift
 	@$(DERIVED)/pasteboard-test
+
+# The beliefs file's reads, writes and migration, in a temporary directory and private defaults: no grant.
+test-beliefs:
+	@mkdir -p $(DERIVED)
+	@swiftc -o $(DERIVED)/beliefs-test $(VIM_PURE) $(CORE_PURE) Sources/Vim/Runtime/Beliefs.swift Tests/BeliefsTests/main.swift
+	@$(DERIVED)/beliefs-test
 
 gen:
 	xcodegen generate
