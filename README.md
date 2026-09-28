@@ -40,7 +40,8 @@ Development** signing certificate, which Xcode → Settings → Accounts → Man
 To update, quit mvim, run `git pull --autostash && make release` and copy the app again; the
 permissions carry over while the same Apple Development identity signs it. To uninstall, switch
 **Start at Login** off, quit and delete the app, remove it from Accessibility and Input Monitoring in
-System Settings → Privacy & Security, and run `defaults delete com.loom.mvim`.
+System Settings → Privacy & Security, run `defaults delete com.loom.mvim`, and delete
+`~/Library/Application Support/mvim`.
 
 ## Using it
 
@@ -71,7 +72,8 @@ per app:
 - **Force**: for apps that expose no text field to Accessibility. mvim drives the front window
   without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
 
-**Capabilities in _App_** shows what mvim can do in the current field and lets you override it (see
+**Capabilities in _App_** shows what mvim can do in the current field and lets you override it, and
+**Open Beliefs File** opens what mvim has learned about fields (see
 [Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
 both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
@@ -117,7 +119,8 @@ also learns how a field counts caret positions: where the field's reads stop agr
 stops trusting the caret (**Read caret** `✗ learned`) and treats the field as one it cannot read,
 and a capability switched off while mvim misread a field comes back once it counts that field anew.
 **On …** and **Off …** override what mvim detected or learned, for one field, fields like it, a site
-or the whole app, and `defaults delete com.loom.mvim fieldBeliefs` forgets everything learned (see
+or the whole app. What mvim learned is also a file you can edit: **Open Beliefs File** opens it,
+removing an entry forgets it, and deleting the file forgets everything learned (see
 [Learned beliefs](#learned-beliefs)). **App's word, paragraph & page keys**, off by default, hands
 `w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to the app's own keys: see
 [Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
@@ -127,12 +130,13 @@ or the whole app, and `defaults delete com.loom.mvim fieldBeliefs` forgets every
 mvim needs **Accessibility**, to read and edit the focused field and to post keys, and **Input
 Monitoring**, for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed
 into a field it is working in. mvim has no microphone, keychain or networking code, and
-[Sparkle](#updates) is built in but inactive until the first release. Its settings and its log name
-the apps and websites you use. The log also records the Normal-mode commands you type, but never the
-text you insert or a command's operand, count or register (a unit test holds it to that), unless you
-turn on [text recording](#diagnostics); if mvim ever mistook the mode, some of your words could reach
-it as commands. mvim pastes through the clipboard into fields it cannot write, and restores the
-clipboard afterwards; in fields it cannot read, cut and copy use the clipboard itself.
+[Sparkle](#updates) is built in but inactive until the first release. Its settings, its beliefs file
+and its log name the apps and websites you use. The log also records the Normal-mode commands you
+type, but never the text you insert or a command's operand, count or register (a unit test holds it
+to that), unless you turn on [text recording](#diagnostics); if mvim ever mistook the mode, some of
+your words could reach it as commands. mvim pastes through the clipboard into fields it cannot write,
+and restores the clipboard afterwards; in fields it cannot read, cut and copy use the clipboard
+itself.
 
 ## Reporting a bug
 
@@ -160,6 +164,7 @@ The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen and
 | `make run`       | Build, then launch the Debug `mvim.app`                              |
 | `make test`      | Run the pure engine's tests: no Xcode project, no permissions        |
 | `make test-pasteboard` | Run the pasteboard loan's tests on a private pasteboard: no permissions |
+| `make test-beliefs` | Run the beliefs file's tests in a temporary directory: no permissions |
 | `make release`   | Build Release, copy it to `.release/mvim.app`                        |
 | `make dist`      | `release`, then stage its update in `dist/`                          |
 | `make publish`   | `release`, then stage its update and release it on GitHub            |
@@ -202,12 +207,14 @@ mvim/
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
 │   │   │   Learn               #   simulated host, the learner's beliefs
-│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag, PasteboardLoan
+│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag, PasteboardLoan,
+│   │                           #   Beliefs (the beliefs file)
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
 │                               #   menu, the whole UI), its AppModel, and Updater (Sparkle)
 ├── Tests/
 │   ├── VimEngineTests/         # `make test`: the engine driven through Sim, as preconditions
-│   └── PasteboardTests/        # `make test-pasteboard`: the paste's loan on a private pasteboard
+│   ├── PasteboardTests/        # `make test-pasteboard`: the paste's loan on a private pasteboard
+│   └── BeliefsTests/           # `make test-beliefs`: the beliefs file in a temporary directory
 └── Resources/
     └── Assets.xcassets         # App icon + accent color (both still empty)
 ```
@@ -486,7 +493,7 @@ until it holds text, so the settles after it do not check the length.
 ### Learned beliefs
 
 mvim learns three kinds of answer about each kind of field — every field of one role on one site,
-or in one app natively — and keeps them in `fieldBeliefs`, a disposable cache:
+or in one app natively — and keeps them in `~/Library/Application Support/mvim/beliefs.json`:
 
 - **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and one
   settle failure blamed on one sets it off for that kind of field until the app updates. A pass
@@ -520,10 +527,48 @@ The bind line shows the read model as `offsets=<answer>/<source>`, where the sou
 stored answer that touched the field, with its provenance and whether it is `in-force`, `reopened`,
 `stale` (another engine's), `not-this-field` (a field with no children) or only `dates-engine`. In
 the menu, a demotion reads `✗ learned`, and so does **Read caret** while the field is `untrusted`;
-choosing On or Off for a row retires the belief behind it. To flush them all:
+choosing On or Off for a row retires the belief behind it, and removes it from the file.
+
+The file is JSON for you to read and edit, and **Open Beliefs File** in the menu opens it. A belief
+reads:
+
+```json
+{
+  "answer" : "broken",
+  "appVersion" : "153.0.6943.98",
+  "judgedUnder" : "textContent",
+  "provenance" : {
+    "build" : "1.0.0 (812)",
+    "learnedAt" : "2026-09-28T07:00:00Z",
+    "tag" : "e3.c7"
+  },
+  "question" : "insertText",
+  "rung" : "com.google.Chrome|linear.app|role:AXTextArea"
+}
+```
+
+- `rung` is the kind of field, as the bind line's `rung=` prints it: `<bundle ID>|<site>|role:<role>`
+  in web content, `<bundle ID>|role:<role>` natively.
+- `question` is a write (`writeSelection`, `insertText`), a key (`lineStartKey`, `lineEndKey`,
+  `documentStartKey`, `documentEndKey`, `wordKeys`, `paragraphKeys`) or `offsets`, and `answer` is
+  `broken` for a write or key, or `value`, `textContent` or `untrusted` for `offsets`.
+- A write or key answer holds only at `appVersion`, and only while the field's offsets answer is
+  `judgedUnder` (`value` when absent). An offsets answer holds only at `engineVersion`, an Electron
+  app's framework version, else at `appVersion`, and not while `anchor` is true.
+- `provenance` (mvim's build, when and by which command) and `tally` (the evidence counted) are for
+  reading. An entry needs `provenance`, even as `{}`.
+
+mvim rereads the file whenever it binds a field, so an edit applies when you next focus one, and it
+treats what it reads as learned: evidence can move an edited offsets answer, and an app update
+reopens an edited verdict. **On …** and **Off …** are the lasting choices, and they beat the file.
+mvim also rereads the file before it writes a lesson, so it keeps an edit you saved. A file it cannot
+read, such as bad JSON, a missing field or another schema, is ignored and never written over: the
+menu item reads **Open Beliefs File — unreadable, ignored**, and each bind logs a `beliefs-file`
+line in `learn` with the reason. Builds before the file kept the beliefs in the `fieldBeliefs`
+default, and move them to the file on first launch. To flush them all:
 
 ```sh
-defaults delete com.loom.mvim fieldBeliefs
+rm ~/Library/Application\ Support/mvim/beliefs.json
 ```
 
 ### Native word, paragraph and page keys

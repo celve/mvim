@@ -62,6 +62,9 @@ struct MvimApp: App {
                     }
                 }
             }
+            Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, ignored") {
+                model.openBeliefsFile()
+            }
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
                 .onAppear { model.refresh() }
@@ -175,6 +178,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published private(set) var capabilityRows: [CapabilityRow] = []
     @Published private(set) var clearActions: [ClearAction] = []
+    @Published private(set) var beliefsReadable = true
     @Published private(set) var loginItem: LoginItem.State = .off
     @Published var vimEnabled = true {
         didSet { controller.enabled = vimEnabled }
@@ -288,6 +292,11 @@ final class AppModel: ObservableObject {
         refreshCapabilityRows()
     }
 
+    func openBeliefsFile() {
+        beliefsReadable = controller.beliefsFileReads()
+        NSWorkspace.shared.open(controller.beliefsURL)
+    }
+
     /// The surface the menu configures: the bound field's when it belongs to
     /// the front app, otherwise the app alone.
     ///
@@ -317,6 +326,7 @@ final class AppModel: ObservableObject {
     /// badge is "—" until a field of the front app binds. An overlay's
     /// binding (other pid) must not label the front app's rows.
     private func refreshCapabilityRows() {
+        beliefsReadable = controller.beliefsFileReads()
         guard frontApp != nil else {
             capabilityRows = []
             clearActions = []

@@ -17,7 +17,7 @@ ifneq ($(and $(SIGN),$(filter dist publish,$(MAKECMDGOALS))),)
 $(error SIGN is for local builds: installs keep their grants only under project.yml's identity)
 endif
 
-.PHONY: all gen build run release dist publish clean distclean test test-pasteboard
+.PHONY: all gen build run release dist publish clean distclean test test-pasteboard test-beliefs
 
 all: build
 
@@ -41,6 +41,12 @@ test-pasteboard:
 	@mkdir -p $(DERIVED)
 	@swiftc -o $(DERIVED)/pasteboard-test Sources/Vim/Runtime/PasteboardLoan.swift Tests/PasteboardTests/main.swift
 	@$(DERIVED)/pasteboard-test
+
+# The beliefs file's reads, writes and migration, in a temporary directory and private defaults: no grant.
+test-beliefs:
+	@mkdir -p $(DERIVED)
+	@swiftc -o $(DERIVED)/beliefs-test $(VIM_PURE) $(CORE_PURE) Sources/Vim/Runtime/Beliefs.swift Tests/BeliefsTests/main.swift
+	@$(DERIVED)/beliefs-test
 
 gen:
 	xcodegen generate

@@ -111,8 +111,20 @@ public final class Controller {
     }
 
     public func forgetBelief(_ capability: Capability, at rung: String) {
-        Beliefs.forget(Question(capability), at: rung)
-        if capability == .readCaret { Beliefs.forget(.offsets, at: rung) }
+        do {
+            try Beliefs.shared.forget(Question(capability), at: rung)
+            if capability == .readCaret { try Beliefs.shared.forget(.offsets, at: rung) }
+        } catch {
+            Diag.beliefsFile(error)
+        }
+    }
+
+    /// The file the learned beliefs live in, for the menu to open.
+    public var beliefsURL: URL { Beliefs.shared.url }
+
+    /// Creates the file when missing; false while it does not read, so mvim neither applies nor writes it.
+    public func beliefsFileReads() -> Bool {
+        (try? Beliefs.shared.load()) != nil
     }
 
     /// The `InputHub` handler: returns the consume verdict. Zero AX on the
@@ -415,7 +427,10 @@ public final class Controller {
             for item in items { tallies[rung, default: Tally()].count(item) }
         }
         guard !teaching.isEmpty || observed.after != model.answer else { return }
-        var store = Beliefs.load()
+        guard var store = try? Beliefs.shared.load() else {
+            Diag.notLearned(epoch, seq, reason: "unreadable-beliefs", teaching)
+            return
+        }
         let stored = store
         let lesson = Learning.learn(
             store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
@@ -423,7 +438,13 @@ public final class Controller {
             overridden: { CapabilityConfig.resolve(binding.surface, capability: $0.rawValue).override != nil },
             provenance: Beliefs.provenance(tag: "e\(epoch).c\(seq)"), tally: tallies[rung] ?? Tally()
         )
-        if store != stored { Beliefs.save(store) }
+        if store != stored {
+            do {
+                try Beliefs.shared.save(store)
+            } catch {
+                Diag.beliefsFile(error)
+            }
+        }
         Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions)
         if lesson.republish { tracker.reresolveCapabilities() }
     }

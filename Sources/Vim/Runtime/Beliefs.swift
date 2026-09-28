@@ -1,38 +1,57 @@
 import Foundation
 
-/// A JSON string so `defaults read` stays legible; an unreadable store reads as empty.
-enum Beliefs {
-    static let storeKey = "fieldBeliefs"
+/// The store as a JSON file the user may edit; mvim rereads it at every resolve.
+struct Beliefs {
+    static let shared = Beliefs(url: .applicationSupportDirectory.appending(path: "mvim/beliefs.json"), defaults: .standard)
+    /// Where the store lived before the file, migrated once.
+    static let defaultsKey = "fieldBeliefs"
     /// The old learner's schema 2 demotions, migrated once.
     static let legacyKey = "learnedCapabilityPriors"
 
-    static func load() -> BeliefStore {
-        let defaults = UserDefaults.standard
-        if let json = defaults.string(forKey: storeKey) {
-            guard let data = json.data(using: .utf8),
-                  let store = try? JSONDecoder().decode(BeliefStore.self, from: data),
-                  store.schema == BeliefStore.currentSchema else { return BeliefStore() }
-            return store
-        }
-        guard let migrated = migrated() else { return BeliefStore() }
-        save(migrated)
-        defaults.removeObject(forKey: legacyKey)
-        return migrated
+    struct UnknownSchema: Error {
+        let schema: Int
     }
 
-    static func save(_ store: BeliefStore) {
-        guard !store.beliefs.isEmpty else {
-            UserDefaults.standard.removeObject(forKey: storeKey)
-            return
+    let url: URL
+    let defaults: UserDefaults
+
+    /// Creates the file on first use, from the store the defaults held.
+    func load() throws -> BeliefStore {
+        if let store = try read() { return store }
+        let store = migrated()
+        if (try? save(store)) != nil {
+            defaults.removeObject(forKey: Self.defaultsKey)
+            defaults.removeObject(forKey: Self.legacyKey)
         }
-        guard let data = try? JSONEncoder().encode(store), let json = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(json, forKey: storeKey)
+        return store
     }
 
-    static func forget(_ question: Question, at rung: String) {
-        var store = load()
+    /// Never writes over a file that does not read, so a broken edit waits for the user.
+    func save(_ store: BeliefStore) throws {
+        _ = try read()
+        // Through a symlink, so a file kept elsewhere stays linked.
+        let target = url.resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try (encoder.encode(store) + Data("\n".utf8)).write(to: target, options: .atomic)
+    }
+
+    func forget(_ question: Question, at rung: String) throws {
+        var store = try load()
         guard store.forget(question, at: rung) else { return }
-        save(store)
+        try save(store)
+    }
+
+    /// Nil when there is no file.
+    func read() throws -> BeliefStore? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let decoder = JSONDecoder()
+        // Deleting the last entry leaves a trailing comma.
+        decoder.allowsJSON5 = true
+        let store = try decoder.decode(BeliefStore.self, from: Data(contentsOf: url))
+        guard store.schema == BeliefStore.currentSchema else { throw UnknownSchema(schema: store.schema) }
+        return store
     }
 
     static func provenance(tag: String) -> Provenance {
@@ -56,9 +75,16 @@ enum Beliefs {
         let records: [Record]
     }
 
-    private static func migrated() -> BeliefStore? {
-        guard let json = UserDefaults.standard.string(forKey: legacyKey), let data = json.data(using: .utf8),
-              let legacy = try? JSONDecoder().decode(Legacy.self, from: data), legacy.schema == 2 else { return nil }
+    private func migrated() -> BeliefStore {
+        if let json = defaults.string(forKey: Self.defaultsKey) {
+            guard let store = try? JSONDecoder().decode(BeliefStore.self, from: Data(json.utf8)),
+                  store.schema == BeliefStore.currentSchema else { return BeliefStore() }
+            return store
+        }
+        guard let json = defaults.string(forKey: Self.legacyKey),
+              let legacy = try? JSONDecoder().decode(Legacy.self, from: Data(json.utf8)), legacy.schema == 2 else {
+            return BeliefStore()
+        }
         return BeliefStore(demotions: legacy.records.map { ($0.rung, $0.version, $0.capability) })
     }
 }

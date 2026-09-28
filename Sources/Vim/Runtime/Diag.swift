@@ -147,6 +147,11 @@ enum Diag {
         }
     }
 
+    /// The beliefs file would not read or write; one that does not read resolves as none.
+    static func beliefsFile(_ error: Error) {
+        learn.error("beliefs-file \(String(describing: error), privacy: .public)")
+    }
+
     /// Each reason is a way the probe-and-learn system can be silently inert.
     static func notLearned(_ epoch: UInt64, _ seq: UInt64, reason: String, _ items: [Evidence]) {
         for item in items {

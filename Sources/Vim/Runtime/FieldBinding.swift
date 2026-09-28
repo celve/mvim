@@ -37,7 +37,14 @@ public enum FieldProber {
             let override = resolution.override.map { $0 == .on ? ConfigChoice.Override.on : .off }
             return (capability, ConfigChoice(override: override, seededOff: resolution.isSeededOff))
         })
-        let beliefs = Beliefs.load().resolve(
+        let store: BeliefStore
+        do {
+            store = try Beliefs.shared.load()
+        } catch {
+            Diag.beliefsFile(error)
+            store = BeliefStore()
+        }
+        let beliefs = store.resolve(
             rungs: surface.rungs, rung: surface.roleRung, versions: versions, chromium: chromium,
             children: Snapshotter.hasParagraphs(element), userPinsOffsets: choices[.readCaret]?.override != nil
         )

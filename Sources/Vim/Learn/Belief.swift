@@ -151,7 +151,7 @@ public extension OffsetsAnswer {
 
 // MARK: - The store
 
-/// One belief per rung and question; a disposable cache, never config.
+/// One belief per rung and question; a user's edit is learned state too, never config.
 public struct BeliefStore: Codable, Equatable, Sendable {
     public static let currentSchema = 3
 
