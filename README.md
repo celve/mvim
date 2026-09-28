@@ -73,7 +73,7 @@ per app:
   without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
 
 **Capabilities in _App_** shows what mvim can do in the current field and lets you override it, and
-**Open Beliefs File** opens what mvim has learned about fields (see
+**Open Beliefs File** opens the file that keeps those choices and what mvim has learned (see
 [Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
 both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
@@ -119,11 +119,10 @@ also learns how a field counts caret positions: where the field's reads stop agr
 stops trusting the caret (**Read caret** `✗ learned`) and treats the field as one it cannot read,
 and a capability switched off while mvim misread a field comes back once it counts that field anew.
 **On …** and **Off …** override what mvim detected or learned, for one field, fields like it, a site
-or the whole app. What mvim learned is also a file you can edit: **Open Beliefs File** opens it,
-removing an entry forgets it, and deleting the file forgets everything learned (see
-[Learned beliefs](#learned-beliefs)). **App's word, paragraph & page keys**, off by default, hands
-`w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to the app's own keys: see
-[Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
+or the whole app. Those choices and what mvim learned are kept in a file you can edit as well:
+**Open Beliefs File** opens it (see [The beliefs file](#the-beliefs-file)). **App's word,
+paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to the
+app's own keys: see [Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
 
 ## Privacy
 
@@ -493,7 +492,7 @@ until it holds text, so the settles after it do not check the length.
 ### Learned beliefs
 
 mvim learns three kinds of answer about each kind of field — every field of one role on one site,
-or in one app natively — and keeps them in `~/Library/Application Support/mvim/beliefs.json`:
+or in one app natively — and keeps them in the [beliefs file](#the-beliefs-file):
 
 - **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and one
   settle failure blamed on one sets it off for that kind of field until the app updates. A pass
@@ -527,45 +526,70 @@ The bind line shows the read model as `offsets=<answer>/<source>`, where the sou
 stored answer that touched the field, with its provenance and whether it is `in-force`, `reopened`,
 `stale` (another engine's), `not-this-field` (a field with no children) or only `dates-engine`. In
 the menu, a demotion reads `✗ learned`, and so does **Read caret** while the field is `untrusted`;
-choosing On or Off for a row retires the belief behind it, and removes it from the file.
+choosing On or Off for a row retires the belief behind it.
 
-The file is JSON for you to read and edit, and **Open Beliefs File** in the menu opens it. A belief
-reads:
+### The beliefs file
+
+`~/Library/Application Support/mvim/beliefs.json` keeps the choices made with **On …** and **Off …**
+and the [learned beliefs](#learned-beliefs). It is JSON for you to read and edit, and **Open Beliefs
+File** in the menu opens it:
 
 ```json
 {
-  "answer" : "broken",
-  "appVersion" : "153.0.6943.98",
-  "judgedUnder" : "textContent",
-  "provenance" : {
-    "build" : "1.0.0 (812)",
-    "learnedAt" : "2026-09-28T07:00:00Z",
-    "tag" : "e3.c7"
+  "beliefs" : [
+    {
+      "answer" : "broken",
+      "appVersion" : "153.0.6943.98",
+      "judgedUnder" : "textContent",
+      "provenance" : {
+        "build" : "1.0.0 (812)",
+        "learnedAt" : "2026-09-28T07:00:00Z",
+        "tag" : "e3.c7"
+      },
+      "question" : "insertText",
+      "rung" : "com.google.Chrome|linear.app|role:AXTextArea"
+    }
+  ],
+  "overrides" : {
+    "com.tinyspeck.slackmacgap" : {
+      "nativeMotions" : "on"
+    }
   },
-  "question" : "insertText",
-  "rung" : "com.google.Chrome|linear.app|role:AXTextArea"
+  "schema" : 3
 }
 ```
 
-- `rung` is the kind of field, as the bind line's `rung=` prints it: `<bundle ID>|<site>|role:<role>`
-  in web content, `<bundle ID>|role:<role>` natively.
-- `question` is a write (`writeSelection`, `insertText`), a key (`lineStartKey`, `lineEndKey`,
-  `documentStartKey`, `documentEndKey`, `wordKeys`, `paragraphKeys`) or `offsets`, and `answer` is
-  `broken` for a write or key, or `value`, `textContent` or `untrusted` for `offsets`.
-- A write or key answer holds only at `appVersion`, and only while the field's offsets answer is
-  `judgedUnder` (`value` when absent). An offsets answer holds only at `engineVersion`, an Electron
-  app's framework version, else at `appVersion`, and not while `anchor` is true.
-- `provenance` (mvim's build, when and by which command) and `tally` (the evidence counted) are for
-  reading. An entry needs `provenance`, even as `{}`.
+- `overrides` maps a rung, then a capability, to `on` or `off`, as the menu's On and Off write them.
+  A rung is `<bundle ID>` for an app, `<bundle ID>|<site>` for a site in it, `…|role:<role>` for
+  fields like one (natively `<bundle ID>|role:<role>`) and `…|id:<identifier>` for one field; the
+  bind line's `rung=` prints a field's role rung.
+- The capabilities, by menu row: `readText`, `readLength`, `readCaret`, `readSelectedText` (the
+  Read rows), `writeSelection` (Set selection), `insertText` (Replace text), `drawCursor`,
+  `wholeDocument`, `fieldIsSession` (New field starts a session), `lineStartKey`, `lineEndKey`,
+  `documentStartKey`, `documentEndKey`, `nativeMotions` (App's word, paragraph & page keys),
+  `wordKeys` and `paragraphKeys`.
+- Each of `beliefs` is one learned answer. `question` is a write (`writeSelection`, `insertText`), a
+  key (`lineStartKey`, `lineEndKey`, `documentStartKey`, `documentEndKey`, `wordKeys`,
+  `paragraphKeys`) or `offsets`, and `answer` is `broken` for a write or key, or `value`,
+  `textContent` or `untrusted` for `offsets`. A write or key answer holds only at `appVersion`, and
+  only while the field's offsets answer is `judgedUnder` (`value` when absent). An offsets answer
+  holds only at `engineVersion`, an Electron app's framework version, else at `appVersion`, and not
+  while `anchor` is true. `provenance` (mvim's build, when, and by which command) and `tally` (the
+  evidence counted) are for reading; an entry needs `provenance`, even as `{}`.
 
-mvim rereads the file whenever it binds a field, so an edit applies when you next focus one, and it
-treats what it reads as learned: evidence can move an edited offsets answer, and an app update
-reopens an edited verdict. **On …** and **Off …** are the lasting choices, and they beat the file.
-mvim also rereads the file before it writes a lesson, so it keeps an edit you saved. A file it cannot
-read, such as bad JSON, a missing field or another schema, is ignored and never written over: the
-menu item reads **Open Beliefs File — unreadable, ignored**, and each bind logs a `beliefs-file`
-line in `learn` with the reason. Builds before the file kept the beliefs in the `fieldBeliefs`
-default, and move them to the file on first launch. To flush them all:
+mvim rereads the file whenever it binds a field, so an edit applies when you next focus one. An
+override you write lasts, as one chosen in the menu does, and beats a belief. A belief you write is
+treated as learned: evidence can move an offsets answer, and an app update reopens a verdict. The
+menu writes the file too, and mvim rereads it before each write, so it keeps an edit you saved.
+
+A file mvim cannot use applies nothing, neither overrides nor beliefs, and is never written over:
+bad JSON, a missing key, another `schema`, an answer its question cannot take, or an override other
+than `on` or `off`. The menu item then reads **Open Beliefs File — unreadable, ignored**, each bind
+logs a `beliefs-file` line in `learn` with the reason, and neither lessons nor menu choices are
+saved until the file reads again. A question or capability name mvim does not know is
+kept and ignored. Builds before the file kept overrides and beliefs in the `capabilityOverrides` and
+`fieldBeliefs` defaults, which move to the file on first launch. To forget what mvim learned, empty
+`beliefs`; deleting the file drops your choices as well:
 
 ```sh
 rm ~/Library/Application\ Support/mvim/beliefs.json

@@ -268,32 +268,23 @@ final class AppModel: ObservableObject {
         controller.refreshPolicy()
     }
 
-    /// `rung` of nil is Auto: clear the atom everywhere. Otherwise the write
-    /// also clears every narrower rung, so the checkmark that lands is the one
-    /// that resolves — the `Prefs.setPolicy` invariant, kept here too.
+    /// `rung` of nil is Auto, cleared at every rung.
     func setCapabilityOverride(
         _ override: CapabilityConfig.Override?, at rung: String?, for capability: Capability
     ) {
-        let surface = menuSurface
-        CapabilityConfig.setUserOverride(
-            override, at: rung, on: surface, capability: capability.rawValue
-        )
-        // An override retires the belief behind the row, so returning to Auto does not revive it.
-        if override != nil, let rung = surface.roleRung {
-            controller.forgetBelief(capability, at: rung)
-        }
+        controller.setOverride(override, at: rung, on: menuSurface, for: capability)
         controller.refreshCapabilities()
         refreshCapabilityRows()
     }
 
     func clearOverrides(at rung: String) {
-        CapabilityConfig.clearOverrides(atAndBelow: rung, on: menuSurface)
+        controller.clearOverrides(atAndBelow: rung, on: menuSurface)
         controller.refreshCapabilities()
         refreshCapabilityRows()
     }
 
     func openBeliefsFile() {
-        beliefsReadable = controller.beliefsFileReads()
+        beliefsReadable = controller.fileOverrides() != nil
         NSWorkspace.shared.open(controller.beliefsURL)
     }
 
@@ -326,7 +317,8 @@ final class AppModel: ObservableObject {
     /// badge is "—" until a field of the front app binds. An overlay's
     /// binding (other pid) must not label the front app's rows.
     private func refreshCapabilityRows() {
-        beliefsReadable = controller.beliefsFileReads()
+        let overrides = controller.fileOverrides()
+        beliefsReadable = overrides != nil
         guard frontApp != nil else {
             capabilityRows = []
             clearActions = []
@@ -337,7 +329,7 @@ final class AppModel: ObservableObject {
         let report = controller.boundSurface?.bundleID == frontApp?.bundleID
             ? controller.capabilityReport : nil
         let config = CapabilityConfig.resolveAll(
-            surface, capabilities: Capability.allCases.map(\.rawValue)
+            surface, capabilities: Capability.allCases.map(\.rawValue), overrides: overrides ?? [:]
         )
 
         capabilityRows = Capability.allCases.map { capability in

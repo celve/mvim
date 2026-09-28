@@ -1,57 +1,88 @@
 import Foundation
 
-/// The store as a JSON file the user may edit; mvim rereads it at every resolve.
+/// The user's overrides and the learned beliefs, in a JSON file the user may edit; mvim rereads it at every resolve.
 struct Beliefs {
     static let shared = Beliefs(url: .applicationSupportDirectory.appending(path: "mvim/beliefs.json"), defaults: .standard)
-    /// Where the store lived before the file, migrated once.
-    static let defaultsKey = "fieldBeliefs"
-    /// The old learner's schema 2 demotions, migrated once.
+    /// Where the menu kept overrides before the file.
+    static let overridesKey = "capabilityOverrides"
+    /// Where the beliefs lived before the file.
+    static let beliefsKey = "fieldBeliefs"
+    /// The old learner's schema 2 demotions.
     static let legacyKey = "learnedCapabilityPriors"
 
-    struct UnknownSchema: Error {
-        let schema: Int
+    /// Overrides are rung → capability → `on` or `off`, as `CapabilityConfig` reads them.
+    struct Contents: Codable, Equatable {
+        var schema = BeliefStore.currentSchema
+        var overrides: [String: [String: String]] = [:]
+        var beliefs: [Belief] = []
+
+        var store: BeliefStore {
+            get { BeliefStore(beliefs: beliefs) }
+            set { beliefs = newValue.beliefs }
+        }
+
+        /// An override retires the belief behind its row, so returning to Auto does not revive it.
+        mutating func retire(_ capability: Capability, at rung: String) {
+            store.forget(Question(capability), at: rung)
+            if capability == .readCaret { store.forget(.offsets, at: rung) }
+        }
+    }
+
+    struct Unusable: Error, CustomStringConvertible {
+        let description: String
     }
 
     let url: URL
     let defaults: UserDefaults
 
-    /// Creates the file on first use, from the store the defaults held.
-    func load() throws -> BeliefStore {
-        if let store = try read() { return store }
-        let store = migrated()
-        if (try? save(store)) != nil {
-            defaults.removeObject(forKey: Self.defaultsKey)
-            defaults.removeObject(forKey: Self.legacyKey)
-        }
-        return store
+    /// With no file, writes one from what the defaults held, which stay until it is written.
+    func load() throws -> Contents {
+        if let contents = try read() { return contents }
+        let contents = migrated()
+        try save(contents)
+        for key in [Self.overridesKey, Self.beliefsKey, Self.legacyKey] { defaults.removeObject(forKey: key) }
+        return contents
     }
 
     /// Never writes over a file that does not read, so a broken edit waits for the user.
-    func save(_ store: BeliefStore) throws {
+    func save(_ contents: Contents) throws {
         _ = try read()
         // Through a symlink, so a file kept elsewhere stays linked.
         let target = url.resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try (encoder.encode(store) + Data("\n".utf8)).write(to: target, options: .atomic)
+        try (encoder.encode(contents) + Data("\n".utf8)).write(to: target, options: .atomic)
     }
 
-    func forget(_ question: Question, at rung: String) throws {
-        var store = try load()
-        guard store.forget(question, at: rung) else { return }
-        try save(store)
+    func update(_ change: (inout Contents) -> Void) throws {
+        var contents = try load()
+        let before = contents
+        change(&contents)
+        if contents != before { try save(contents) }
     }
 
     /// Nil when there is no file.
-    func read() throws -> BeliefStore? {
+    func read() throws -> Contents? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         let decoder = JSONDecoder()
         // Deleting the last entry leaves a trailing comma.
         decoder.allowsJSON5 = true
-        let store = try decoder.decode(BeliefStore.self, from: Data(contentsOf: url))
-        guard store.schema == BeliefStore.currentSchema else { throw UnknownSchema(schema: store.schema) }
-        return store
+        let contents = try decoder.decode(Contents.self, from: Data(contentsOf: url))
+        guard contents.schema == BeliefStore.currentSchema else {
+            throw Unusable(description: "schema \(contents.schema), not \(BeliefStore.currentSchema)")
+        }
+        // A name this build does not know is kept and ignored; a value no name takes is a typo.
+        for belief in contents.beliefs where !belief.answerFits {
+            throw Unusable(description: "\(belief.question.rawValue) cannot be \(belief.answer) at \(belief.rung)")
+        }
+        for (rung, choices) in contents.overrides {
+            // `CapabilityConfig.Override`, which LoomCore keeps out of this file's reach.
+            for (capability, value) in choices where value != "on" && value != "off" {
+                throw Unusable(description: "\(capability) cannot be \(value) at \(rung)")
+            }
+        }
+        return contents
     }
 
     static func provenance(tag: String) -> Provenance {
@@ -75,8 +106,13 @@ struct Beliefs {
         let records: [Record]
     }
 
-    private func migrated() -> BeliefStore {
-        if let json = defaults.string(forKey: Self.defaultsKey) {
+    private func migrated() -> Contents {
+        let overrides = defaults.dictionary(forKey: Self.overridesKey) as? [String: [String: String]] ?? [:]
+        return Contents(overrides: overrides, beliefs: migratedStore().beliefs)
+    }
+
+    private func migratedStore() -> BeliefStore {
+        if let json = defaults.string(forKey: Self.beliefsKey) {
             guard let store = try? JSONDecoder().decode(BeliefStore.self, from: Data(json.utf8)),
                   store.schema == BeliefStore.currentSchema else { return BeliefStore() }
             return store
@@ -86,5 +122,15 @@ struct Beliefs {
             return BeliefStore()
         }
         return BeliefStore(demotions: legacy.records.map { ($0.rung, $0.version, $0.capability) })
+    }
+}
+
+private extension Belief {
+    var answerFits: Bool {
+        switch question {
+        case .write, .key: return answer == Belief.broken
+        case .offsets: return offsetsAnswer != nil
+        case .unknown: return true
+        }
     }
 }
