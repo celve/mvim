@@ -120,13 +120,13 @@ final class AppModel: ObservableObject {
     enum Icon {
         case off, permissionMissing, idle, insert, normal, visual, replace
 
-        init(vimEnabled: Bool, permitted: Bool, mode: VimState.Mode?) {
+        init(vimEnabled: Bool, permitted: Bool, secureInput: Bool, mode: VimState.Mode?) {
             if !vimEnabled {
                 self = .off
             } else if !permitted {
                 self = .permissionMissing
             } else {
-                switch mode {
+                switch secureInput ? nil : mode {
                 case nil: self = .idle
                 case .insert?: self = .insert
                 case .normal?: self = .normal
@@ -189,6 +189,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
+    /// The tracker unbinds under Secure Input only when it next resolves; the icon need not wait.
+    @Published private(set) var secureInput = false
     @Published private(set) var frontApp: FrontApp?
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published private(set) var capabilityRows: [CapabilityRow] = []
@@ -205,7 +207,10 @@ final class AppModel: ObservableObject {
     }
 
     var icon: Icon {
-        Icon(vimEnabled: vimEnabled, permitted: accessibilityTrusted && tapInstalled, mode: mode)
+        Icon(
+            vimEnabled: vimEnabled, permitted: accessibilityTrusted && tapInstalled,
+            secureInput: secureInput, mode: mode
+        )
     }
 
     private let controller: Controller
@@ -242,17 +247,19 @@ final class AppModel: ObservableObject {
         ) { note in
             MainActor.assumeIsolated { [weak self] in self?.frontAppChanged(note) }
         }
-        // No documented notice marks an Accessibility grant or revoke, so the icon polls for one.
+        // Nothing documented announces an Accessibility change or Secure Input, so the icon polls both.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-            MainActor.assumeIsolated { [weak self] in self?.recheckAccessibility() }
+            MainActor.assumeIsolated { [weak self] in self?.recheckSystemState() }
         }.tolerance = 1
         refresh()
     }
 
     /// Assigns only a change: every `@Published` set, equal or not, re-evaluates the whole menu.
-    private func recheckAccessibility() {
+    private func recheckSystemState() {
         let trusted = AX.ensureTrusted(prompt: false)
         if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+        let secure = SecureInput.isActive
+        if secure != secureInput { secureInput = secure }
     }
 
     private func frontAppChanged(_ note: Notification) {
@@ -265,7 +272,7 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() {
-        accessibilityTrusted = AX.ensureTrusted(prompt: false)
+        recheckSystemState()
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
         loginItem = LoginItem.state
