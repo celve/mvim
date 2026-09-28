@@ -49,10 +49,12 @@ key to the right of P, whatever the keyboard layout. By default **Esc stays the 
 cancels and dialogs. Choose **Esc** under **Normal Mode Key** in the menu and Esc does what ⌃[ does,
 except in Normal mode with nothing half-typed, where it still goes to the app: press Esc twice to
 close a dialog, a popup or Spotlight from a field. ⌃[ keeps working either way. The menu-bar icon
-shows the mode: a keyboard while mvim is not in a field, otherwise **i**, **n** or **v** in a square.
-Where mvim can set the selection, Normal mode also draws a block cursor. Nothing shows a half-typed
-command, or a `/` search as you type it. Moving between the blocks of one document, as in Notion,
-keeps the mode you were in.
+shows the mode as a letter in a square: an outlined **i** or **r** in Insert or Replace mode, where
+keys type, and a filled **n** or **v** in Normal or Visual mode, where they are commands. A dashed
+square means mvim is not working in a field, a slashed one that **Vim Mode** is off, and **!** that
+Accessibility is not granted or the input tap is not running. Where mvim can set the selection,
+Normal mode also draws a block cursor. Nothing shows a half-typed command, or a `/` search as you
+type it. Moving between the blocks of one document, as in Notion, keeps the mode you were in.
 
 In Insert mode mvim takes only ⌃[, and Esc if you chose it. In Normal and Visual mode apps still keep
 every ⌘ and ⌥ combination, Esc unless you chose it, Home, End, Page Up and Page Down, the function

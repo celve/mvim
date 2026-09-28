@@ -88,7 +88,7 @@ struct MvimApp: App {
             Divider()
             Button("Quit mvim") { NSApplication.shared.terminate(nil) }
         } label: {
-            Image(systemName: model.mode.symbolName)
+            Image(systemName: model.icon.symbolName)
         }
     }
 }
@@ -116,18 +116,36 @@ final class AppModel: ObservableObject {
         let bundleID: String
     }
 
-    /// The menu-bar icon IS the mode display — forced fields have no block
-    /// cursor, so this is the only telltale.
-    enum ModeIndicator {
-        case off, insert, normal, visual, replace
+    /// The menu-bar icon: the only mode display where mvim draws no block cursor.
+    enum Icon {
+        case off, permissionMissing, idle, insert, normal, visual, replace
 
+        init(vimEnabled: Bool, permitted: Bool, secureInput: Bool, mode: VimState.Mode?) {
+            if !vimEnabled {
+                self = .off
+            } else if !permitted {
+                self = .permissionMissing
+            } else {
+                switch secureInput ? nil : mode {
+                case nil: self = .idle
+                case .insert?: self = .insert
+                case .normal?: self = .normal
+                case .visual?: self = .visual
+                case .replace?: self = .replace
+                }
+            }
+        }
+
+        /// Outlined where keys type, filled where they are commands.
         var symbolName: String {
             switch self {
-            case .off: return "keyboard"
-            case .insert: return "i.square.fill"
+            case .off: return "square.slash"
+            case .permissionMissing: return "exclamationmark.square"
+            case .idle: return "square.dashed"
+            case .insert: return "i.square"
             case .normal: return "n.square.fill"
             case .visual: return "v.square.fill"
-            case .replace: return "r.square.fill"
+            case .replace: return "r.square"
             }
         }
     }
@@ -167,10 +185,12 @@ final class AppModel: ObservableObject {
         case auto, on, off
     }
 
-    @Published private(set) var mode: ModeIndicator = .off
+    @Published private(set) var mode: VimState.Mode?
     @Published private(set) var accessibilityTrusted = false
     @Published private(set) var inputMonitoringGranted = false
     @Published private(set) var tapInstalled = false
+    /// The tracker unbinds under Secure Input only when it next resolves; the icon need not wait.
+    @Published private(set) var secureInput = false
     @Published private(set) var frontApp: FrontApp?
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
     @Published private(set) var capabilityRows: [CapabilityRow] = []
@@ -184,6 +204,13 @@ final class AppModel: ObservableObject {
             Prefs.normalModeKey = normalModeKey
             controller.escapeEngages = normalModeKey == .escape
         }
+    }
+
+    var icon: Icon {
+        Icon(
+            vimEnabled: vimEnabled, permitted: accessibilityTrusted && tapInstalled,
+            secureInput: secureInput, mode: mode
+        )
     }
 
     private let controller: Controller
@@ -200,16 +227,7 @@ final class AppModel: ObservableObject {
         let controller = Controller()
         self.controller = controller
         controller.escapeEngages = normalModeKey == .escape
-        controller.onModeChange = { [weak self] mode in
-            guard let self else { return }
-            switch mode {
-            case nil: self.mode = .off
-            case .insert?: self.mode = .insert
-            case .normal?: self.mode = .normal
-            case .visual?: self.mode = .visual
-            case .replace?: self.mode = .replace
-            }
-        }
+        controller.onModeChange = { [weak self] mode in self?.mode = mode }
         // Its own channel, deliberately: mode changes do NOT ride every rebind
         // — publishMode early-returns when the indicator is unchanged, so
         // moving between two Normal-mode fields fired nothing and the rows kept
@@ -229,7 +247,19 @@ final class AppModel: ObservableObject {
         ) { note in
             MainActor.assumeIsolated { [weak self] in self?.frontAppChanged(note) }
         }
+        // Nothing documented announces an Accessibility change or Secure Input, so the icon polls both.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            MainActor.assumeIsolated { [weak self] in self?.recheckSystemState() }
+        }.tolerance = 1
         refresh()
+    }
+
+    /// Assigns only a change: every `@Published` set, equal or not, re-evaluates the whole menu.
+    private func recheckSystemState() {
+        let trusted = AX.ensureTrusted(prompt: false)
+        if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+        let secure = SecureInput.isActive
+        if secure != secureInput { secureInput = secure }
     }
 
     private func frontAppChanged(_ note: Notification) {
@@ -242,7 +272,7 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() {
-        accessibilityTrusted = AX.ensureTrusted(prompt: false)
+        recheckSystemState()
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
         loginItem = LoginItem.state
