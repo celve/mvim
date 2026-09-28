@@ -160,6 +160,7 @@ public enum Snapshotter {
         var breaks = interpreted.breaks
         var emptyParagraph = interpreted.emptyParagraph
         var gap = 0
+        var holdsEmptyParagraphs = false
         var memo: EmptyParagraphs.Memo?
         // After the learner, which judges the reads as the field gave them.
         if answer == .textContent, let value = text, let aligned = breaks, let marked, let side,
@@ -177,6 +178,7 @@ public enum Snapshotter {
                 breaks = restored.breaks
                 selection = resolved
                 gap = restored.gap
+                holdsEmptyParagraphs = !found.isEmpty
                 let model = TextModel(restored.text)
                 // A caret on an empty line is in a paragraph the model already holds.
                 let onEmptyLine = resolved.isEmpty && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
@@ -197,7 +199,8 @@ public enum Snapshotter {
             breaks: breaks,
             caretInEmptyParagraph: emptyParagraph,
             textlessLeaves: interpreted.textlessLeaves,
-            valueGap: gap
+            valueGap: gap,
+            holdsEmptyParagraphs: holdsEmptyParagraphs
         )
         return Reading(
             snapshot: snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: fieldReads, emptyParagraphs: memo

@@ -355,8 +355,34 @@ public enum AX {
 
     /// Plain offsets in `markers` of the `<br>`s of Chromium's line-starting empty blocks; nil past `budget` reads (LIN-1612).
     public static func emptyParagraphs(of element: AXUIElement, markers: String, budget: Int) -> (found: [Int], reads: Int)? {
-        var discovery = EmptyParagraphDiscovery(element: element, markers: markers, budget: budget)
-        return discovery.run().map { ($0, discovery.reads) }
+        let raw = Array(markers.utf16)
+        let plain = raw.filter { $0 != MarkerText.objectReplacement }
+        guard plain.contains(10) else { return ([], 0) }
+        guard let field = fieldMarkers(of: element), let blocks = children(of: element) else { return nil }
+        // Marker lengths count each U+FFFC before them, plain offsets do not.
+        var objects = [0]
+        objects.reserveCapacity(raw.count + 1)
+        for unit in raw { objects.append(objects[objects.count - 1] + (unit == MarkerText.objectReplacement ? 1 : 0)) }
+        var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: { node in
+            let reads = attributes([kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute], of: node)
+            guard (0..<3).allSatisfy({ absentOrRead(reads, $0) }) else { return nil }
+            return EmptyBlockScan.Block(role: reads.string(0), subrole: reads.string(1), children: reads.elements(2) ?? [])
+        }, offset: { node, end in
+            guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else { return nil }
+            let marker = end ? AXTextMarkerRangeCopyEndMarker(range) : AXTextMarkerRangeCopyStartMarker(range)
+            // Anchored at the later end, as `text(from:to:)` reads.
+            let span = AXTextMarkerRangeCreate(kCFAllocatorDefault, marker, field.start)
+            guard let length = parameterized("AXLengthForTextMarkerRange", span, of: element) as? Int,
+                  objects.indices.contains(length) else { return nil }
+            return length - objects[length]
+        })
+        return scan.run(blocks: blocks, plain: plain).map { ($0, scan.reads + 2) }
+    }
+
+    /// A slot that read, or whose attribute the element lacks; any other failure is a failed read.
+    private static func absentOrRead(_ reads: AttributeBatch, _ index: Int) -> Bool {
+        guard let error = reads.error(index) else { return true }
+        return error == .noValue || error == .attributeUnsupported
     }
 
     /// The field's `AXValue` without its paragraph breaks.
@@ -465,118 +491,6 @@ public enum AX {
             return nil
         }
         return ref
-    }
-
-    /// Each `\n` of the marker text is a `<br>`: an empty block's, or a soft break's in a block with text.
-    private struct EmptyParagraphDiscovery {
-        let element: AXUIElement
-        let budget: Int
-        let plain: [UInt16]
-        /// U+FFFCs before each raw offset: marker lengths count them, plain offsets do not.
-        let objects: [Int]
-        private(set) var reads = 0
-        private var fieldStart: AXTextMarker?
-
-        init(element: AXUIElement, markers: String, budget: Int) {
-            self.element = element
-            self.budget = budget
-            let raw = Array(markers.utf16)
-            plain = raw.filter { $0 != MarkerText.objectReplacement }
-            var objects = [0]
-            objects.reserveCapacity(raw.count + 1)
-            for unit in raw { objects.append(objects[objects.count - 1] + (unit == MarkerText.objectReplacement ? 1 : 0)) }
-            self.objects = objects
-        }
-
-        enum Verdict {
-            case line
-            /// An empty list item's paragraph, which shares its marker's line.
-            case item
-            case text(end: Int)
-        }
-
-        mutating func run() -> [Int]? {
-            let candidates = plain.indices.filter { plain[$0] == 10 }
-            guard !candidates.isEmpty else { return [] }
-            guard spend(2), let field = AX.fieldMarkers(of: element), let blocks = AX.children(of: element),
-                  reads + blocks.count <= budget else { return nil }
-            fieldStart = field.start
-            var found: [Int] = []
-            for block in blocks {
-                guard spend(1) else { return nil }
-                let reads = AX.attributes([kAXSubroleAttribute, kAXChildrenAttribute], of: block)
-                guard reads.string(0) == "AXEmptyGroup", reads.elements(1)?.isEmpty ?? true else { continue }
-                guard let offset = offset(of: block, end: false) else { return nil }
-                if plain.indices.contains(offset), plain[offset] == 10 { found.append(offset) }
-            }
-            // The rest are soft breaks or blocks nested in a quote, a table or a list.
-            let known = Set(found)
-            var covered = 0
-            for b in candidates where b >= covered && !known.contains(b) {
-                switch classify(b, in: blocks) {
-                case nil: return nil
-                case .line?: found.append(b)
-                case .item?: break
-                case .text(let end)?: covered = end
-                }
-            }
-            return found.sorted()
-        }
-
-        /// Descends through the children holding plain offset `b`, found by binary search on their starts.
-        mutating func classify(_ b: Int, in blocks: [AXUIElement]) -> Verdict? {
-            var siblings = blocks
-            for _ in 0..<16 {
-                var low = 0
-                var high = siblings.count - 1
-                var hit: (index: Int, start: Int)?
-                while low <= high {
-                    let middle = (low + high) / 2
-                    guard let start = offset(of: siblings[middle], end: false) else { return nil }
-                    if start <= b {
-                        hit = (middle, start)
-                        low = middle + 1
-                    } else {
-                        high = middle - 1
-                    }
-                }
-                guard let hit else { return .text(end: b + 1) }
-                let block = siblings[hit.index]
-                guard spend(1) else { return nil }
-                let reads = AX.attributes([kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute], of: block)
-                let children = reads.elements(2) ?? []
-                if reads.string(1) == "AXEmptyGroup", children.isEmpty {
-                    guard hit.start == b else { return .text(end: b + 1) }
-                    guard hit.index > 0 else { return .line }
-                    guard spend(1) else { return nil }
-                    return AX.role(of: siblings[hit.index - 1]) == "AXListMarker" ? .item : .line
-                }
-                if reads.string(0) == kAXStaticTextRole || children.isEmpty {
-                    guard let end = offset(of: block, end: true) else { return nil }
-                    return .text(end: max(end, b + 1))
-                }
-                siblings = children
-            }
-            return nil
-        }
-
-        /// By `AXLengthForTextMarkerRange`, which moves no string, anchored at the later end as `text(from:to:)` is.
-        mutating func offset(of block: AXUIElement, end: Bool) -> Int? {
-            guard spend(2), let fieldStart,
-                  let range = AX.textMarkerRange(AX.parameterized("AXTextMarkerRangeForUIElement", block, of: element)) else {
-                return nil
-            }
-            let marker = end ? AXTextMarkerRangeCopyEndMarker(range) : AXTextMarkerRangeCopyStartMarker(range)
-            let span = AXTextMarkerRangeCreate(kCFAllocatorDefault, marker, fieldStart)
-            guard let length = AX.parameterized("AXLengthForTextMarkerRange", span, of: element) as? Int,
-                  objects.indices.contains(length) else { return nil }
-            return length - objects[length]
-        }
-
-        mutating func spend(_ count: Int) -> Bool {
-            reads += count
-            return reads <= budget
-        }
     }
 
     // MARK: - Probes (settable flags: the write capabilities' claims)

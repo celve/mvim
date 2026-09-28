@@ -494,8 +494,9 @@ newer and is kept.
 
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
-until it holds text, so the settles after it do not check the length; nor do those after an edit
-that empties a paragraph or types into an empty one.
+until it holds text, so the settles after it do not check the length. In a field where mvim found
+empty paragraphs, an edit that empties a line or types into an empty one changes which of them
+`AXValue` shows, so the settles after it check neither the length nor the paragraph side.
 
 ### Learned beliefs
 

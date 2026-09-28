@@ -44,6 +44,9 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// How much longer `text` is than `AXValue`, for the empty paragraphs put back as lines (LIN-1612).
     public let valueGap: Int
 
+    /// `text` holds empty paragraphs discovery found, whose lines `AXValue` shows by Chromium's own rule.
+    public let holdsEmptyParagraphs: Bool
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -55,7 +58,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         breaks: ParagraphBreaks? = nil,
         caretInEmptyParagraph: Bool = false,
         textlessLeaves: Bool = false,
-        valueGap: Int = 0
+        valueGap: Int = 0,
+        holdsEmptyParagraphs: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -68,6 +72,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.caretInEmptyParagraph = caretInEmptyParagraph
         self.textlessLeaves = textlessLeaves
         self.valueGap = valueGap
+        self.holdsEmptyParagraphs = holdsEmptyParagraphs
     }
 
     /// The caret, when the selection is collapsed.

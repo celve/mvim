@@ -139,6 +139,12 @@ private extension PhysicalPlanner {
         /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
         let valueGap: Int
 
+        let holdsEmptyParagraphs: Bool
+
+        /// Where empty paragraphs were found, an edit that empties or fills a line leaves `AXValue`'s length and the
+        /// paragraph sides guesses: which of them `AXValue` shows changes with it.
+        var paragraphsUncertain = false
+
         var textlessLeaves = false
 
         init(snapshot: FieldSnapshot) {
@@ -150,6 +156,7 @@ private extension PhysicalPlanner {
             emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
             valueGap = snapshot.valueGap
+            holdsEmptyParagraphs = snapshot.holdsEmptyParagraphs
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -161,7 +168,7 @@ private extension PhysicalPlanner {
         var model: TextModel? { text.map(TextModel.init) }
 
         /// What a settle expects `AXValue`'s length to be.
-        var valueLength: Int? { lengthUncertain ? nil : text.map { $0.utf16.count - valueGap } }
+        var valueLength: Int? { lengthUncertain || paragraphsUncertain ? nil : text.map { $0.utf16.count - valueGap } }
 
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
@@ -228,10 +235,9 @@ private extension PhysicalPlanner {
             if !range.isEmpty { operand = field(range) }
             let before = model
             text = model?.replacing(range, with: replacement)
-            // Where lines were put back, emptying or filling one changes which of them `AXValue` hides.
-            if valueGap != 0, !replacement.contains("\n"), let before, let after = model {
+            if holdsEmptyParagraphs, !replacement.contains("\n"), let before, let after = model {
                 let caret = range.lowerBound + replacement.utf16.count
-                lengthUncertain = lengthUncertain || before.touchesEmptyLine(range)
+                paragraphsUncertain = paragraphsUncertain || before.touchesEmptyLine(range)
                     || after.touchesEmptyLine(range.lowerBound..<caret)
             }
             if let current = breaks {
@@ -266,7 +272,7 @@ private extension PhysicalPlanner {
         var expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
-            edge: context.breaksUncertain ? nil : context.edge(selection.upperBound),
+            edge: context.breaksUncertain || context.paragraphsUncertain ? nil : context.edge(selection.upperBound),
             selectedText: selectedText
         )
         expectation.blame = blame
@@ -933,7 +939,7 @@ private extension PhysicalPlanner {
         switch landing {
         case .exact(let range):
             read = .exact(context.field(range))
-            edge = context.edge(range.upperBound)
+            edge = context.paragraphsUncertain ? nil : context.edge(range.upperBound)
         case .caretAfter(let o, let strict):
             read = .caretAfter(context.field(o..<o).lowerBound, strict: strict)
         case .caretBefore(let o, let strict):

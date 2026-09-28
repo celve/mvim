@@ -3565,7 +3565,7 @@ precondition(e78Model.breaks.offsets == [121, 204, 212] && e78Model.gap == 1)
 func e78Planning(_ keys: String, caret: Int) -> PhysicalPlanner.Planning {
     PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: FieldSnapshot(
         capabilities: keyProfile, text: e78Model.text, selection: caret..<caret, webContent: true, breaks: e78Model.breaks,
-        valueGap: e78Model.gap
+        valueGap: e78Model.gap, holdsEmptyParagraphs: true
     ))
 }
 func settleTraces(_ plan: PhysicalPlan) -> [String] {
@@ -3586,7 +3586,7 @@ precondition(settleTraces(e78j) == ["sel=210..210 len=218 edge=end", "sel=210..2
 let e78dd = e78Planning("dd", caret: 205).plan
 precondition(e78dd.traceShape == "P!P!P!!P?CC")
 precondition(settleTraces(e78dd)[2] == "sel=203..210 len=218 edge=start", "c49: ⇧→ ends in the blank line")
-precondition(settleTraces(e78dd).last == "soft sel=203..203 len=nil edge=start", "and what AXValue shows after is a guess")
+precondition(settleTraces(e78dd).last == "soft sel=203..203 len=nil", "and what AXValue shows after is a guess")
 
 func blankSim(_ paragraphs: [String], caret: Int, profile: CapabilityProfile = keyProfile) -> Sim {
     var host = Sim(text: paragraphs.joined(separator: "\n"), caret: caret, profile: profile)
@@ -3664,5 +3664,52 @@ precondition(emptied.text == [e78Paragraphs[0], e78Paragraphs[1], "ccccccc", "",
 precondition(emptied.settleFailures == 0 && emptied.state.field.mode == .insert)
 precondition(settleTraces(e78Planning("x", caret: 205).plan).last == "soft sel=203..203 len=217 edge=start",
              "a line that stays non-empty keeps its length")
+
+// The scan over a fake tree: role, subrole, children and plain offsets as Chromium's would read.
+final class FakeNode {
+    let role: String
+    let subrole: String?
+    let start: Int
+    let end: Int
+    let children: [FakeNode]
+    var fails = false
+
+    init(_ role: String, _ subrole: String? = nil, _ start: Int, _ end: Int, _ children: [FakeNode] = []) {
+        self.role = role
+        self.subrole = subrole
+        self.start = start
+        self.end = end
+        self.children = children
+    }
+}
+func text(_ start: Int, _ end: Int) -> FakeNode { FakeNode("AXStaticText", nil, start, end) }
+func paragraph(_ start: Int, _ end: Int) -> FakeNode { FakeNode("AXGroup", nil, start, end, [text(start, end)]) }
+func blank(_ at: Int) -> FakeNode { FakeNode("AXGroup", "AXEmptyGroup", at, at + 1) }
+func scanned(_ blocks: [FakeNode], _ plain: String, budget: Int = EmptyParagraphs.readBudget) -> [Int]? {
+    var scan = EmptyBlockScan<FakeNode>(budget: budget, block: { node in
+        node.fails ? nil : EmptyBlockScan.Block(role: node.role, subrole: node.subrole, children: node.children)
+    }, offset: { node, end in end ? node.end : node.start })
+    return scan.run(blocks: blocks, plain: Array(plain.utf16))
+}
+let middleBlank = blank(1)
+precondition(scanned([paragraph(0, 1), middleBlank, paragraph(2, 3)], "L\nN") == [1])
+middleBlank.fails = true
+precondition(scanned([paragraph(0, 1), middleBlank, paragraph(2, 3)], "L\nN") == nil, "a failed read fails the scan")
+precondition(scanned([FakeNode("AXGroup", nil, 0, 3, [text(0, 1), text(1, 2), text(2, 3)])], "a\nb") == [],
+             "a soft break is a paragraph's own text")
+let quote = FakeNode("AXGroup", nil, 1, 4, [paragraph(1, 2), blank(2), paragraph(3, 4)])
+precondition(scanned([paragraph(0, 1), quote, paragraph(4, 5)], "Lq\nmN") == [2], "one nested in a quote")
+quote.children[0].fails = true
+precondition(scanned([paragraph(0, 1), quote, paragraph(4, 5)], "Lq\nmN") == nil, "and a failed read on the way down")
+let item = FakeNode("AXGroup", nil, 0, 3, [FakeNode("AXListMarker", nil, 0, 2), blank(2)])
+precondition(scanned([FakeNode("AXList", "AXContentList", 0, 3, [item])], "\u{2022} \n") == [],
+             "an empty list item's line is its marker's")
+precondition(scanned((0..<300).map { paragraph($0, $0 + 1) }, String(repeating: "x", count: 299) + "\n") == nil,
+             "a field past the budget keeps AXValue's lines")
+
+// A trailing blank line nets no gap, but emptying the line beside it still changes what AXValue shows.
+var trailingBlank = blankSim(["a", ""], caret: 0, profile: writeKeys)
+trailingBlank.type("x")
+precondition(trailingBlank.text == "\n" && trailingBlank.settleFailures == 0)
 
 print("Vim engine tests passed")

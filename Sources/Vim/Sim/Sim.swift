@@ -222,7 +222,8 @@ private extension Sim {
             breaks: reading.breaks,
             caretInEmptyParagraph: reading.emptyParagraph,
             textlessLeaves: reading.textlessLeaves,
-            valueGap: reading.gap
+            valueGap: reading.gap,
+            holdsEmptyParagraphs: reading.holdsEmptyParagraphs
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
@@ -504,6 +505,7 @@ public extension Sim {
         /// The planner's text where it is not the Sim's own.
         var text: String?
         var gap = 0
+        var holdsEmptyParagraphs = false
     }
 }
 
@@ -571,7 +573,7 @@ extension Sim {
               let model = EmptyParagraphs.restore(value: shown.value, fieldText: shown.markers, aligned: aligned, found: shown.found),
               let resolved = model.breaks.valueRange(field, side: side) else { return reading }
         reading = Reading(selection: resolved, breaks: model.breaks, emptyParagraph: false, textlessLeaves: false,
-                          observed: observed, text: model.text, gap: model.gap)
+                          observed: observed, text: model.text, gap: model.gap, holdsEmptyParagraphs: !shown.found.isEmpty)
         return reading
     }
 
