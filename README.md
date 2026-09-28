@@ -159,6 +159,7 @@ The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen and
 | `make build`     | Generate, then build Debug to `build/Build/Products/Debug/mvim.app`  |
 | `make run`       | Build, then launch the Debug `mvim.app`                              |
 | `make test`      | Run the pure engine's tests: no Xcode project, no permissions        |
+| `make test-pasteboard` | Run the pasteboard loan's tests on a private pasteboard: no permissions |
 | `make release`   | Build Release, copy it to `.release/mvim.app`                        |
 | `make dist`      | `release`, then stage its update in `dist/`                          |
 | `make publish`   | `release`, then stage its update and release it on GitHub            |
@@ -201,11 +202,12 @@ mvim/
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
 │   │   │   Learn               #   simulated host, the learner's beliefs
-│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag
+│   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag, PasteboardLoan
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
 │                               #   menu, the whole UI), its AppModel, and Updater (Sparkle)
 ├── Tests/
-│   └── VimEngineTests/         # `make test`: the engine driven through Sim, as preconditions
+│   ├── VimEngineTests/         # `make test`: the engine driven through Sim, as preconditions
+│   └── PasteboardTests/        # `make test-pasteboard`: the paste's loan on a private pasteboard
 └── Resources/
     └── Assets.xcassets         # App icon + accent color (both still empty)
 ```
@@ -466,6 +468,16 @@ the caret the command starts from. An empty paragraph can be missing from `AXVal
 in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
 paragraph is not blamed for seeming to do nothing. In such a field a yank within one line takes its register from
 the text the field selected.
+
+A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
+item in every type it holds, puts the text up for one ⌘V (marked `org.nspasteboard.TransientType`,
+so clipboard histories that honour it skip it), and puts the rest back once a settle sees the caret
+land after the paste. Nothing else says when the app has read it, so a paste no caret confirms
+stays up for a second: one where mvim cannot read the field, or one carrying a newline in Chromium
+rich text, whose settles check the length alone, as `o` and `O` below do. Your own ⌘V,
+and a paste of `+`, `*` or a blind cut's register, gets your contents back first; if the app has
+not read mvim's paste by then, that paste gets your contents too. A copy or cut made meanwhile is
+newer and is kept.
 
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
