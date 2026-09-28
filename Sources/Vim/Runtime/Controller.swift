@@ -53,6 +53,9 @@ public final class Controller {
     /// Marker sampling for the bound field; a new element starts over.
     private var sampling = OffsetsSampling()
 
+    /// The bound field's empty paragraphs, found again when its text changes.
+    private var emptyParagraphs: EmptyParagraphs.Memo?
+
     /// Per-rung evidence this process, stored with the read model.
     private var tallies: [String: Tally] = [:]
 
@@ -275,7 +278,10 @@ public final class Controller {
             )
         }
         if !transition.preservesDrawnCursor { fieldBreaks = nil }
-        if transition != .sameElement { sampling = OffsetsSampling() }
+        if transition != .sameElement {
+            sampling = OffsetsSampling()
+            emptyParagraphs = nil
+        }
         binding = new
         Diag.bind(tracker.epoch, transition, new)
         // Keys-in-flight and the open dot body are one unit, and neither
@@ -327,8 +333,13 @@ public final class Controller {
             cursor: state.field.cursor,
             chromium: binding.isChromium,
             model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
-            sampling: sampling
+            sampling: sampling,
+            known: emptyParagraphs
         )
+        if reading.emptyParagraphs != emptyParagraphs, let memo = reading.emptyParagraphs {
+            Diag.emptyParagraphs(tracker.epoch, commandSeq, memo)
+        }
+        emptyParagraphs = reading.emptyParagraphs
         if reading.sampled {
             sampling.sampled(markers: reading.markers, evidence: reading.observed.evidence, text: reading.reads.text,
                              plain: reading.reads.plain)
@@ -360,7 +371,8 @@ public final class Controller {
                 bell: Self.bellReason(logical),
                 executed: executed,
                 evidence: evidence,
-                insertPayload: completed.insertPayload
+                insertPayload: completed.insertPayload,
+                emptyLines: snapshot.valueGap
             )
         }
         guard executed else {

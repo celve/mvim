@@ -136,6 +136,9 @@ private extension PhysicalPlanner {
         /// Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so after a blind newline the length is unknown.
         var lengthUncertain = false
 
+        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
+        let valueGap: Int
+
         var textlessLeaves = false
 
         init(snapshot: FieldSnapshot) {
@@ -146,6 +149,7 @@ private extension PhysicalPlanner {
             breaks = snapshot.breaks
             emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
+            valueGap = snapshot.valueGap
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -155,6 +159,9 @@ private extension PhysicalPlanner {
         }
 
         var model: TextModel? { text.map(TextModel.init) }
+
+        /// What a settle expects `AXValue`'s length to be.
+        var valueLength: Int? { lengthUncertain ? nil : text.map { $0.utf16.count - valueGap } }
 
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
@@ -219,7 +226,14 @@ private extension PhysicalPlanner {
         mutating func applyEdit(range: Range<Int>, replacement: String) {
             // An empty range is a plain insert, which replaces nothing.
             if !range.isEmpty { operand = field(range) }
+            let before = model
             text = model?.replacing(range, with: replacement)
+            // Where lines were put back, emptying or filling one changes which of them `AXValue` hides.
+            if valueGap != 0, !replacement.contains("\n"), let before, let after = model {
+                let caret = range.lowerBound + replacement.utf16.count
+                lengthUncertain = lengthUncertain || before.touchesEmptyLine(range)
+                    || after.touchesEmptyLine(range.lowerBound..<caret)
+            }
             if let current = breaks {
                 breaks = current.replacing(range, with: replacement)
                 breaksUncertain = breaksUncertain || replacement.contains("\n")
@@ -248,7 +262,7 @@ private extension PhysicalPlanner {
         blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
-        let length = profile.has(.readLength) && !context.lengthUncertain ? context.text.map { $0.utf16.count } : nil
+        let length = profile.has(.readLength) ? context.valueLength : nil
         var expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
@@ -913,7 +927,7 @@ private extension PhysicalPlanner {
         _ landing: Landing, blame: Expectation.Blame?, keeps: Int? = nil, within: Range<Int>? = nil,
         context: Context, profile: CapabilityProfile
     ) -> PhysicalStep {
-        let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
+        let length = profile.has(.readLength) ? context.valueLength : nil
         let read: Landing
         var edge: Expectation.Edge?
         switch landing {
