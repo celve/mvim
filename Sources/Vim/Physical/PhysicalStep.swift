@@ -283,6 +283,16 @@ public struct Expectation: Equatable, Sendable {
         return true
     }
 
+    /// The settle verdict the executor and the Sim share; `side` is the upper end's, which only a marker read gives.
+    public func converged(
+        selection observed: Range<Int>?, length observedLength: Int?, selectedText observedText: String?,
+        side: ParagraphBreaks.Side?
+    ) -> Bool {
+        guard matches(selection: observed, length: observedLength, selectedText: observedText) else { return false }
+        guard let edge else { return true }
+        return side.map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
+    }
+
     /// Chromium's `AXSelectedText` has a U+FFFC per text-less element, which `AXValue` leaves out.
     static func sameText(_ expected: String, _ observed: String?) -> Bool {
         guard let observed else { return false }

@@ -388,8 +388,9 @@ private extension Sim {
                 let expectation = planned.resolving(kept)
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
-                let passed = expectation.matches(selection: observed, length: fieldLength, selectedText: readSelectedText)
-                    && (!emptyParagraphs || chromium.onEdge(expectation.edge, selection))
+                let passed = expectation.converged(
+                    selection: observed, length: fieldLength, selectedText: readSelectedText, side: upperSide
+                )
                 attribution.record(.settle(expectation), passed: passed, selection: observed, length: fieldLength,
                                    selectedText: readSelectedText)
                 if !passed {
@@ -582,6 +583,11 @@ extension Sim {
 
     var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text) }
 
+    /// What a marker read says of the upper end's side, in every Chromium mode; nil where none answers.
+    var upperSide: ParagraphBreaks.Side? {
+        reads != nil || markers || emptyParagraphs ? ChromiumParagraphs.side(selection.upperBound, in: text) : nil
+    }
+
     var markerReads: MarkerReads {
         MarkerReads(breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection)
     }
@@ -649,18 +655,13 @@ struct ChromiumParagraphs {
         (0...text.utf16.count).last { field($0) <= offset } ?? 0
     }
 
-    private func isParagraphStart(_ offset: Int) -> Bool {
-        offset == 0 || Array(text.utf16)[offset - 1] == 10
-    }
-
     /// `Snapshotter.paragraphSide`: a paragraph's start, empty or not, reads as the start.
-    func side(_ offset: Int) -> ParagraphBreaks.Side {
-        isParagraphStart(offset) ? .start(skipping: 0) : .end
+    static func side(_ offset: Int, in text: String) -> ParagraphBreaks.Side {
+        offset == 0 || Array(text.utf16)[offset - 1] == 10 ? .start(skipping: 0) : .end
     }
 
-    func onEdge(_ edge: Expectation.Edge?, _ selection: Range<Int>) -> Bool {
-        guard let edge else { return true }
-        return isParagraphStart(selection.upperBound) == (edge == .paragraphStart)
+    func side(_ offset: Int) -> ParagraphBreaks.Side {
+        Self.side(offset, in: text)
     }
 
     func inEmptyParagraph(_ selection: Range<Int>) -> Bool {
