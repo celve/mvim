@@ -3409,6 +3409,58 @@ replayInsert.session.lastChange = VimState.ChangeMemory(body: "i", insert: "abc"
 precondition(physical(".", text: "say hello", profile: withheldCaret, state: replayInsert).steps.contains(.replaceSelection("abc")),
              "with nothing queued the AX write stays")
 
+// MARK: - Lessons the menu may forget
+
+let probedAll = CapabilityProfile(available: Set(Capability.allCases))
+func taught(_ store: BeliefStore, starting: OffsetsAnswer = .value, probed: CapabilityProfile = probedAll,
+            config: [Capability: ConfigChoice] = [:]) -> [ResolvedBeliefs.Lesson] {
+    let beliefs = resolving(store, starting: starting, pins: config[.readCaret]?.override != nil)
+    let report = CapabilityResolver.resolve(probed: probed, config: config, beliefs: beliefs).report
+    return beliefs.lessons(report: report, overridden: Set(config.filter { $0.value.override != nil }.keys))
+}
+var twoWrites = BeliefStore()
+precondition(committing(&twoWrites, .writeSelection) && committing(&twoWrites, .insertText))
+let inForceLessons = taught(twoWrites)
+precondition(inForceLessons.map(\.capability) == [.writeSelection, .insertText] && inForceLessons.allSatisfy { $0.state == .inForce })
+precondition(inForceLessons[1].beliefs.map(\.question) == [.write(.insertText)])
+precondition(taught(twoWrites, starting: .textContent).map(\.state) == [.reopened, .reopened])
+precondition(taught(twoWrites, starting: .textContent, config: [.insertText: ConfigChoice(override: .on)]).map(\.capability)
+             == [.writeSelection], "an On decides a reopened verdict")
+precondition(taught(twoWrites, config: [.insertText: ConfigChoice(override: .off)]).map(\.capability) == [.writeSelection])
+precondition(taught(twoWrites, probed: removing([.insertText], from: probedAll)).map(\.capability) == [.writeSelection])
+var forgotten = twoWrites
+for belief in inForceLessons[0].beliefs { forgotten.forget(belief.question, at: belief.rung) }
+precondition(taught(forgotten).map(\.capability) == [.insertText])
+
+var untrustedCaret = BeliefStore()
+precondition(untrustedCaret.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+let withheldLessons = taught(untrustedCaret, starting: .textContent)
+precondition(withheldLessons.map(\.capability) == [.readCaret] && withheldLessons[0].beliefs == [untrustedCaret.offsetsBelief(at: learnRung)!])
+var learnedValue = BeliefStore()
+precondition(learnedValue.record(offsets: .value, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+precondition(resolving(learnedValue, starting: .textContent).readModel.source == .learned)
+precondition(taught(learnedValue, starting: .textContent).isEmpty, "forgetting it would restart the field at textContent")
+var learnedMarkers = BeliefStore()
+precondition(learnedMarkers.record(offsets: .textContent, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally()))
+precondition(taught(learnedMarkers).isEmpty)
+var brokenCaret = learnedMarkers
+precondition(committing(&brokenCaret, .readCaret, under: .textContent))
+let brokenCaretLessons = taught(brokenCaret)
+precondition(brokenCaretLessons.map(\.capability) == [.readCaret] && brokenCaretLessons[0].beliefs.map(\.question) == [.write(.readCaret)])
+var brokenUntrusted = untrustedCaret
+precondition(committing(&brokenUntrusted, .readCaret, under: .untrusted))
+precondition(taught(brokenUntrusted, starting: .textContent).first?.beliefs.map(\.question) == [.offsets, .write(.readCaret)])
+
+var policyVerdict = BeliefStore()
+precondition(committing(&policyVerdict, .drawCursor))
+precondition(taught(policyVerdict).isEmpty, "the resolver applies no verdict to a policy")
+var twoRungs = BeliefStore()
+precondition(committing(&twoRungs, .insertText) && committing(&twoRungs, .insertText, at: "com.dia.app"))
+precondition(taught(twoRungs).first?.beliefs.map(\.rung) == [learnRung, "com.dia.app"])
+var mixedRungs = BeliefStore()
+precondition(committing(&mixedRungs, .insertText) && committing(&mixedRungs, .insertText, at: "com.dia.app", under: .textContent))
+precondition(taught(mixedRungs).first?.beliefs.count == 2, "Try Again leaves no reopened verdict behind")
+
 // MARK: - Beliefs end to end (the Sim's Chromium read fault)
 
 func chromiumSim(_ text: String, caret: Int, profile: CapabilityProfile, markers: Bool, chromium: Bool = false,

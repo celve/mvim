@@ -84,14 +84,21 @@ private struct UpdateItems: View {
 
 /// The Capabilities item: a badge counts what mvim learned for this field, and the submenu opens on it.
 struct CapabilitiesItem: View {
+    /// Subtitles and badges were checked on macOS 26 only; older systems get everything in the title.
+    static var richItemsAvailable: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+
     let title: String
     let menu: AppModel.CapabilityMenu
     let choose: @MainActor (CapabilityConfig.Override?, String?, Capability) -> Void
     let forget: @MainActor ([Belief]) -> Void
     let clear: @MainActor (String) -> Void
+    var richItems = CapabilitiesItem.richItemsAvailable
 
     var body: some View {
-        Menu(title) {
+        Menu(richItems ? title : joined(title, menu.badge)) {
             // Text, not Section: SwiftUI draws a separator above every section, even atop a submenu.
             if let header = menu.learnedHeader {
                 Text(header)
@@ -112,7 +119,7 @@ struct CapabilitiesItem: View {
                 }
             }
         }
-        .badge(menu.badge.map { Text($0) })
+        .badge(richItems ? menu.badge.map { Text($0) } : nil)
     }
 
     // Every choice is a sentence naming the rung it writes, so exactly one is ever checked.
@@ -124,29 +131,37 @@ struct CapabilitiesItem: View {
                     forget(lesson.beliefs)
                 } label: {
                     Text(lesson.action)
-                    Text(lesson.actionDetail)
+                    if richItems {
+                        Text(lesson.actionDetail)
+                    }
                 }
                 Divider()
             }
             Toggle("Auto — mvim decides", isOn: Binding(
-                get: { row.choice == .auto }, set: { _ in choose(nil, nil, row.capability) }
+                get: { row.choice == .auto }, set: { if $0 { choose(nil, nil, row.capability) } }
             ))
             Divider()
             ForEach(row.onOptions) { toggle($0, for: row.capability) }
             Divider()
             ForEach(row.offOptions) { toggle($0, for: row.capability) }
         } label: {
-            Text(row.title)
-            if let subtitle = row.subtitle {
+            if richItems, let subtitle = row.subtitle {
+                Text(row.title)
                 Text(subtitle)
+            } else {
+                Text(joined(row.title, row.subtitle))
             }
         }
     }
 
     private func toggle(_ option: AppModel.ScopeOption, for capability: Capability) -> some View {
         Toggle(option.label, isOn: Binding(
-            get: { option.checked }, set: { _ in choose(option.override, option.rung, capability) }
+            get: { option.checked }, set: { if $0 { choose(option.override, option.rung, capability) } }
         ))
+    }
+
+    private func joined(_ title: String, _ detail: String?) -> String {
+        detail.map { "\(title) — \($0)" } ?? title
     }
 }
 
@@ -392,7 +407,8 @@ final class AppModel: ObservableObject {
     }
 
     func openBeliefsFile() {
-        beliefsReadable = controller.appliedOverrides().fromFile
+        let readable = controller.appliedOverrides().fromFile
+        if readable != beliefsReadable { beliefsReadable = readable }
         NSWorkspace.shared.open(controller.beliefsURL)
     }
 
@@ -419,10 +435,10 @@ final class AppModel: ObservableObject {
         return "\(frontApp.name) › \(origin)"
     }
 
-    /// Rebuilt on menu open, app activation and every rebind; an overlay's binding must not label the front app's rows.
+    /// Rebuilt on app activation, rebinds and menu actions; an overlay's binding must not label the front app's rows.
     private func refreshCapabilityRows() {
         let applied = controller.appliedOverrides()
-        beliefsReadable = applied.fromFile
+        if applied.fromFile != beliefsReadable { beliefsReadable = applied.fromFile }
         let menu: CapabilityMenu
         if let frontApp {
             let surface = menuSurface
@@ -446,6 +462,8 @@ final class AppModel: ObservableObject {
         config: [String: CapabilityConfig.Resolution]
     ) -> CapabilityMenu {
         let scopes = surface.writableScopes
+        let overridden = Set(Capability.allCases.filter { config[$0.rawValue]?.override != nil })
+        let lessons = report.flatMap { beliefs?.lessons(report: $0, overridden: overridden) } ?? []
         var menu = CapabilityMenu(unbound: report == nil)
         for capability in Capability.allCases {
             let resolution = config[capability.rawValue] ?? .auto
@@ -455,9 +473,7 @@ final class AppModel: ObservableObject {
             case .off: choice = .off
             case nil: choice = .auto
             }
-            let learned = report.flatMap { report in
-                beliefs.flatMap { lesson(capability, report: report, resolution: resolution, beliefs: $0, app: app) }
-            }
+            let learned = lessons.first { $0.capability == capability }.map { self.learned($0, app: app) }
             // Narrowest first; the check marks the user's stored choice, which the probe may overrule.
             func options(_ override: CapabilityConfig.Override) -> [ScopeOption] {
                 scopes.map { scope, rung in
@@ -471,7 +487,8 @@ final class AppModel: ObservableObject {
                 capability: capability,
                 title: displayName(capability),
                 subtitle: learned?.subtitle ?? standing(
-                    capability, report: report, resolution: resolution, scopes: scopes, readModel: beliefs?.readModel
+                    capability, report: report, resolution: resolution, surface: surface, scopes: scopes,
+                    readModel: beliefs?.readModel, app: app
                 ),
                 lesson: learned?.lesson,
                 choice: choice,
@@ -501,75 +518,79 @@ final class AppModel: ObservableObject {
         return menu
     }
 
-    /// A learned read model, a verdict in force, or one reopened here that the probe is trying again.
-    private nonisolated static func lesson(
-        _ capability: Capability, report: CapabilityReport, resolution: CapabilityConfig.Resolution,
-        beliefs: ResolvedBeliefs, app: String
-    ) -> (lesson: Lesson, subtitle: String)? {
-        guard let entry = report.entries[capability] else { return nil }
-        let model = beliefs.readModel
-        if capability == .readCaret, model.source == .learned, let belief = model.belief,
-           entry.source == .learned || entry.status == .available {
-            let how: String
-            switch model.answer {
-            case .untrusted: how = "Off"
-            case .textContent: how = "Through text markers"
-            case .value: how = "Through AXValue"
-            }
-            let until = belief.engineVersion == nil ? "until \(app) updates" : "until \(app) updates Electron"
-            return (lessonInForce(belief, [belief], app: app), how + since(belief) + " · " + until)
+    /// The Learned section's words for what the engine says a row learned.
+    private nonisolated static func learned(
+        _ lesson: ResolvedBeliefs.Lesson, app: String
+    ) -> (lesson: Lesson, subtitle: String) {
+        let belief = lesson.beliefs[0]
+        switch lesson.state {
+        case .inForce:
+            let row = Lesson(
+                inForce: true, header: learnedWhen(belief, app: app), action: "Try Again",
+                actionDetail: "Forget this, and stay on Auto", beliefs: lesson.beliefs
+            )
+            return (row, "Off" + since(belief) + " · " + until(belief, app: app))
+        case .reopened:
+            let judged = judgedPhrase(belief.judgedUnder ?? .value)
+            let row = Lesson(
+                inForce: false, header: learnedWhen(belief, app: app), action: "Forget",
+                actionDetail: "Try it again \(judged) too", beliefs: lesson.beliefs
+            )
+            return (row, "Trying again here · failed" + (day(belief).map { " \($0)" } ?? "") + " " + judged)
         }
-        if capability.species == .mechanism, entry.source == .learned {
-            let behind = beliefs.inForce.filter { $0.capability == capability }
-            guard let belief = behind.first else { return nil }
-            return (lessonInForce(belief, behind, app: app), "Off" + since(belief) + " · until \(app) updates")
-        }
-        guard entry == CapabilityReport.Entry(status: .available, source: .probed), resolution.override == nil else {
-            return nil
-        }
-        let behind = beliefs.reopened.filter { $0.capability == capability }
-        guard let belief = behind.first else { return nil }
-        let judged = judgedPhrase(belief.judgedUnder ?? .value)
-        let lesson = Lesson(
-            inForce: false, header: learnedWhen(belief, app: app), action: "Forget",
-            actionDetail: "Try it again \(judged) too", beliefs: behind
-        )
-        return (lesson, "Trying again here · failed" + (day(belief).map { " \($0)" } ?? "") + " " + judged)
-    }
-
-    private nonisolated static func lessonInForce(_ belief: Belief, _ beliefs: [Belief], app: String) -> Lesson {
-        Lesson(
-            inForce: true, header: learnedWhen(belief, app: app), action: "Try Again",
-            actionDetail: "Forget this, and stay on Auto", beliefs: beliefs
-        )
     }
 
     /// Why a row outside the Learned section stands as it does; nil where it works as detected.
     private nonisolated static func standing(
         _ capability: Capability, report: CapabilityReport?, resolution: CapabilityConfig.Resolution,
-        scopes: [(scope: Surface.Scope, rung: String)], readModel: ReadModel?
+        surface: Surface, scopes: [(scope: Surface.Scope, rung: String)], readModel: ReadModel?, app: String
     ) -> String? {
-        let chosen = resolution.override.map { override in
-            let scope = scopes.first { $0.rung == resolution.overrideRung }.map { " " + phrase($0.scope) } ?? ""
-            return (override == .on ? "On" : "Off") + scope
+        let choice = resolution.override.map {
+            ($0 == .on ? "On" : "Off") + scopePhrase(resolution.overrideRung, surface: surface, scopes: scopes)
         }
-        guard let entry = report?.entries[capability] else { return chosen.map { $0 + ", your choice" } }
-        if let parent = capability.parent, entry.status != .available, report?.entries[parent]?.status != .available {
-            return "Off while \(displayName(parent).split(separator: " (")[0]) is off"
+        guard let report, let entry = report.entries[capability] else { return choice.map { $0 + ", your choice" } }
+        let parentOff = capability.parent.flatMap { report.entries[$0]?.status == .available ? nil : $0 }
+        if let choice {
+            guard resolution.override == .on, entry.status != .available else { return choice + ", your choice" }
+            return choice + (parentOff.map { ", but \(shortName($0)) is off" } ?? ", but not offered here")
         }
-        if let chosen {
-            let overruled = resolution.override == .on && entry.status != .available
-            return chosen + (overruled ? ", but not offered here" : ", your choice")
+        if entry.status != .available, let parentOff {
+            return "Off while \(shortName(parentOff)) is off"
         }
         switch (entry.status, entry.source) {
         case (.unavailable, .seeded): return "Off by default"
         case (.unavailable, .probed): return "Not offered here"
         default: break
         }
-        if capability == .readCaret, readModel?.answer == .textContent {
+        guard capability == .readCaret, let readModel else { return nil }
+        switch (readModel.source, readModel.answer) {
+        case (.learned, .textContent), (.learned, .value):
+            let how = readModel.answer == .textContent ? "Through text markers" : "Through AXValue"
+            return readModel.belief.map { how + since($0) + " · " + until($0, app: app) } ?? how
+        case (.start, .textContent):
             return "Through text markers, as Chromium rich text needs"
+        default:
+            return nil
         }
-        return nil
+    }
+
+    /// Where a choice was stored, as the On and Off sentences name it; a hand-written `web:` rung spans browsers.
+    private nonisolated static func scopePhrase(
+        _ rung: String?, surface: Surface, scopes: [(scope: Surface.Scope, rung: String)]
+    ) -> String {
+        if let scope = scopes.first(where: { $0.rung == rung }) { return " " + phrase(scope.scope) }
+        if let origin = surface.origin, rung == Surface.webRung(origin) { return " on \(origin) in any browser" }
+        return ""
+    }
+
+    /// A read model expires with Electron's version where there is one; verdicts with the app's.
+    private nonisolated static func until(_ belief: Belief, app: String) -> String {
+        let electron = belief.question == .offsets && belief.engineVersion != nil
+        return electron ? "until \(app) updates Electron" : "until \(app) updates"
+    }
+
+    private nonisolated static func shortName(_ capability: Capability) -> String {
+        String(displayName(capability).split(separator: " (")[0])
     }
 
     private nonisolated static func learnedWhen(_ belief: Belief, app: String) -> String {
@@ -583,7 +604,7 @@ final class AppModel: ObservableObject {
 
     /// "Sep 28", with the year when it is not this one.
     private nonisolated static func day(_ belief: Belief) -> String? {
-        guard let stamp = belief.provenance.learnedAt, let date = ISO8601DateFormatter().date(from: stamp) else {
+        guard let stamp = belief.provenance.learnedAt, let date = try? Date(stamp, strategy: .iso8601) else {
             return nil
         }
         let style = Date.FormatStyle.dateTime.month(.abbreviated).day()

@@ -75,8 +75,8 @@ per app:
   without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
 
 **Capabilities in _App_** shows what mvim can do in the current field, starting with what it learned
-about fields like it, and lets you override it; a badge on it counts the lessons in force. **Open
-Beliefs File** opens the file that keeps your choices and what mvim has learned (see
+to switch off in fields like it, and lets you override it; a badge on it counts what is off here.
+**Open Beliefs File** opens the file that keeps your choices and what mvim has learned (see
 [Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
 both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
@@ -537,11 +537,13 @@ The bind line shows the read model as `offsets=<answer>/<source>`, where the sou
 (the rule above), `learned`, `user` or `plain` (no children), followed by one `belief` line per
 stored answer that touched the field, with its provenance and whether it is `in-force`, `reopened`,
 `stale` (another engine's), `not-this-field` (a field with no children) or only `dates-engine`. In
-the menu, **Capabilities** opens on the beliefs in force for the field: each demotion, and **Read
-caret** while its offsets answer is learned (**Off** for `untrusted`), with the day and until when it
-holds. A verdict reopened in this field reads **Trying again here**, and is not counted in the badge.
-**Try Again**, or **Forget** for a reopened verdict, removes the belief and makes no choice; choosing
-On or Off for a row retires the belief behind it too.
+the menu, **Capabilities** opens on what a belief switched off in the field, a demotion or **Read
+caret** while it is `untrusted`, with the day and until when it holds, and on verdicts reopened in
+this field, which read **Trying again here** and are not counted in the badge. **Try Again**, or
+**Forget** for a reopened verdict, removes those beliefs and makes no choice. A learned `value` or
+`textContent` only shows under **Read caret**: forgetting it would restart the field at an answer
+its reads already moved it off. Choosing On or Off for a row retires what fields like this one
+learned about it.
 
 ### The beliefs file
 
@@ -605,9 +607,9 @@ unreadable, last good version in use**. Each bind logs a `beliefs-file` line in 
 reason, and neither lessons nor menu choices are saved until the file reads again. A question or
 capability name mvim does not know is kept and ignored. Builds before the file kept overrides and
 beliefs in the `capabilityOverrides` and `fieldBeliefs` defaults, which move to the file on first
-launch and are dropped once a file reads. To forget one lesson, choose **Try Again** in
-**Capabilities**; to forget everything mvim learned, empty `beliefs`. Deleting the file drops your
-choices as well:
+launch and are dropped once a file reads. To forget one lesson, choose **Try Again** in its row, or
+**Forget** for one on trial; to forget everything mvim learned, empty `beliefs`. Deleting the file
+drops your choices as well:
 
 ```sh
 rm ~/Library/Application\ Support/mvim/beliefs.json
