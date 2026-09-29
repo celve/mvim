@@ -32,8 +32,8 @@ Development** signing certificate, which Xcode → Settings → Accounts → Man
    open /Applications/mvim.app
    ```
 
-3. Allow **Input Monitoring** when macOS asks. mvim does not ask for **Accessibility**: choose **Open
-   Accessibility Settings** in its menu and switch mvim on there.
+3. Allow **Input Monitoring** when macOS asks. mvim does not ask for **Accessibility**: choose
+   **Accessibility: not granted** in its menu and switch mvim on there.
 4. Quit mvim and open it again, since it creates its keyboard tap only at launch. The menu should now
    read `Input tap: running`, `Accessibility: granted` and `Input Monitoring: granted`.
 
@@ -77,7 +77,8 @@ per app:
 **Capabilities in _App_** shows what mvim can do in the current field and lets you override it, and
 **Open Beliefs File** opens the file that keeps those choices and what mvim has learned (see
 [Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
-both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
+both permissions, whose rows open their System Settings panes, and holds
+[Start at Login](#start-at-login).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
 
 ## What works
