@@ -74,8 +74,9 @@ per app:
 - **Force**: for apps that expose no text field to Accessibility. mvim drives the front window
   without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
 
-**Capabilities in _App_** shows what mvim can do in the current field and lets you override it, and
-**Open Beliefs File** opens the file that keeps those choices and what mvim has learned (see
+**Capabilities in _App_** shows what mvim can do in the current field, starting with what it learned
+about fields like it, and lets you override it; a badge on it counts the lessons in force. **Open
+Beliefs File** opens the file that keeps your choices and what mvim has learned (see
 [Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
 both permissions, opens their System Settings panes, and holds [Start at Login](#start-at-login).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
@@ -115,12 +116,14 @@ is a separate field.
 
 mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
 check (it lands wrong, or not within a quarter of a second), mvim switches that capability off for
-fields like the one it failed in, and **Capabilities** marks it `✗ learned` until the app updates.
+fields like the one it failed in until the app updates. **Capabilities** then lists it first, under
+**Learned for …** with the day it failed, and **Try Again** forgets it so mvim tries it afresh.
 Some failures only stop the command: a key landing elsewhere in Chromium's rich text, a word key
 doing nothing in web content, anything under **Force**, and any capability you set yourself. mvim
 also learns how a field counts caret positions: where the field's reads stop agreeing with it, it
-stops trusting the caret (**Read caret** `✗ learned`) and treats the field as one it cannot read,
-and a capability switched off while mvim misread a field comes back once it counts that field anew.
+stops trusting the caret (**Read caret** shows under **Learned for …** as Off) and treats the field
+as one it cannot read, and a capability switched off while mvim misread a field comes back once it
+counts that field anew, reading **Trying again here** in the menu.
 **On …** and **Off …** override what mvim detected or learned, for one field, fields like it, a site
 or the whole app. Those choices and what mvim learned are kept in a file you can edit as well:
 **Open Beliefs File** opens it (see [The beliefs file](#the-beliefs-file)). **App's word,
@@ -465,10 +468,10 @@ Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line
 and caret mvim can read. A key that lands anywhere but where it
 should, including a caret key that leaves a selection (as a select-all binding would) or a key that does
 nothing where it had somewhere to go, is learned off for that surface like a write that lies, and mvim
-counts arrows there again; switch it back on from the menu. In Chromium's rich text a key that lands
-somewhere else only aborts the command, because one paragraph can be several `AXValue` lines there (a
-mention chip) and a working key lands off the model's line; its `learn` line says
-`why=paragraph-lines`, and you can turn such a key off from the menu.
+counts arrows there again; **Try Again** in the menu lets it try the key afresh. In Chromium's rich
+text a key that lands somewhere else only aborts the command, because one paragraph can be several
+`AXValue` lines there (a mention chip) and a working key lands off the model's line; its `learn` line
+says `why=paragraph-lines`, and you can turn such a key off from the menu.
 
 Chromium's rich text (Dia, Chrome, Electron apps such as Linear) reports the caret without the
 paragraph breaks before it; mvim reads it through text markers and puts the breaks back,
@@ -534,8 +537,11 @@ The bind line shows the read model as `offsets=<answer>/<source>`, where the sou
 (the rule above), `learned`, `user` or `plain` (no children), followed by one `belief` line per
 stored answer that touched the field, with its provenance and whether it is `in-force`, `reopened`,
 `stale` (another engine's), `not-this-field` (a field with no children) or only `dates-engine`. In
-the menu, a demotion reads `✗ learned`, and so does **Read caret** while the field is `untrusted`;
-choosing On or Off for a row retires the belief behind it.
+the menu, **Capabilities** opens on the beliefs in force for the field: each demotion, and **Read
+caret** while its offsets answer is learned (**Off** for `untrusted`), with the day and until when it
+holds. A verdict reopened in this field reads **Trying again here**, and is not counted in the badge.
+**Try Again**, or **Forget** for a reopened verdict, removes the belief and makes no choice; choosing
+On or Off for a row retires the belief behind it too.
 
 ### The beliefs file
 
@@ -599,8 +605,9 @@ unreadable, last good version in use**. Each bind logs a `beliefs-file` line in 
 reason, and neither lessons nor menu choices are saved until the file reads again. A question or
 capability name mvim does not know is kept and ignored. Builds before the file kept overrides and
 beliefs in the `capabilityOverrides` and `fieldBeliefs` defaults, which move to the file on first
-launch and are dropped once a file reads. To forget what mvim learned, empty `beliefs`; deleting the
-file drops your choices as well:
+launch and are dropped once a file reads. To forget one lesson, choose **Try Again** in
+**Capabilities**; to forget everything mvim learned, empty `beliefs`. Deleting the file drops your
+choices as well:
 
 ```sh
 rm ~/Library/Application\ Support/mvim/beliefs.json
@@ -639,10 +646,10 @@ instead of counting arrows or ringing, and the app decides where they land:
   started from. A word selection must be exactly what ⌥← and ⌥→ delimited or, mid-word, what the
   text says is left of the word; where neither can be known, as inside `foo,bar`, the command
   rings. If a key leaves the field unmoved when it should have moved, or selects more than that,
-  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then reads
-  `✗ learned`. In web content, where reads cannot tell a key that did nothing, only a move that
-  leaves a selection behind is demoted. Words go back to counting and paragraphs to ringing until
-  you override it or the app updates.
+  it is demoted on that surface: **Word keys (⌥← ⌥→)** or **Paragraph keys (⌥↑ ⌥↓)** then shows
+  under **Learned for …**. In web content, where reads cannot tell a key that did nothing, only a
+  move that leaves a selection behind is demoted. Words go back to counting and paragraphs to
+  ringing until you choose Try Again or override it, or the app updates.
 
 ### Synthesized events
 

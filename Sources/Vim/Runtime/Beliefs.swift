@@ -28,6 +28,11 @@ final class Beliefs {
             store.forget(Question(capability), at: rung)
             if capability == .readCaret { store.forget(.offsets, at: rung) }
         }
+
+        /// Leaves every choice as it is, so the field is tried afresh rather than pinned.
+        mutating func forget(_ beliefs: [Belief]) {
+            for belief in beliefs { store.forget(belief.question, at: belief.rung) }
+        }
     }
 
     struct Failure: Error, CustomStringConvertible {

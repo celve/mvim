@@ -123,6 +123,14 @@ precondition(try! menu.load() == Beliefs.Contents(overrides: full.overrides, bel
 try! menu.update { $0.overrides = CapabilityConfig.clearing(atAndBelow: "com.example.app", on: surface, in: $0.overrides) }
 precondition(try! menu.load().overrides.isEmpty)
 
+let retry = fresh()
+try! retry.update { $0 = full }
+precondition(entry(try! retry.load(), .writeSelection, chromium: true) == .init(status: .unavailable, source: .learned))
+try! retry.update { $0.forget([full.beliefs[0]]) }
+precondition(try! retry.load() == Beliefs.Contents(overrides: full.overrides, beliefs: [full.beliefs[1], full.beliefs[2]]),
+             "Try Again forgets the lesson and makes no choice")
+precondition(entry(try! retry.load(), .writeSelection, chromium: true) == .init(status: .available, source: .probed))
+
 for unusable in [
     "{\n  \"schema\": 3,\n  \"overrides\": {},\n  \"beliefs\": [\n    {\"rung\": x}\n  ]\n}\n",
     #"{"schema": 4, "overrides": {}, "beliefs": []}"#,

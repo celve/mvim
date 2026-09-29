@@ -101,6 +101,9 @@ public final class Controller {
     /// nil when unbound or forced (nothing configurable resolves there).
     public var capabilityReport: CapabilityReport? { binding?.capabilityReport }
 
+    /// The bound field's beliefs, for the menu's Learned section; nil when unbound or forced.
+    public var boundBeliefs: ResolvedBeliefs? { binding?.beliefs }
+
     /// The bound field's surface — what the menu configures and names. Its
     /// bundle ID also gates the badges, so rows only describe the app they
     /// belong to (overlays bind across apps).
@@ -127,6 +130,11 @@ public final class Controller {
 
     public func clearOverrides(atAndBelow rung: String, on surface: Surface) {
         updateBeliefs { $0.overrides = CapabilityConfig.clearing(atAndBelow: rung, on: surface, in: $0.overrides) }
+    }
+
+    /// The menu's Try Again and Forget.
+    public func forget(_ beliefs: [Belief]) {
+        updateBeliefs { $0.forget(beliefs) }
     }
 
     /// The beliefs file, for the menu to open.
