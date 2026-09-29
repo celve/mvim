@@ -29,9 +29,9 @@ final class Beliefs {
             if capability == .readCaret { store.forget(.offsets, at: rung) }
         }
 
-        /// Leaves every choice as it is, so the field is tried afresh rather than pinned.
-        mutating func forget(_ beliefs: [Belief]) {
-            for belief in beliefs { store.forget(belief.question, at: belief.rung) }
+        /// Only the answers the menu showed, and no choice: one learned or edited since at the same slot stays.
+        mutating func forget(_ shown: [Belief]) {
+            beliefs.removeAll { shown.contains($0) }
         }
     }
 
