@@ -353,36 +353,17 @@ public enum AX {
         )
     }
 
-    /// Plain offsets in `markers` of the `<br>`s of Chromium's line-starting empty blocks; nil past `budget` reads (LIN-1612).
-    public static func emptyParagraphs(of element: AXUIElement, markers: String, budget: Int) -> (found: [Int], reads: Int)? {
-        let raw = Array(markers.utf16)
-        let plain = raw.filter { $0 != MarkerText.objectReplacement }
-        guard plain.contains(10) else { return ([], 0) }
-        guard let field = fieldMarkers(of: element), let blocks = children(of: element) else { return nil }
-        // Marker lengths count each U+FFFC before them, plain offsets do not.
-        var objects = [0]
-        objects.reserveCapacity(raw.count + 1)
-        for unit in raw { objects.append(objects[objects.count - 1] + (unit == MarkerText.objectReplacement ? 1 : 0)) }
-        var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: { node in
-            let reads = attributes([kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute], of: node)
-            guard (0..<3).allSatisfy({ absentOrRead(reads, $0) }) else { return nil }
-            return EmptyBlockScan.Block(role: reads.string(0), subrole: reads.string(1), children: reads.elements(2) ?? [])
-        }, offset: { node, end in
-            guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else { return nil }
-            let marker = end ? AXTextMarkerRangeCopyEndMarker(range) : AXTextMarkerRangeCopyStartMarker(range)
-            // Anchored at the later end, as `text(from:to:)` reads.
-            let span = AXTextMarkerRangeCreate(kCFAllocatorDefault, marker, field.start)
-            guard let length = parameterized("AXLengthForTextMarkerRange", span, of: element) as? Int,
-                  objects.indices.contains(length) else { return nil }
-            return length - objects[length]
-        })
-        return scan.run(blocks: blocks, plain: plain).map { ($0, scan.reads + 2) }
+    /// The field's start marker, from which `markerLength(from:to:end:in:)` measures.
+    public static func fieldStart(of element: AXUIElement) -> AXTextMarker? {
+        fieldMarkers(of: element)?.start
     }
 
-    /// A slot that read, or whose attribute the element lacks; any other failure is a failed read.
-    private static func absentOrRead(_ reads: AttributeBatch, _ index: Int) -> Bool {
-        guard let error = reads.error(index) else { return true }
-        return error == .noValue || error == .attributeUnsupported
+    /// `AXLengthForTextMarkerRange` from `start` to `node`'s start or end, a U+FFFC counted per text-less leaf; moves no string.
+    public static func markerLength(from start: AXTextMarker, to node: AXUIElement, end: Bool, in element: AXUIElement) -> Int? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else { return nil }
+        let marker = end ? AXTextMarkerRangeCopyEndMarker(range) : AXTextMarkerRangeCopyStartMarker(range)
+        // Anchored at the later end, as `text(from:to:)` reads.
+        return parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, marker, start), of: element) as? Int
     }
 
     /// The field's `AXValue` without its paragraph breaks.
@@ -427,7 +408,7 @@ public enum AX {
     }
 
     /// Nil on a failed read, so a container is never taken for a leaf.
-    private static func children(of node: AXUIElement) -> [AXUIElement]? {
+    public static func children(of node: AXUIElement) -> [AXUIElement]? {
         var ref: CFTypeRef?
         switch AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &ref) {
         case .success: return ref as? [AXUIElement]

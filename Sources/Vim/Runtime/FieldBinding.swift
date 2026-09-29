@@ -168,7 +168,7 @@ public enum Snapshotter {
             memo = known.flatMap { $0.holds(value: value, markers: raw, blocks: blocks) ? $0 : nil }
                 ?? EmptyParagraphs.Memo(
                     value: value, markers: raw, blocks: blocks,
-                    found: AX.emptyParagraphs(of: element, markers: raw, budget: EmptyParagraphs.readBudget)?.found
+                    found: EmptyParagraphDiscovery.found(in: element, markers: raw, budget: EmptyParagraphs.readBudget)?.found
                 )
             if let found = memo?.found,
                let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found),

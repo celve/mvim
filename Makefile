@@ -28,7 +28,7 @@ VIM_PURE := $(shell find Sources/Vim -name '*.swift' -not -path '*/Runtime/*')
 # listed here one at a time, and only when they are pure enough to link against
 # nothing but the stdlib — Surface.swift holds the rung algebra and precedence
 # walks, which are the part of per-surface config worth pinning.
-CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/CapabilityConfig.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift Sources/Core/EmptyBlockScan.swift
+CORE_PURE := Sources/Core/Surface.swift Sources/Core/CapabilitySeeds.swift Sources/Core/CapabilityConfig.swift Sources/Core/WebAreaWalk.swift Sources/Core/MarkerText.swift
 
 # Permission-free unit tests for the pure Vim engine. No Xcode/app build, no Accessibility grant.
 test:
