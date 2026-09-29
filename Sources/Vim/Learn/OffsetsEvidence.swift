@@ -54,11 +54,11 @@ public extension FieldReads {
     func selectedTextEvidence(current: OffsetsAnswer) -> Evidence? {
         guard let plain, !plain.isEmpty, let selectedText, let text else { return nil }
         let model = TextModel(text)
-        let observed = Self.withoutAttachments(selectedText)
-        let valueFits = plain.upperBound <= model.length && Self.withoutAttachments(model.substring(plain)) == observed
+        let observed = Expectation.withoutAttachments(selectedText)
+        let valueFits = plain.upperBound <= model.length && Expectation.withoutAttachments(model.substring(plain)) == observed
         var textContentFits: Bool?
         if let breaks = markers?.breaks, let value = markers?.value, !value.isEmpty, value.upperBound <= model.length {
-            textContentFits = Self.withoutAttachments(breaks.fieldText(model.substring(value), at: value)) == observed
+            textContentFits = Expectation.withoutAttachments(breaks.fieldText(model.substring(value), at: value)) == observed
         }
         switch (valueFits, textContentFits) {
         case (true, true?), (true, nil): return .offsets(.neutral, .textAgrees)
@@ -67,11 +67,6 @@ public extension FieldReads {
         case (false, false?): return .offsets(.refutes, .selectedText)
         case (false, nil): return current == .value ? .offsets(.refutes, .selectedText) : .offsets(.neutral, .unaligned)
         }
-    }
-
-    /// Chromium writes a U+FFFC into its text for each element with no text; `AXValue` has none.
-    static func withoutAttachments(_ text: String) -> String {
-        String(decoding: text.utf16.filter { $0 != 0xFFFC }, as: UTF16.self)
     }
 
     func interpreted(under answer: OffsetsAnswer) -> (selection: Range<Int>?, breaks: ParagraphBreaks?, emptyParagraph: Bool, textlessLeaves: Bool) {
