@@ -123,6 +123,26 @@ precondition(try! menu.load() == Beliefs.Contents(overrides: full.overrides, bel
 try! menu.update { $0.overrides = CapabilityConfig.clearing(atAndBelow: "com.example.app", on: surface, in: $0.overrides) }
 precondition(try! menu.load().overrides.isEmpty)
 
+let retry = fresh()
+try! retry.update { $0 = full }
+precondition(entry(try! retry.load(), .writeSelection, chromium: true) == .init(status: .unavailable, source: .learned))
+try! retry.update { $0.forget([full.beliefs[0]]) }
+precondition(try! retry.load() == Beliefs.Contents(overrides: full.overrides, beliefs: [full.beliefs[1], full.beliefs[2]]),
+             "Try Again forgets the lesson and makes no choice")
+precondition(entry(try! retry.load(), .writeSelection, chromium: true) == .init(status: .available, source: .probed))
+
+let replaced = fresh()
+try! replaced.update { $0 = full }
+var rejudged = full
+rejudged.beliefs[0].judgedUnder = .value
+var races = 0
+try! replaced.update {
+    if races == 0 { write(String(decoding: try! JSONEncoder().encode(rejudged), as: UTF8.self), to: replaced) }
+    races += 1
+    $0.forget([full.beliefs[0]])
+}
+precondition(races == 2 && (try! replaced.load()) == rejudged, "a belief replaced since the menu showed it stays")
+
 for unusable in [
     "{\n  \"schema\": 3,\n  \"overrides\": {},\n  \"beliefs\": [\n    {\"rung\": x}\n  ]\n}\n",
     #"{"schema": 4, "overrides": {}, "beliefs": []}"#,

@@ -6,8 +6,7 @@ public enum CapabilityConfig {
         case on, off
     }
 
-    /// Where an answer came from, so the menu can mark the entry in force.
-    /// The rung is what the checkmark lands on; badges never show it.
+    /// Where an answer came from: the menu checks the entry in force and names its rung in the row's subtitle.
     public struct Resolution: Equatable, Sendable {
         public let override: Override?
         public let overrideRung: String?

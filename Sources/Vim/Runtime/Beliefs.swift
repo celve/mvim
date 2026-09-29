@@ -28,6 +28,11 @@ final class Beliefs {
             store.forget(Question(capability), at: rung)
             if capability == .readCaret { store.forget(.offsets, at: rung) }
         }
+
+        /// Only the answers the menu showed, and no choice: one learned or edited since at the same slot stays.
+        mutating func forget(_ shown: [Belief]) {
+            beliefs.removeAll { shown.contains($0) }
+        }
     }
 
     struct Failure: Error, CustomStringConvertible {

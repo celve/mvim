@@ -97,13 +97,13 @@ public final class Controller {
         tracker.refreshPolicy()
     }
 
-    /// The bound field's capability resolution, for the menu's badge rows;
-    /// nil when unbound or forced (nothing configurable resolves there).
+    /// The bound field's capability resolution, for the menu's rows; nil when unbound or forced.
     public var capabilityReport: CapabilityReport? { binding?.capabilityReport }
 
-    /// The bound field's surface — what the menu configures and names. Its
-    /// bundle ID also gates the badges, so rows only describe the app they
-    /// belong to (overlays bind across apps).
+    /// The bound field's beliefs, for the menu's Learned section; nil when unbound or forced.
+    public var boundBeliefs: ResolvedBeliefs? { binding?.beliefs }
+
+    /// What the menu configures and names; its bundle ID keeps rows to their own app, since overlays bind across apps.
     public var boundSurface: Surface? { binding?.surface }
 
     /// A capability override changed (menu): rebuild the binding's profile
@@ -127,6 +127,11 @@ public final class Controller {
 
     public func clearOverrides(atAndBelow rung: String, on surface: Surface) {
         updateBeliefs { $0.overrides = CapabilityConfig.clearing(atAndBelow: rung, on: surface, in: $0.overrides) }
+    }
+
+    /// The menu's Try Again and Forget.
+    public func forget(_ beliefs: [Belief]) {
+        updateBeliefs { $0.forget(beliefs) }
     }
 
     /// The beliefs file, for the menu to open.

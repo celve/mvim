@@ -224,11 +224,7 @@ public enum SurfaceLadder {
     /// Compiled-in curation: rung → the capabilities it denies.
     public typealias Seeds = [String: Set<String>]
 
-    /// The narrowest rung carrying a user choice for `capability`.
-    ///
-    /// The rung comes back with the value because the menu needs it: the
-    /// checkmark marks *which* stored entry is in force, and that is the only
-    /// place the rung is surfaced — badges stay short.
+    /// The narrowest rung carrying a user choice for `capability`, which the menu checks and names.
     public static func userEntry(
         _ capability: String, rungs: [String], store: UserStore
     ) -> (rung: String, value: String)? {

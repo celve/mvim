@@ -27,40 +27,10 @@ struct MvimApp: App {
                     Text("Off").tag(VimPolicy.off)
                     Text("Force").tag(VimPolicy.forced)
                 }
-                // Scope is structural, not a setting: every item below is a
-                // complete sentence naming the rung it writes, so there is no
-                // mode to misread and exactly one item is ever checked.
-                Menu("Capabilities in \(model.surfaceLabel)") {
-                    ForEach(model.capabilityRows) { row in
-                        Menu("\(row.title) — \(row.badge)") {
-                            Button(row.choice == .auto ? "✓ Auto — inherit" : "Auto — inherit") {
-                                model.setCapabilityOverride(nil, at: nil, for: row.capability)
-                            }
-                            Divider()
-                            ForEach(row.onOptions) { option in
-                                Button(option.label) {
-                                    model.setCapabilityOverride(
-                                        option.override, at: option.rung, for: row.capability
-                                    )
-                                }
-                            }
-                            Divider()
-                            ForEach(row.offOptions) { option in
-                                Button(option.label) {
-                                    model.setCapabilityOverride(
-                                        option.override, at: option.rung, for: row.capability
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if !model.clearActions.isEmpty {
-                        Divider()
-                        ForEach(model.clearActions) { action in
-                            Button(action.label) { model.clearOverrides(at: action.rung) }
-                        }
-                    }
-                }
+                CapabilitiesItem(
+                    title: "Capabilities in \(model.surfaceLabel)", menu: model.capabilities,
+                    choose: model.setCapabilityOverride, forget: model.forget, clear: model.clearOverrides
+                )
             }
             Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, last good version in use") {
                 model.openBeliefsFile()
@@ -113,6 +83,89 @@ private struct UpdateItems: View {
     }
 }
 
+/// The Capabilities item: a badge counts what mvim learned for this field, and the submenu opens on it.
+struct CapabilitiesItem: View {
+    /// Subtitles and badges were checked on macOS 26 only; older systems get everything in the title.
+    static var richItemsAvailable: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+
+    let title: String
+    let menu: AppModel.CapabilityMenu
+    let choose: @MainActor (CapabilityConfig.Override?, String?, Capability) -> Void
+    let forget: @MainActor ([Belief]) -> Void
+    let clear: @MainActor (String) -> Void
+    var richItems = CapabilitiesItem.richItemsAvailable
+
+    var body: some View {
+        Menu(richItems ? title : joined(title, menu.badge)) {
+            // Text, not Section: SwiftUI draws a separator above every section, even atop a submenu.
+            if let header = menu.learnedHeader {
+                Text(header)
+                ForEach(menu.learned) { submenu(for: $0) }
+                if let forgetAll = menu.forgetAll {
+                    Button(forgetAll) { forget(menu.learned.flatMap { $0.lesson?.beliefs ?? [] }) }
+                }
+                Divider()
+            }
+            if menu.unbound {
+                Text("Not in a field")
+            }
+            ForEach(menu.rows) { submenu(for: $0) }
+            if !menu.clearActions.isEmpty {
+                Divider()
+                ForEach(menu.clearActions) { action in
+                    Button(action.label) { clear(action.rung) }
+                }
+            }
+        }
+        .badge(richItems ? menu.badge.map { Text($0) } : nil)
+    }
+
+    // Every choice is a sentence naming the rung it writes, so exactly one is ever checked.
+    private func submenu(for row: AppModel.CapabilityRow) -> some View {
+        Menu {
+            if let lesson = row.lesson {
+                Text(lesson.header)
+                Button {
+                    forget(lesson.beliefs)
+                } label: {
+                    Text(lesson.action)
+                    if richItems {
+                        Text(lesson.actionDetail)
+                    }
+                }
+                Divider()
+            }
+            Toggle("Auto — mvim decides", isOn: Binding(
+                get: { row.choice == .auto }, set: { if $0 { choose(nil, nil, row.capability) } }
+            ))
+            Divider()
+            ForEach(row.onOptions) { toggle($0, for: row.capability) }
+            Divider()
+            ForEach(row.offOptions) { toggle($0, for: row.capability) }
+        } label: {
+            if richItems, let subtitle = row.subtitle {
+                Text(row.title)
+                Text(subtitle)
+            } else {
+                Text(joined(row.title, row.subtitle))
+            }
+        }
+    }
+
+    private func toggle(_ option: AppModel.ScopeOption, for capability: Capability) -> some View {
+        Toggle(option.label, isOn: Binding(
+            get: { option.checked }, set: { if $0 { choose(option.override, option.rung, capability) } }
+        ))
+    }
+
+    private func joined(_ title: String, _ detail: String?) -> String {
+        detail.map { "\(title) — \($0)" } ?? title
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     struct FrontApp: Equatable {
@@ -160,21 +213,56 @@ final class AppModel: ObservableObject {
         let label: String
         let rung: String
         let override: CapabilityConfig.Override
+        let checked: Bool
         var id: String { rung + "|" + override.rawValue }
     }
 
-    /// One capabilities-menu row: the atom, its resolved verdict for the
-    /// bound field (badge), and every scope the user may write it at.
+    /// One capabilities-menu row: the atom, why it stands as it does here, and every scope it may be written at.
     struct CapabilityRow: Identifiable, Equatable {
         let capability: Capability
         let title: String
-        let badge: String
+        /// Nil where the atom works as detected, or no field is bound and the user chose nothing.
+        let subtitle: String?
+        let lesson: Lesson?
         let choice: OverrideChoice
         /// Kept apart so the menu can rule between them — a flat list of eight
         /// near-identical sentences is unreadable.
         let onOptions: [ScopeOption]
         let offOptions: [ScopeOption]
         var id: String { capability.rawValue }
+    }
+
+    /// What mvim learned behind a row: in force here, or on trial because it was judged under other offsets.
+    struct Lesson: Equatable {
+        let inForce: Bool
+        let header: String
+        let action: String
+        let actionDetail: String
+        /// What the action forgets.
+        let beliefs: [Belief]
+    }
+
+    /// The Capabilities submenu: the rows mvim learned something about for this kind of field, then the rest.
+    struct CapabilityMenu: Equatable {
+        var learnedHeader: String?
+        var learned: [CapabilityRow] = []
+        var rows: [CapabilityRow] = []
+        /// No field of the front app is bound, so nothing is detected.
+        var unbound = false
+        var clearActions: [ClearAction] = []
+
+        /// Lessons on trial here are not counted: nothing is off because of them.
+        var badge: String? {
+            let count = learned.filter { $0.lesson?.inForce == true }.count
+            return count == 0 ? nil : "\(count) learned"
+        }
+
+        /// One lesson keeps only its own action.
+        var forgetAll: String? {
+            guard learned.count > 1 else { return nil }
+            let which = learned.count == 2 ? "Both" : "All"
+            return learned.allSatisfy { $0.lesson?.inForce == false } ? "Forget \(which)" : "Try \(which) Again"
+        }
     }
 
     /// A "Clear overrides…" item: wipes every atom at a rung and below.
@@ -197,8 +285,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var secureInput = false
     @Published private(set) var frontApp: FrontApp?
     @Published private(set) var frontAppPolicy: VimPolicy = .auto
-    @Published private(set) var capabilityRows: [CapabilityRow] = []
-    @Published private(set) var clearActions: [ClearAction] = []
+    @Published private(set) var capabilities = CapabilityMenu()
     @Published private(set) var beliefsReadable = true
     @Published private(set) var loginItem: LoginItem.State = .off
     @Published var vimEnabled = true {
@@ -314,8 +401,15 @@ final class AppModel: ObservableObject {
         refreshCapabilityRows()
     }
 
+    func forget(_ beliefs: [Belief]) {
+        controller.forget(beliefs)
+        controller.refreshCapabilities()
+        refreshCapabilityRows()
+    }
+
     func openBeliefsFile() {
-        beliefsReadable = controller.appliedOverrides().fromFile
+        let readable = controller.appliedOverrides().fromFile
+        if readable != beliefsReadable { beliefsReadable = readable }
         NSWorkspace.shared.open(controller.beliefsURL)
     }
 
@@ -342,28 +436,37 @@ final class AppModel: ObservableObject {
         return "\(frontApp.name) › \(origin)"
     }
 
-    /// Rebuilt on menu open, app activation, and every rebind — cheap, and
-    /// the badges must describe the field vim is actually driving. Rows
-    /// exist without a binding too (overrides are config, not evidence); the
-    /// badge is "—" until a field of the front app binds. An overlay's
-    /// binding (other pid) must not label the front app's rows.
+    /// Rebuilt on app activation, rebinds and menu actions; an overlay's binding must not label the front app's rows.
     private func refreshCapabilityRows() {
         let applied = controller.appliedOverrides()
-        beliefsReadable = applied.fromFile
-        guard frontApp != nil else {
-            capabilityRows = []
-            clearActions = []
-            return
+        if applied.fromFile != beliefsReadable { beliefsReadable = applied.fromFile }
+        let menu: CapabilityMenu
+        if let frontApp {
+            let surface = menuSurface
+            let bound = controller.boundSurface?.bundleID == frontApp.bundleID
+            menu = Self.capabilityMenu(
+                app: frontApp.name, surface: surface,
+                report: bound ? controller.capabilityReport : nil, beliefs: bound ? controller.boundBeliefs : nil,
+                config: CapabilityConfig.resolveAll(
+                    surface, capabilities: Capability.allCases.map(\.rawValue), overrides: applied.overrides
+                )
+            )
+        } else {
+            menu = CapabilityMenu()
         }
-        let surface = menuSurface
-        let scopes = surface.writableScopes
-        let report = controller.boundSurface?.bundleID == frontApp?.bundleID
-            ? controller.capabilityReport : nil
-        let config = CapabilityConfig.resolveAll(
-            surface, capabilities: Capability.allCases.map(\.rawValue), overrides: applied.overrides
-        )
+        if menu != capabilities { capabilities = menu }
+    }
 
-        capabilityRows = Capability.allCases.map { capability in
+    /// Every string the Capabilities submenu shows is made here, from one resolution.
+    nonisolated static func capabilityMenu(
+        app: String, surface: Surface, report: CapabilityReport?, beliefs: ResolvedBeliefs?,
+        config: [String: CapabilityConfig.Resolution]
+    ) -> CapabilityMenu {
+        let scopes = surface.writableScopes
+        let overridden = Set(Capability.allCases.filter { config[$0.rawValue]?.override != nil })
+        let lessons = report.flatMap { beliefs?.lessons(report: $0, overridden: overridden) } ?? []
+        var menu = CapabilityMenu(unbound: report == nil)
+        for capability in Capability.allCases {
             let resolution = config[capability.rawValue] ?? .auto
             let choice: OverrideChoice
             switch resolution.override {
@@ -371,53 +474,160 @@ final class AppModel: ObservableObject {
             case .off: choice = .off
             case nil: choice = .auto
             }
-            let badge: String
-            if let entry = report?.entries[capability] {
-                let mark = entry.status == .available ? "✓" : "✗"
-                switch entry.source {
-                case .probed: badge = "\(mark) probed"
-                case .seeded: badge = "\(mark) seeded"
-                case .user: badge = "\(mark) user"
-                // The learner's suggestion, made visible so it can be disposed
-                // of: Off promotes it to a permanent decision, On overrules it.
-                case .learned: badge = "\(mark) learned"
-                }
-            } else {
-                badge = "—"
-            }
-            // Narrowest-first scope order within each group. The check marks the
-            // stored entry — the *user's* choice, not the resolved verdict: an
-            // `.on` that a failed probe overrules is still the choice they made,
-            // and the badge is where the truth shows.
+            let learned = lessons.first { $0.capability == capability }.map { self.learned($0, app: app) }
+            // Narrowest first; the check marks the user's stored choice, which the probe may overrule.
             func options(_ override: CapabilityConfig.Override) -> [ScopeOption] {
                 scopes.map { scope, rung in
-                    let checked = resolution.override == override && resolution.overrideRung == rung
-                    return ScopeOption(
-                        label: (checked ? "✓ " : "") + Self.sentence(override, scope),
-                        rung: rung,
-                        override: override
+                    ScopeOption(
+                        label: sentence(override, scope), rung: rung, override: override,
+                        checked: resolution.override == override && resolution.overrideRung == rung
                     )
                 }
             }
-            return CapabilityRow(
+            let row = CapabilityRow(
                 capability: capability,
-                title: Self.displayName(capability),
-                badge: badge,
+                title: displayName(capability),
+                subtitle: learned?.subtitle ?? standing(
+                    capability, report: report, resolution: resolution, surface: surface, scopes: scopes,
+                    readModel: beliefs?.readModel, app: app
+                ),
+                lesson: learned?.lesson,
                 choice: choice,
                 onOptions: options(.on),
                 offOptions: options(.off)
             )
+            if learned == nil {
+                menu.rows.append(row)
+            } else {
+                menu.learned.append(row)
+            }
+        }
+        if !menu.learned.isEmpty {
+            menu.learnedHeader = "Learned for \(kind(of: surface)) \(surface.origin.map { "on \($0)" } ?? "in \(app)")"
         }
 
         // Only the scopes that could plausibly hold something worth wiping —
         // clearing "this one field" is what Auto already does per atom.
-        clearActions = scopes.compactMap { scope, rung in
+        menu.clearActions = scopes.compactMap { scope, rung in
             switch scope {
             case .site, .app:
-                return ClearAction(label: "Clear overrides \(Self.phrase(scope))", rung: rung)
+                return ClearAction(label: "Clear overrides \(phrase(scope))", rung: rung)
             case .field, .fieldsOfRole:
                 return nil
             }
+        }
+        return menu
+    }
+
+    /// The Learned section's words for what the engine says a row learned.
+    private nonisolated static func learned(
+        _ lesson: ResolvedBeliefs.Lesson, app: String
+    ) -> (lesson: Lesson, subtitle: String) {
+        let belief = lesson.beliefs[0]
+        switch lesson.state {
+        case .inForce:
+            let row = Lesson(
+                inForce: true, header: learnedWhen(belief, app: app), action: "Try Again",
+                actionDetail: "Forget this, and stay on Auto", beliefs: lesson.beliefs
+            )
+            return (row, "Off" + since(belief) + " · " + until(belief, app: app))
+        case .reopened:
+            let judged = judgedPhrase(belief.judgedUnder ?? .value)
+            let row = Lesson(
+                inForce: false, header: learnedWhen(belief, app: app), action: "Forget",
+                actionDetail: "Try it again \(judged) too", beliefs: lesson.beliefs
+            )
+            return (row, "Trying again here · failed" + (day(belief).map { " \($0)" } ?? "") + " " + judged)
+        }
+    }
+
+    /// Why a row outside the Learned section stands as it does; nil where it works as detected.
+    private nonisolated static func standing(
+        _ capability: Capability, report: CapabilityReport?, resolution: CapabilityConfig.Resolution,
+        surface: Surface, scopes: [(scope: Surface.Scope, rung: String)], readModel: ReadModel?, app: String
+    ) -> String? {
+        let choice = resolution.override.map {
+            ($0 == .on ? "On" : "Off") + scopePhrase(resolution.overrideRung, surface: surface, scopes: scopes)
+        }
+        guard let report, let entry = report.entries[capability] else { return choice.map { $0 + ", your choice" } }
+        let parentOff = capability.parent.flatMap { report.entries[$0]?.status == .available ? nil : $0 }
+        if let choice {
+            guard resolution.override == .on, entry.status != .available else { return choice + ", your choice" }
+            return choice + (parentOff.map { ", but \(shortName($0)) is off" } ?? ", but not offered here")
+        }
+        if entry.status != .available, let parentOff {
+            return "Off while \(shortName(parentOff)) is off"
+        }
+        switch (entry.status, entry.source) {
+        case (.unavailable, .seeded): return "Off by default"
+        case (.unavailable, .probed): return "Not offered here"
+        default: break
+        }
+        guard capability == .readCaret, let readModel else { return nil }
+        switch (readModel.source, readModel.answer) {
+        case (.learned, .textContent), (.learned, .value):
+            let how = readModel.answer == .textContent ? "Through text markers" : "Through AXValue"
+            return readModel.belief.map { how + since($0) + " · " + until($0, app: app) } ?? how
+        case (.start, .textContent):
+            return "Through text markers, as Chromium rich text needs"
+        default:
+            return nil
+        }
+    }
+
+    /// Where a choice was stored, as the On and Off sentences name it; a hand-written `web:` rung spans browsers.
+    private nonisolated static func scopePhrase(
+        _ rung: String?, surface: Surface, scopes: [(scope: Surface.Scope, rung: String)]
+    ) -> String {
+        if let scope = scopes.first(where: { $0.rung == rung }) { return " " + phrase(scope.scope) }
+        if let origin = surface.origin, rung == Surface.webRung(origin) { return " on \(origin) in any browser" }
+        return ""
+    }
+
+    /// A read model expires with Electron's version where there is one; verdicts with the app's.
+    private nonisolated static func until(_ belief: Belief, app: String) -> String {
+        let electron = belief.question == .offsets && belief.engineVersion != nil
+        return electron ? "until \(app) updates Electron" : "until \(app) updates"
+    }
+
+    private nonisolated static func shortName(_ capability: Capability) -> String {
+        String(displayName(capability).split(separator: " (")[0])
+    }
+
+    private nonisolated static func learnedWhen(_ belief: Belief, app: String) -> String {
+        let version = belief.appVersion.isEmpty ? "" : " \(belief.appVersion)"
+        return "Learned" + (day(belief).map { " \($0)" } ?? "") + " in \(app)" + version
+    }
+
+    private nonisolated static func since(_ belief: Belief) -> String {
+        day(belief).map { " since \($0)" } ?? ""
+    }
+
+    /// "Sep 28", with the year when it is not this one.
+    private nonisolated static func day(_ belief: Belief) -> String? {
+        guard let stamp = belief.provenance.learnedAt, let date = try? Date(stamp, strategy: .iso8601) else {
+            return nil
+        }
+        let style = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        let thisYear = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+        return date.formatted(thisYear ? style : style.year())
+    }
+
+    private nonisolated static func judgedPhrase(_ answer: OffsetsAnswer) -> String {
+        switch answer {
+        case .textContent: return "in rich text"
+        case .value: return "in plain text"
+        case .untrusted: return "where the caret went unread"
+        }
+    }
+
+    /// The learner keys on the field's role, so the section names fields by it.
+    private nonisolated static func kind(of surface: Surface) -> String {
+        switch surface.role {
+        case "AXTextArea": return "text areas"
+        case "AXTextField": return "text fields"
+        case "AXComboBox": return "combo boxes"
+        default: return "fields like this one"
         }
     }
 
@@ -440,7 +650,7 @@ final class AppModel: ObservableObject {
     }
 
     /// UI strings stay in the app layer — the engine names atoms, not rows.
-    private static func displayName(_ capability: Capability) -> String {
+    private nonisolated static func displayName(_ capability: Capability) -> String {
         switch capability {
         case .readText: return "Read text"
         case .readLength: return "Read length"
@@ -449,8 +659,8 @@ final class AppModel: ObservableObject {
         case .writeSelection: return "Set selection (AX)"
         case .insertText: return "Replace text (AX)"
         case .drawCursor: return "Draw block cursor"
-        // Phrased so the row's *denial* is the legible half: "✗ seeded" then
-        // reads as the block-editor fact.
+        // Phrased so the row's *denial* is the legible half: "Off by default"
+        // then reads as the block-editor fact.
         case .wholeDocument: return "Text covers whole document"
         case .fieldIsSession: return "New field starts a session"
         case .lineStartKey: return "Line start key (⌃A)"

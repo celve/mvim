@@ -47,8 +47,7 @@ public final class FocusTracker {
         /// An app update reopens every trial, an engine update the read model.
         public let versions: Versions
 
-        /// Provenance behind `capabilities`, for the menu's badge rows.
-        /// nil for forced bindings — empty profile, nothing resolved.
+        /// Provenance behind `capabilities`, for the menu's rows; nil for forced bindings, which resolve nothing.
         public let capabilityReport: CapabilityReport?
 
         /// Nil for forced bindings, which learn nothing.
