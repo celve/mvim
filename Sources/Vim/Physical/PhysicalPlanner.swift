@@ -3,23 +3,30 @@
 ///
 /// The planner is a **simulator, not a translator**: it walks the logical
 /// steps carrying a predicted field state (the context), and for each step
-/// picks the best satisfiable lane, emits concrete steps, updates the
+/// picks the first lane that applies, emits concrete steps, updates the
 /// prediction, and derives the settle expectation from that same
-/// prediction. Three lanes emerge:
+/// prediction. `lowerMove` and `lowerSelect` try the lanes in this order:
 ///
-/// - **A** (AX write): compute exact offsets with `TextModel`, set ranges.
-/// - **B** (read, no write): same exact math, actuated as counted
-///   keystrokes and verified by read-back — reads turn key synthesis into a
-///   dumb actuator.
-/// - **C** (blind): Cocoa-approximate chords plus clipboard captures for
-///   anything needing content.
+/// 1. **The app's keys**, under `nativeMotions`: its word, paragraph, row
+///    and page keys, landing wherever the app decides.
+/// 2. **Native line and document keys**, where selections cannot be
+///    written: ⌃A ⌃E ⌘↑ ⌘↓, shifted to select, with only a column counted.
+/// 3. **A** (AX write): compute exact offsets with `TextModel`, set ranges,
+///    adding arrow keys at a Chromium paragraph end, where a write lands on
+///    the next paragraph. Or **B** (read, no write): the same exact math,
+///    actuated as counted keystrokes and verified by read-back — reads
+///    turn key synthesis into a dumb actuator.
+/// 4. **C** (blind): Cocoa-approximate chords plus clipboard captures for
+///    anything needing content.
 ///
-/// A step no lane can realize rejects the whole plan: `[.bell]`,
+/// A lane that does not apply leaves the step to the next one. A lane that
+/// applies but cannot realize the step rejects it, as running out of lanes
+/// does, and a rejected step rejects the whole plan: `[.bell]`,
 /// all-or-nothing, mirroring vim's execute-or-bell. The planner is pure —
 /// it never talks to AX, and it writes no state (it only *authors* commit
 /// steps for the reducer).
 public enum PhysicalPlanner {
-    /// Out-of-band, so the plan still stores only the program; the step's type narrows the 26 sites.
+    /// Out-of-band, so the plan still stores only the program; only the step's type says which lowering rejected.
     public struct Rejection: Equatable, Sendable {
         public let index: Int
         public let step: LogicalStep
@@ -309,6 +316,28 @@ private extension PhysicalPlanner {
     }
 }
 
+// MARK: - Lanes
+
+private extension PhysicalPlanner {
+    /// A lane's answer for a step: its steps, `next` where it does not apply, or `reject`, which rings the plan.
+    enum Lane {
+        case steps([PhysicalStep])
+        case next
+        case reject
+
+        func or(_ lane: () -> Lane) -> Lane {
+            guard case .next = self else { return self }
+            return lane()
+        }
+
+        /// A `lower*` function's answer: nil where a lane rejected, or where no lane applied.
+        var lowered: [PhysicalStep]? {
+            guard case .steps(let steps) = self else { return nil }
+            return steps
+        }
+    }
+}
+
 // MARK: - Step dispatch
 
 private extension PhysicalPlanner {
@@ -505,13 +534,21 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let keys = appMove(destination, context: &context, profile: profile) { return keys }
-        if let model = context.model(for: destination, profile), let selection = context.selection {
-            let position = selection.lowerBound
-            guard let target = resolve(destination, model: model, from: position) else { return nil }
-            if let keys = nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
-                return keys
-            }
+        appMove(destination, context: &context, profile: profile)
+            .or { exactMove(destination, context: &context, profile: profile) }
+            .or { blindMove(destination, context: &context) }
+            .lowered
+    }
+
+    /// Lanes 2 and 3, which share the model's target: native keys where they reach it, else lane A or B.
+    static func exactMove(
+        _ destination: LogicalStep.Destination, context: inout Context, profile: CapabilityProfile
+    ) -> Lane {
+        guard let model = context.model(for: destination, profile), let selection = context.selection else {
+            return .next
+        }
+        guard let target = resolve(destination, model: model, from: selection.lowerBound) else { return .reject }
+        return nativeMove(destination, to: target, model: model, context: &context, profile: profile).or {
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
                 actuation = write(target..<target, context: context)
@@ -520,13 +557,16 @@ private extension PhysicalPlanner {
             }
             context.selection = target..<target
             context.selectionOpaque = false
-            return actuation + settle(context, profile: profile)
+            return .steps(actuation + settle(context, profile: profile))
         }
+    }
+
+    static func blindMove(_ destination: LogicalStep.Destination, context: inout Context) -> Lane {
         guard case .motion(let motion, let count) = destination,
-              let blind = blindMoveChord(motion) else { return nil }
+              let blind = blindMoveChord(motion) else { return .next }
         context.selection = nil
         context.selectionOpaque = false
-        return [.press(blind.chord, count: blind.counted ? count : 1)]
+        return .steps([.press(blind.chord, count: blind.counted ? count : 1)])
     }
 }
 
@@ -536,60 +576,62 @@ private extension PhysicalPlanner {
     /// Chords pressed together, then one settle; a group that blames a key holds that key alone.
     typealias KeyGroup = (chords: [Chord], blame: Capability?)
 
-    /// Lane B's move by paragraph and document keys, counting only the column; nil where lane B counts it all.
+    /// Moves by paragraph and document keys, counting only the column; `next` where lane B counts it all.
     static func nativeMove(
         _ destination: LogicalStep.Destination?, to target: Int, model: TextModel,
         context: inout Context, profile: CapabilityProfile
-    ) -> [PhysicalStep]? {
-        guard !profile.has(.writeSelection), let position = context.position else { return nil }
+    ) -> Lane {
+        guard !profile.has(.writeSelection), let position = context.position else { return .next }
         let line = model.lineStart(of: position)
         let targetLine = model.lineStart(of: target)
         var groups: [KeyGroup]
         switch destination {
         case .motion(.lineStart, _)?:
-            guard profile.has(.lineStartKey) else { return nil }
+            guard profile.has(.lineStartKey) else { return .next }
             groups = [([.paragraphStart], .lineStartKey)]
         case .motion(.lineEnd, let count)?:
-            guard profile.has(.lineEndKey) else { return nil }
+            guard profile.has(.lineEndKey) else { return .next }
             groups = [([.paragraphEnd], .lineEndKey), (repeated([.right, .paragraphEnd], count - 1), nil)]
         case .motion(.fileStart, _)?:
-            guard profile.has(.documentStartKey) else { return nil }
+            guard profile.has(.documentStartKey) else { return .next }
             groups = [([.documentStart], .documentStartKey)]
         case .motion(.fileEnd, _)?:
-            guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return nil }
+            guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return .next }
             groups = [([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]
         default:
             // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
             var vertical: Direction?
             if case .motion(.line(let direction, _), _)? = destination { vertical = direction }
-            guard targetLine != line || vertical != nil else { return nil }
+            guard targetLine != line || vertical != nil else { return .next }
             if targetLine > line || vertical == .down {
-                guard profile.has(.lineEndKey) else { return nil }
+                guard profile.has(.lineEndKey) else { return .next }
                 let lines = model.newlineCount(in: line..<targetLine)
                 var hops: [Chord] = lines > 0 ? [.right] : []
                 hops += repeated([.paragraphEnd, .right], lines - 1)
                 groups = [([.paragraphEnd], .lineEndKey), (hops, nil)]
             } else {
-                guard profile.has(.lineStartKey) else { return nil }
+                guard profile.has(.lineStartKey) else { return .next }
                 let lines = model.newlineCount(in: targetLine..<line)
                 groups = [([.paragraphStart], .lineStartKey), (repeated([.left, .paragraphStart], lines), nil)]
             }
         }
         // Only the column is counted, in its own settle so the line the field reports decides it.
-        guard let reached = landing(of: groups.flatMap(\.chords), from: position, in: model.text),
-              model.lineStart(of: reached) == targetLine else { return nil }
+        var landing = KeyModel(text: model.text, anchor: position, focus: position)
+        guard groups.flatMap(\.chords).allSatisfy({ landing.press($0) }),
+              model.lineStart(of: landing.focus) == targetLine else { return .next }
+        let reached = landing.focus
         let step: Chord = target > reached ? .right : .left
         groups.append((Array(repeating: step, count: model.graphemes(in: min(reached, target)..<max(reached, target))), nil))
         return pressing(groups, to: target..<target, context: &context, profile: profile)
     }
 
-    /// Lane B's line-shaped selections by native keys, as many as the command counts, since keys past the end do
-    /// nothing; nil where lane B counts them.
+    /// Line-shaped selections by native keys, as many as the command counts, since keys past the end do nothing;
+    /// `next` where lane B counts them.
     static func nativeSelect(
         _ target: LogicalStep.SelectionTarget, range: Range<Int>,
         context: inout Context, profile: CapabilityProfile
-    ) -> [PhysicalStep]? {
-        guard !profile.has(.writeSelection) else { return nil }
+    ) -> Lane {
+        guard !profile.has(.writeSelection) else { return .next }
         let groups: [KeyGroup]
         switch target {
         case .lines(let count, let interior):
@@ -613,7 +655,7 @@ private extension PhysicalPlanner {
         case .span(to: .motion(.lineStart(firstNonBlank: false), _), false):
             groups = [([Chord.paragraphStart.shifted], .lineStartKey)]
         default:
-            return nil
+            return .next
         }
         return pressing(groups, to: range, context: &context, profile: profile)
     }
@@ -625,35 +667,26 @@ private extension PhysicalPlanner {
         return [([.paragraphStart], .lineStartKey), ([Chord.paragraphEnd.shifted], .lineEndKey), (rest, nil)]
     }
 
-    /// Presses the groups from the context's caret, each followed by its settle; nil unless they land on `target`.
+    /// Presses the groups from the context's caret, each followed by its settle; `next` unless they land on `target`.
     static func pressing(
         _ groups: [KeyGroup], to target: Range<Int>, context original: inout Context, profile: CapabilityProfile
-    ) -> [PhysicalStep]? {
-        guard let text = original.text, let position = original.position else { return nil }
+    ) -> Lane {
+        guard let text = original.text, let position = original.position else { return .next }
         let atoms = Set(groups.compactMap(\.blame))
-        guard atoms.allSatisfy(profile.has) else { return nil }
+        guard atoms.allSatisfy(profile.has) else { return .next }
         var context = original
         var steps = collapsing(&context)
         // One model throughout: which end of a selection moves is state the keys build up.
         var model = KeyModel(text: text, anchor: position, focus: position)
         for group in groups where !group.chords.isEmpty {
             for chord in group.chords {
-                guard model.press(chord) else { return nil }
+                guard model.press(chord) else { return .next }
             }
             steps += keys(group.chords, blaming: group.blame, to: model.selection, context: &context, profile: profile)
         }
-        guard model.selection == target else { return nil }
+        guard model.selection == target else { return .next }
         original = context
-        return steps
-    }
-
-    /// Where Cocoa's standard bindings leave a caret after `chords`.
-    static func landing(of chords: [Chord], from caret: Int, in text: String) -> Int? {
-        var keys = KeyModel(text: text, anchor: caret, focus: caret)
-        for chord in chords {
-            guard keys.press(chord) else { return nil }
-        }
-        return keys.focus
+        return .steps(steps)
     }
 
     static func repeated(_ chords: [Chord], _ times: Int) -> [Chord] {
@@ -966,29 +999,29 @@ private extension PhysicalPlanner {
 
     static func appMove(
         _ destination: LogicalStep.Destination, context: inout Context, profile: CapabilityProfile
-    ) -> [PhysicalStep]? {
+    ) -> Lane {
         guard profile.has(.nativeMotions), case .motion(let motion, let count) = destination,
-              let key = appKey(motion) else { return nil }
+              let key = appKey(motion) else { return .next }
         guard let model = context.model(for: destination, profile), let selection = context.selection,
               profile.has(.readCaret) else {
             // Lane C already maps words and lines.
-            if key.atom == .wordKeys { return nil }
-            if case .line = motion { return nil }
+            if key.atom == .wordKeys { return .next }
+            if case .line = motion { return .next }
             context.selection = nil
             context.selectionOpaque = false
-            return [.press(key.chord, count: count)]
+            return .steps([.press(key.chord, count: count)])
         }
         // Exact fields keep vim's words.
-        if key.atom == .wordKeys, profile.has(.writeSelection) { return nil }
-        if case .line = motion, !movesByRow(motion, profile: profile) { return nil }
-        if let atom = key.atom, !profile.has(atom) { return nil }
+        if key.atom == .wordKeys, profile.has(.writeSelection) { return .next }
+        if case .line = motion, !movesByRow(motion, profile: profile) { return .next }
+        if let atom = key.atom, !profile.has(atom) { return .next }
         let p = selection.lowerBound
         let strict = mustMove(from: p, forward: key.forward, model: model)
             && !mayCrossOnlyBreaks(from: p, forward: key.forward, context: context)
         let landing: Landing = key.forward ? .caretAfter(p, strict: strict) : .caretBefore(p, strict: strict)
         context.selection = nil
         context.selectionOpaque = false
-        return (selection.isEmpty ? [] : [.press(.left, count: 1)]) + [
+        return .steps((selection.isEmpty ? [] : [.press(.left, count: 1)]) + [
             .press(key.chord, count: count),
             // Blamed for leaving a selection, or, outside web content, for staying put.
             appSettle(landing, blame: key.atom.map {
@@ -998,34 +1031,34 @@ private extension PhysicalPlanner {
                                         exemptions: stuck.isEmpty ? [] : [.init(.webContent, unmoved: stuck)])
                     : Expectation.Blame(capability: $0, unmoved: stuck, leavesCaret: true)
             }, context: context, profile: profile),
-        ]
+        ])
     }
 
-    /// Outer nil hands back to vim's lowering; inner nil rejects.
+    /// Rejects a span its keys cannot prove, since vim's words may not be the app's.
     static func appSelect(
         _ target: LogicalStep.SelectionTarget, context: inout Context, profile: CapabilityProfile
-    ) -> [PhysicalStep]?? {
-        guard profile.has(.nativeMotions) else { return nil }
+    ) -> Lane {
+        guard profile.has(.nativeMotions) else { return .next }
         let span: AppKey?
         switch target {
         case .textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), 1):
             span = nil
         case .span(.motion(let motion, _), _):
-            guard let key = appKey(motion), key.atom == .wordKeys else { return nil }
+            guard let key = appKey(motion), key.atom == .wordKeys else { return .next }
             span = key
         default:
-            return nil
+            return .next
         }
         guard let model = context.model(for: target, profile), let selection = context.selection,
               profile.has(.readCaret) else {
             // ⌥→ first, so a caret at a word's start stays in that word.
-            guard span == nil else { return nil }
+            guard span == nil else { return .next }
             context.selection = nil
             context.selectionOpaque = true
             context.selectionWise = .character
-            return [.press(.wordRight, count: 1), .press(.wordLeft, count: 1), .press(.selectWordRight, count: 1)]
+            return .steps([.press(.wordRight, count: 1), .press(.wordLeft, count: 1), .press(.selectWordRight, count: 1)])
         }
-        guard !profile.has(.writeSelection), profile.has(.wordKeys) else { return nil }
+        guard !profile.has(.writeSelection), profile.has(.wordKeys) else { return .next }
         let p = selection.lowerBound
         var steps: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
         if let key = span, case .span(.motion(_, let count), _) = target {
@@ -1044,16 +1077,16 @@ private extension PhysicalPlanner {
                 let blame = wordBlame(stuck(.wordKeys, at: p, context: context), context: context)
                 steps.append(appSettle(.exact(reached), blame: blame, context: context, profile: profile))
             } else {
-                return .some(nil)
+                return .reject
             }
         } else {
-            guard let keys = wordAtCaretKeys(p, model: model, context: context, profile: profile) else { return .some(nil) }
+            guard let keys = wordAtCaretKeys(p, model: model, context: context, profile: profile) else { return .reject }
             steps += keys
         }
         context.selection = nil
         context.selectionOpaque = true
         context.selectionWise = .character
-        return steps
+        return .steps(steps)
     }
 }
 
@@ -1094,7 +1127,7 @@ private extension PhysicalPlanner {
         }
     }
 
-    static func blindSelect(_ target: LogicalStep.SelectionTarget) -> [PhysicalStep]? {
+    static func blindSelectKeys(_ target: LogicalStep.SelectionTarget) -> [PhysicalStep]? {
         switch target {
         case .span(let destination, _):
             guard case .motion(let motion, let count) = destination,
@@ -1144,24 +1177,30 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
-        if let keys = appSelect(target, context: &context, profile: profile) { return keys }
-        if let model = context.model(for: target, profile), let selection = context.selection {
-            let position = selection.lowerBound
-            guard let range = selectionRange(for: target, model: model, at: position, context: context) else {
-                return nil
-            }
-            context.selectionWise = target.wise ?? context.selectionWise ?? .character
-            context.selectionOpaque = false
-            // Pressed even where nothing is to select, so a settle checks the caret the command starts from.
-            if let keys = nativeSelect(target, range: range, context: &context, profile: profile) {
-                return keys
-            }
+        appSelect(target, context: &context, profile: profile)
+            .or { exactSelect(target, context: &context, profile: profile) }
+            .or { blindSelect(target, context: &context) }
+            .lowered
+    }
+
+    /// Lanes 2 and 3, which share the model's range: native keys where they select it, else lane A or B.
+    static func exactSelect(
+        _ target: LogicalStep.SelectionTarget, context: inout Context, profile: CapabilityProfile
+    ) -> Lane {
+        guard let model = context.model(for: target, profile), let selection = context.selection else { return .next }
+        guard let range = selectionRange(for: target, model: model, at: selection.lowerBound, context: context) else {
+            return .reject
+        }
+        context.selectionWise = target.wise ?? context.selectionWise ?? .character
+        context.selectionOpaque = false
+        // Pressed even where nothing is to select, so a settle checks the caret the command starts from.
+        return nativeSelect(target, range: range, context: &context, profile: profile).or {
             if range == context.selection {
-                return []   // already selected (Visual operators)
+                return .steps([])   // already selected (Visual operators)
             }
             if profile.has(.writeSelection) {
                 context.selection = range
-                return write(range, context: context) + settle(context, profile: profile)
+                return .steps(write(range, context: context) + settle(context, profile: profile))
             }
             var presses = keyPath(from: selection, to: range.lowerBound, model: model)
             let count = model.graphemes(in: range)
@@ -1169,13 +1208,16 @@ private extension PhysicalPlanner {
                 presses.append(.press(.selectRight, count: count))
             }
             context.selection = range
-            return presses + settle(context, profile: profile)
+            return .steps(presses + settle(context, profile: profile))
         }
-        guard let presses = blindSelect(target) else { return nil }
+    }
+
+    static func blindSelect(_ target: LogicalStep.SelectionTarget, context: inout Context) -> Lane {
+        guard let presses = blindSelectKeys(target) else { return .next }
         context.selection = nil
         context.selectionOpaque = true
         context.selectionWise = target.wise ?? .character
-        return presses
+        return .steps(presses)
     }
 
     static func lowerExtend(
@@ -1430,13 +1472,18 @@ private extension PhysicalPlanner {
         var settled = false
         if profile.has(.writeSelection) {
             steps += write(range, context: context)
-        } else if let keys = nativeSelect(.lines(count: count, interior: true), range: range,
-                                          context: &context, profile: profile) {
-            steps += keys
-            settled = true
         } else {
-            steps += keyPath(from: selection, to: range.lowerBound, model: model)
-            steps.append(.press(.selectRight, count: model.graphemes(in: range)))
+            switch nativeSelect(.lines(count: count, interior: true), range: range,
+                                context: &context, profile: profile) {
+            case .steps(let keys):
+                steps += keys
+                settled = true
+            case .next:
+                steps += keyPath(from: selection, to: range.lowerBound, model: model)
+                steps.append(.press(.selectRight, count: model.graphemes(in: range)))
+            case .reject:
+                return nil
+            }
         }
         context.selection = range
         // Settled, so the AX replacement cannot overtake the selecting keys.
@@ -1475,7 +1522,8 @@ private extension PhysicalPlanner {
                     let target = action.position == .after
                         ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
                         : position
-                    steps += moveSteps(to: target, context: &context, profile: profile)
+                    guard let moved = moveSteps(to: target, context: &context, profile: profile) else { return nil }
+                    steps += moved
                 } else if action.position == .after {
                     steps.append(.press(.right, count: 1))
                 }
@@ -1489,8 +1537,9 @@ private extension PhysicalPlanner {
                     let target = action.position == .after
                         ? (end >= model.length ? model.length : end + 1)
                         : model.lineStart(of: position)
-                    steps += moveSteps(to: target, as: lineTarget(action, end: end, model: model),
-                                       context: &context, profile: profile)
+                    guard let moved = moveSteps(to: target, as: lineTarget(action, end: end, model: model),
+                                                context: &context, profile: profile) else { return nil }
+                    steps += moved
                 } else if action.position == .after {
                     // Next line start. On the last line .down no-ops and the
                     // paste lands above — a well-formed line misplaced beats
@@ -1530,7 +1579,7 @@ private extension PhysicalPlanner {
             let target = action.position == .after
                 ? min(model.advance(position, byGraphemes: 1), model.lineEnd(of: position))
                 : position
-            var steps = moveSteps(to: target, context: &context, profile: profile)
+            guard var steps = moveSteps(to: target, context: &context, profile: profile) else { return nil }
             steps += insertSteps(payload, after: steps, context: &context, profile: profile)
             return steps
         }
@@ -1566,8 +1615,8 @@ private extension PhysicalPlanner {
             } else {
                 target = model.lineStart(of: position)
             }
-            var steps = moveSteps(to: target, as: lineTarget(action, end: end, model: model),
-                                  context: &context, profile: profile)
+            guard var steps = moveSteps(to: target, as: lineTarget(action, end: end, model: model),
+                                        context: &context, profile: profile) else { return nil }
             steps += insertSteps(insertion, after: steps, context: &context, profile: profile)
             return steps
         }
@@ -1589,15 +1638,16 @@ private extension PhysicalPlanner {
         as destination: LogicalStep.Destination? = nil,
         context: inout Context,
         profile: CapabilityProfile
-    ) -> [PhysicalStep] {
+    ) -> [PhysicalStep]? {
         let steps: [PhysicalStep]
         if profile.has(.writeSelection) {
             steps = write(target..<target, context: context)
         } else if let model = context.model, let selection = context.selection {
-            if let keys = nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
-                return keys
+            switch nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
+            case .steps(let keys): return keys
+            case .next: steps = keyPath(from: selection, to: target, model: model)
+            case .reject: return nil
             }
-            steps = keyPath(from: selection, to: target, model: model)
         } else {
             steps = []
         }
