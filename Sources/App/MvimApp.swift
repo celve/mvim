@@ -68,13 +68,14 @@ struct MvimApp: App {
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
                 .onAppear { model.refresh() }
-            Text(model.accessibilityTrusted ? "Accessibility: granted" : "Accessibility: not granted")
-            Text(model.inputMonitoringGranted
+            Button(model.accessibilityTrusted ? "Accessibility: granted" : "Accessibility: not granted") {
+                model.openPrivacyPane("Privacy_Accessibility")
+            }
+            Button(model.inputMonitoringGranted
                 ? "Input Monitoring: granted"
-                : "Input Monitoring: not granted — grant, then relaunch")
-            Divider()
-            Button("Open Accessibility Settings") { model.openPrivacyPane("Privacy_Accessibility") }
-            Button("Open Input Monitoring Settings") { model.openPrivacyPane("Privacy_ListenEvent") }
+                : "Input Monitoring: not granted — grant, then relaunch") {
+                model.openPrivacyPane("Privacy_ListenEvent")
+            }
             Divider()
             // Checked answers "will mvim start at login?" — a revoked item is not.
             Toggle("Start at Login", isOn: Binding(
