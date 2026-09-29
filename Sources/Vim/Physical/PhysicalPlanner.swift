@@ -576,7 +576,7 @@ private extension PhysicalPlanner {
     /// Chords pressed together, then one settle; a group that blames a key holds that key alone.
     typealias KeyGroup = (chords: [Chord], blame: Capability?)
 
-    /// Moves by paragraph and document keys, counting only the column; `next` where lane B counts it all.
+    /// Moves by native line and document keys, counting only the column; `next` where lane B counts it all.
     static func nativeMove(
         _ destination: LogicalStep.Destination?, to target: Int, model: TextModel,
         context: inout Context, profile: CapabilityProfile
@@ -1034,7 +1034,7 @@ private extension PhysicalPlanner {
         ])
     }
 
-    /// Rejects a span its keys cannot prove, since vim's words may not be the app's.
+    /// Rejects a selection its keys cannot prove, since vim's words may not be the app's.
     static func appSelect(
         _ target: LogicalStep.SelectionTarget, context: inout Context, profile: CapabilityProfile
     ) -> Lane {
