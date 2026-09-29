@@ -114,6 +114,9 @@ public struct Sim {
     /// The command that opened the current Insert session, recorded at its Esc.
     private var openChange: (source: String, count: Int?, register: Register?, mutated: Bool)?
 
+    /// The last snapshot's, to convert the drawn cursor at unbind.
+    private var fieldBreaks: ParagraphBreaks?
+
     public init(
         text: String,
         caret: Int = 0,
@@ -170,7 +173,7 @@ public struct Sim {
     @discardableResult
     public mutating func perform(_ steps: [PhysicalStep]) -> Bool {
         captures = [:]
-        return execute(PhysicalPlan(steps: steps)) == nil
+        return execute(steps) == nil
     }
 
     /// `Controller.rebind`'s pure twin: focus moved, and the transition says
@@ -182,6 +185,13 @@ public struct Sim {
     /// is different text whose offsets restart at zero, which is precisely
     /// what makes the departing field's offsets fiction.
     public mutating func refocus(_ transition: FocusTransition, text: String? = nil, caret: Int = 0) {
+        if !transition.preservesDrawnCursor {
+            if let cursor = state.field.cursor,
+               let release = PhysicalPlanner.releaseCursor(cursor, breaks: fieldBreaks, profile: profile) {
+                executeAside(release)
+            }
+            fieldBreaks = nil
+        }
         if let text {
             self.text = text
             let clamped = TextModel(text).clamp(caret)
@@ -225,19 +235,23 @@ private extension Sim {
             valueGap: reading.gap,
             holdsEmptyParagraphs: reading.holdsEmptyParagraphs
         )
+        fieldBreaks = snapshot.breaks
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
         let before = state.field.mode
 
         captures = [:]
-        let abortedAt = execute(physical)
+        let abortedAt = execute(physical.steps)
         abortedStep = abortedAt.map { physical.steps[$0] }
         // After the hygiene below, as the Controller's is.
         defer { learn(from: reading) }
         guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
             if planned.abortedAtTextCheck(abortedAt) {
-                if !unreadableSelection, !readSelection.isEmpty { _ = press(.left) }
+                if !unreadableSelection, !readSelection.isEmpty,
+                   let collapse = PhysicalPlanner.collapse(readSelection, misread: true, profile: profile) {
+                    executeAside(collapse)
+                }
                 if state.field.mode.isInserting {
                     state = VimReducer.reduce(state, .setMode(before.nonVisual))
                 }
@@ -264,12 +278,9 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        guard profile.has(.writeSelection), !swallowsSelect else {
-            guard profile.has(.nativeMotions), !ignoredChords.contains(.left), press(reboundChords[.left] ?? .left) else { return false }
-            return selection.isEmpty
-        }
-        selection = selection.lowerBound..<selection.lowerBound
-        return true
+        guard let collapse = PhysicalPlanner.collapse(readSelection, profile: profile) else { return false }
+        executeAside(collapse)
+        return readSelection.isEmpty
     }
 
     /// Fold a just-ended Insert session into the dot memories.
@@ -345,10 +356,10 @@ private extension Sim {
 
 private extension Sim {
     /// The index of the step that ended the run, nil when every step ran.
-    mutating func execute(_ plan: PhysicalPlan) -> Int? {
+    mutating func execute(_ steps: [PhysicalStep]) -> Int? {
         var kept: [Int: Int] = [:]
         attribution = RunAttribution()
-        for (index, step) in plan.steps.enumerated() {
+        for (index, step) in steps.enumerated() {
             if case .settle = step {} else { attribution.record(step) }
             switch step {
             case .setSelection(let range):
@@ -395,7 +406,7 @@ private extension Sim {
                 if !passed {
                     settleFailures += 1
                     if let key = expectation.blamed(observed: observed) { blamed.append(key) }
-                    drainResidency(of: plan, after: index)
+                    drainResidency(of: steps, after: index)
                     return index   // the rest dies, like the real executor
                 }
                 if let slot = expectation.keeps, let caret = observed?.lowerBound { kept[slot] = caret }
@@ -443,9 +454,16 @@ private extension Sim {
         return true
     }
 
+    /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them.
+    mutating func executeAside(_ plan: PhysicalPlan) {
+        let evidence = attribution
+        _ = execute(plan.steps)
+        attribution = evidence
+    }
+
     /// The twin of the real executor's surviving-commit scan.
-    mutating func drainResidency(of plan: PhysicalPlan, after index: Int) {
-        for survivor in plan.steps[(index + 1)...] {
+    mutating func drainResidency(of steps: [PhysicalStep], after index: Int) {
+        for survivor in steps[(index + 1)...] {
             if case .commit(let effect) = survivor, effect.survivesAbort {
                 state = VimReducer.reduce(state, effect, captures: captures)
             }
