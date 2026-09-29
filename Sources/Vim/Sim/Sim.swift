@@ -40,13 +40,25 @@ public struct Sim {
     /// start and is as long as `AXSelectedText`, the true selected text less its paragraph breaks (LIN-1533).
     public var reads: ((_ offset: Int, _ text: String) -> Int)?
 
+    /// Chromium rich text whose every `\n` ends a paragraph, as Chrome 153 shows it: see `ChromiumParagraphs` (LIN-1612).
+    public var emptyParagraphs = false
+
+    /// Off, discovery fails and the snapshot keeps `AXValue`'s lines.
+    public var findsEmptyParagraphs = true
+
     public var readSelection: Range<Int> {
+        if emptyParagraphs { return chromium.field(selection) }
         guard let reads else { return selection }
         let start = reads(selection.lowerBound, text)
         return start..<start + readSelectedText.utf16.count
     }
 
     public var readSelectedText: String {
+        if emptyParagraphs {
+            let markers = Array(chromium.shown.markers.utf16)
+            let range = readSelection
+            return String(decoding: markers[range.clamped(to: 0..<markers.count)], as: UTF16.self)
+        }
         let selected = TextModel(text).substring(selection)
         return reads == nil ? selected : selected.filter { $0 != "\n" }
     }
@@ -201,14 +213,17 @@ private extension Sim {
         }
         let snapshot = FieldSnapshot(
             capabilities: profile,
-            text: text,
+            text: reading.text ?? text,
             selection: reading.selection,
+            length: fieldLength,
             anchor: anchor,
             cursor: cursor,
-            webContent: webContent || reads != nil,
+            webContent: webContent || reads != nil || emptyParagraphs,
             breaks: reading.breaks,
             caretInEmptyParagraph: reading.emptyParagraph,
-            textlessLeaves: reading.textlessLeaves
+            textlessLeaves: reading.textlessLeaves,
+            valueGap: reading.gap,
+            holdsEmptyParagraphs: reading.holdsEmptyParagraphs
         )
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
@@ -373,8 +388,9 @@ private extension Sim {
                 let expectation = planned.resolving(kept)
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
-                let passed = expectation.matches(selection: observed, length: text.utf16.count, selectedText: readSelectedText)
-                attribution.record(.settle(expectation), passed: passed, selection: observed, length: text.utf16.count,
+                let passed = expectation.matches(selection: observed, length: fieldLength, selectedText: readSelectedText)
+                    && (!emptyParagraphs || chromium.onEdge(expectation.edge, selection))
+                attribution.record(.settle(expectation), passed: passed, selection: observed, length: fieldLength,
                                    selectedText: readSelectedText)
                 if !passed {
                     settleFailures += 1
@@ -403,6 +419,7 @@ private extension Sim {
 
     /// In `reads`' coordinates a boundary offset lands at the next paragraph's start.
     func landing(_ offset: Int) -> Int {
+        if emptyParagraphs { return chromium.landing(offset) }
         guard writesInReadOffsets, let reads else { return offset }
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
     }
@@ -485,6 +502,10 @@ public extension Sim {
         let emptyParagraph: Bool
         let textlessLeaves: Bool
         let observed: Learning.Observation
+        /// The planner's text where it is not the Sim's own.
+        var text: String?
+        var gap = 0
+        var holdsEmptyParagraphs = false
     }
 }
 
@@ -493,6 +514,7 @@ extension Sim {
     mutating func read() -> Reading {
         let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
             ?? (readModel, .start)
+        if emptyParagraphs { return readChromium(current: current, source: source) }
         let plain = unreadableSelection ? nil : readSelection
         let sampled = current == .value && source.observes && learner?.sampling.samples(text: text, plain: plain) == true
         let reads = FieldReads(
@@ -519,6 +541,46 @@ extension Sim {
             observed: observed
         )
     }
+
+    /// `Snapshotter.snapshot`'s order: the learner judges the reads as given, then the empty paragraphs go back in.
+    mutating func readChromium(current: OffsetsAnswer, source: OffsetsSource) -> Reading {
+        let chromium = self.chromium
+        let shown = chromium.shown
+        let field = readSelection
+        let aligned = ParagraphBreaks(value: shown.value, fieldText: shown.markers)
+        let truth = selection
+        let side = { (end: ParagraphBreaks.End) in chromium.side(end == .upper ? truth.upperBound : truth.lowerBound) }
+        let reads = FieldReads(
+            text: shown.value, plain: unreadableSelection ? nil : field, selectedText: readSelectedText,
+            markers: MarkerReads(breaks: aligned, value: aligned?.valueRange(field, side: side))
+        )
+        var observed = Learning.Observation(before: current, source: source)
+        if var learner {
+            observed = Learning.observe(reads, before: current, source: source, newEngine: learner.model.newEngine)
+            if let evidence = observed.evidence {
+                learner.tally.count(evidence)
+                learner.evidence.append(evidence)
+            }
+            self.learner = learner
+        }
+        let interpreted = reads.interpreted(under: observed.after)
+        var reading = Reading(
+            selection: interpreted.selection, breaks: interpreted.breaks,
+            emptyParagraph: interpreted.selection != nil && chromium.inEmptyParagraph(truth), textlessLeaves: false,
+            observed: observed, text: shown.value
+        )
+        guard observed.after == .textContent, findsEmptyParagraphs, let aligned,
+              let model = EmptyParagraphs.restore(value: shown.value, fieldText: shown.markers, aligned: aligned, found: shown.found),
+              let resolved = model.breaks.valueRange(field, side: side) else { return reading }
+        reading = Reading(selection: resolved, breaks: model.breaks, emptyParagraph: false, textlessLeaves: false,
+                          observed: observed, text: model.text, gap: model.gap, holdsEmptyParagraphs: !shown.found.isEmpty)
+        return reading
+    }
+
+    /// `kAXNumberOfCharacters`: `AXValue`'s length.
+    var fieldLength: Int { emptyParagraphs ? chromium.shown.value.utf16.count : text.utf16.count }
+
+    var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text) }
 
     var markerReads: MarkerReads {
         MarkerReads(breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection)
@@ -549,5 +611,61 @@ extension Sim {
         learner.resolved = resolved
         profile = CapabilityResolver.resolve(probed: learner.probed, config: learner.config, beliefs: resolved).profile
         self.learner = learner
+    }
+}
+
+/// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612).
+struct ChromiumParagraphs {
+    let text: String
+    let paragraphs: [String]
+    let shown: (value: String, markers: String, found: [Int])
+
+    init(text: String) {
+        self.text = text
+        paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        shown = EmptyParagraphs.chromium(paragraphs)
+    }
+
+    /// The marker offset of each true offset: paragraphs run together, an empty one standing as its `<br>`.
+    func field(_ offset: Int) -> Int {
+        var start = 0
+        var marker = 0
+        for paragraph in paragraphs {
+            let length = paragraph.utf16.count
+            if offset <= start + length { return marker + offset - start }
+            start += length + 1
+            marker += max(length, 1)
+        }
+        return marker
+    }
+
+    func field(_ range: Range<Int>) -> Range<Int> {
+        let (a, b) = (field(range.lowerBound), field(range.upperBound))
+        return min(a, b)..<max(a, b)
+    }
+
+    /// Where a write of marker offset `offset` lands: the last caret that reads it, as Chromium's land downstream.
+    func landing(_ offset: Int) -> Int {
+        (0...text.utf16.count).last { field($0) <= offset } ?? 0
+    }
+
+    private func isParagraphStart(_ offset: Int) -> Bool {
+        offset == 0 || Array(text.utf16)[offset - 1] == 10
+    }
+
+    /// `Snapshotter.paragraphSide`: a paragraph's start, empty or not, reads as the start.
+    func side(_ offset: Int) -> ParagraphBreaks.Side {
+        isParagraphStart(offset) ? .start(skipping: 0) : .end
+    }
+
+    func onEdge(_ edge: Expectation.Edge?, _ selection: Range<Int>) -> Bool {
+        guard let edge else { return true }
+        return isParagraphStart(selection.upperBound) == (edge == .paragraphStart)
+    }
+
+    func inEmptyParagraph(_ selection: Range<Int>) -> Bool {
+        guard selection.isEmpty else { return false }
+        let model = TextModel(text)
+        return model.lineStart(of: selection.lowerBound) == model.lineEnd(of: selection.lowerBound)
     }
 }

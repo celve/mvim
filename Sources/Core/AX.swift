@@ -196,6 +196,8 @@ public enum AX {
             return (slot as! AXUIElement)
         }
 
+        public func elements(_ index: Int) -> [AXUIElement]? { slot(index) as? [AXUIElement] }
+
         public func textMarkerRange(_ index: Int) -> AnyObject? {
             guard let slot = slot(index), CFGetTypeID(slot) == AXTextMarkerRangeGetTypeID() else { return nil }
             return slot
@@ -351,6 +353,19 @@ public enum AX {
         )
     }
 
+    /// The field's start marker, from which `markerLength(from:to:end:in:)` measures.
+    public static func fieldStart(of element: AXUIElement) -> AXTextMarker? {
+        fieldMarkers(of: element)?.start
+    }
+
+    /// `AXLengthForTextMarkerRange` from `start` to `node`'s start or end, a U+FFFC counted per text-less leaf; moves no string.
+    public static func markerLength(from start: AXTextMarker, to node: AXUIElement, end: Bool, in element: AXUIElement) -> Int? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)) else { return nil }
+        let marker = end ? AXTextMarkerRangeCopyEndMarker(range) : AXTextMarkerRangeCopyStartMarker(range)
+        // Anchored at the later end, as `text(from:to:)` reads.
+        return parameterized("AXLengthForTextMarkerRange", AXTextMarkerRangeCreate(kCFAllocatorDefault, marker, start), of: element) as? Int
+    }
+
     /// The field's `AXValue` without its paragraph breaks.
     public static func textContent(of element: AXUIElement) -> String? {
         markerText(of: element).map(MarkerText.plain)
@@ -393,7 +408,7 @@ public enum AX {
     }
 
     /// Nil on a failed read, so a container is never taken for a leaf.
-    private static func children(of node: AXUIElement) -> [AXUIElement]? {
+    public static func children(of node: AXUIElement) -> [AXUIElement]? {
         var ref: CFTypeRef?
         switch AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &ref) {
         case .success: return ref as? [AXUIElement]

@@ -107,7 +107,8 @@ Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim re
 its selection. There mvim runs the same Normal-mode commands by pressing keys (arrows, ⌃A and ⌃E, ⌘↑
 and ⌘↓), and checks the field after each step: when the field does not answer as planned, it beeps and
 stops rather than edit the wrong text. There is no block cursor there, and `o` and `O` paste their
-new line, because ⏎ could send a message. In a field mvim cannot read at all, and under **Force**,
+new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
+of more than about 250 paragraphs. In a field mvim cannot read at all, and under **Force**,
 moves are approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
@@ -382,7 +383,7 @@ before the key although the key had somewhere to go, or when the key landed some
 Chromium's rich text a landing somewhere else aborts without learning. Where a key's lane exempts a
 failure from blame, a `learn` line says so: `evidence q=lineStartKey neutral why=paragraph-lines
 seen=settle@1` (a line key off target in Chromium's rich text), `why=empty-paragraph` (a key from a
-caret in an empty paragraph) or `why=web-content` (a word or paragraph key that stayed put in web
+caret in an empty paragraph mvim could not give a line) or `why=web-content` (a word or paragraph key that stayed put in web
 content).
 
 Before an edit deletes or types over a selection, it checks the selected text: `ciw` is
@@ -405,7 +406,9 @@ without the `\n` Chromium generates where a paragraph starts. mvim plans in `AXV
 converts at the field's edge, so a `settle` line's `want` and `got` are the field's own offsets,
 behind the planner's by the paragraph breaks before them. Where one field offset is both a
 paragraph's end and the next one's start, `edge=end` or `edge=start` says which the settle waited
-for.
+for. `AXValue` leaves out an empty paragraph that sits between two others; mvim finds those in the
+accessibility tree and plans with each as a line of its own, while a settle's `len` stays
+`AXValue`'s, and `empty=N` on a `cmd` line is how many lines the plan had that `AXValue` lacks.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -472,9 +475,11 @@ paragraph breaks before it; mvim reads it through text markers and puts the brea
 and where that fails the caret is unknown and the command goes blind. Which fields count this
 way is a [belief](#learned-beliefs), checked on every snapshot. Keys are pressed
 even where a command has nothing to select or `j`/`k` stays on its line, so a settle still checks
-the caret the command starts from. An empty paragraph can be missing from `AXValue`, and a caret
-in one reads as its neighbour's, so a key pressed from a caret whose marker sits on an empty
-paragraph is not blamed for seeming to do nothing. In such a field a yank within one line takes its register from
+the caret the command starts from. An empty paragraph can be missing from `AXValue`, with a caret
+in it reading as the end of the line above, so mvim looks for these in the accessibility tree once
+per text and gives each a line. Where it cannot, in a field of more than about 250 blocks
+or when a read fails, a key pressed from a caret whose marker sits on an empty paragraph is not
+blamed for seeming to do nothing. In such a field a yank within one line takes its register from
 the text the field selected.
 
 A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
@@ -489,7 +494,9 @@ newer and is kept.
 
 `o` and `O` paste their newline in web content: typed, it makes no paragraph in Chromium's rich
 text, and ⏎ would send a chat message. Chromium leaves the new empty paragraph out of `AXValue`
-until it holds text, so the settles after it do not check the length.
+until it holds text, so the settles after it do not check the length. In a field where mvim found
+empty paragraphs, an edit that empties a line or types into an empty one changes which of them
+`AXValue` shows, so the settles after it check neither the length nor the paragraph side.
 
 ### Learned beliefs
 

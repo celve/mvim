@@ -71,7 +71,8 @@ enum Diag {
         bell: LogicalStep.BellReason?,
         executed: Bool,
         evidence: Executor.RunEvidence,
-        insertPayload: String?
+        insertPayload: String?,
+        emptyLines: Int = 0
     ) {
         let anomalous = !executed
             || rejection != nil
@@ -96,6 +97,9 @@ enum Diag {
         line += " ok=\(executed ? 1 : 0)"
         line += " fail=\(evidence.failedCapability?.traceName ?? "nil")"
         line += " settled=\(evidence.settledCapabilities.traceNames)"
+        if emptyLines != 0 {
+            line += " empty=\(emptyLines)"
+        }
         if let insertPayload {
             line += recordsText ? " insert=\(insertPayload)" : " insert=(\(insertPayload.utf16.count))"
         }
@@ -178,6 +182,12 @@ enum Diag {
         } else {
             self.gate.log("\(line, privacy: .public)")
         }
+    }
+
+    /// A text's empty-paragraph discovery; `failed` leaves the field on `AXValue`'s lines.
+    static func emptyParagraphs(_ epoch: UInt64, _ seq: UInt64, _ memo: EmptyParagraphs.Memo) {
+        let found = memo.found.map { "found=\($0.count)" } ?? "failed"
+        gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) empty-paragraphs \(found, privacy: .public)")
     }
 
     /// A completed command verify-before-run threw away; one form eats its final key.

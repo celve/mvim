@@ -72,6 +72,18 @@ public struct TextModel: Equatable, Sendable {
         return offset(newline)
     }
 
+    /// Whether a line holding any of `range`, ends included, is empty.
+    public func touchesEmptyLine(_ range: Range<Int>) -> Bool {
+        var start = lineStart(of: range.lowerBound)
+        while start <= range.upperBound {
+            let end = lineEnd(of: start)
+            if end == start { return true }
+            guard end < length else { return false }
+            start = end + 1
+        }
+        return false
+    }
+
     public func firstNonBlank(inLineOf o: Int) -> Int {
         var i = index(lineStart(of: o))
         let end = index(lineEnd(of: o))

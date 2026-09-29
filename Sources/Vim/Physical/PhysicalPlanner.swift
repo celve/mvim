@@ -136,6 +136,15 @@ private extension PhysicalPlanner {
         /// Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so after a blind newline the length is unknown.
         var lengthUncertain = false
 
+        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
+        let valueGap: Int
+
+        let holdsEmptyParagraphs: Bool
+
+        /// Where empty paragraphs were found, an edit that empties or fills a line leaves `AXValue`'s length and the
+        /// paragraph sides guesses: which of them `AXValue` shows changes with it.
+        var paragraphsUncertain = false
+
         var textlessLeaves = false
 
         init(snapshot: FieldSnapshot) {
@@ -146,6 +155,8 @@ private extension PhysicalPlanner {
             breaks = snapshot.breaks
             emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
+            valueGap = snapshot.valueGap
+            holdsEmptyParagraphs = snapshot.holdsEmptyParagraphs
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -155,6 +166,9 @@ private extension PhysicalPlanner {
         }
 
         var model: TextModel? { text.map(TextModel.init) }
+
+        /// What a settle expects `AXValue`'s length to be.
+        var valueLength: Int? { lengthUncertain || paragraphsUncertain ? nil : text.map { $0.utf16.count - valueGap } }
 
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
@@ -219,7 +233,13 @@ private extension PhysicalPlanner {
         mutating func applyEdit(range: Range<Int>, replacement: String) {
             // An empty range is a plain insert, which replaces nothing.
             if !range.isEmpty { operand = field(range) }
+            let before = model
             text = model?.replacing(range, with: replacement)
+            if holdsEmptyParagraphs, !replacement.contains("\n"), let before, let after = model {
+                let caret = range.lowerBound + replacement.utf16.count
+                paragraphsUncertain = paragraphsUncertain || before.touchesEmptyLine(range)
+                    || after.touchesEmptyLine(range.lowerBound..<caret)
+            }
             if let current = breaks {
                 breaks = current.replacing(range, with: replacement)
                 breaksUncertain = breaksUncertain || replacement.contains("\n")
@@ -248,11 +268,11 @@ private extension PhysicalPlanner {
         blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
-        let length = profile.has(.readLength) && !context.lengthUncertain ? context.text.map { $0.utf16.count } : nil
+        let length = profile.has(.readLength) ? context.valueLength : nil
         var expectation = Expectation(
             selection: context.breaksUncertain ? nil : context.field(selection),
             length: length,
-            edge: context.breaksUncertain ? nil : context.edge(selection.upperBound),
+            edge: context.breaksUncertain || context.paragraphsUncertain ? nil : context.edge(selection.upperBound),
             selectedText: selectedText
         )
         expectation.blame = blame
@@ -913,13 +933,13 @@ private extension PhysicalPlanner {
         _ landing: Landing, blame: Expectation.Blame?, keeps: Int? = nil, within: Range<Int>? = nil,
         context: Context, profile: CapabilityProfile
     ) -> PhysicalStep {
-        let length = profile.has(.readLength) ? context.text.map { $0.utf16.count } : nil
+        let length = profile.has(.readLength) ? context.valueLength : nil
         let read: Landing
         var edge: Expectation.Edge?
         switch landing {
         case .exact(let range):
             read = .exact(context.field(range))
-            edge = context.edge(range.upperBound)
+            edge = context.paragraphsUncertain ? nil : context.edge(range.upperBound)
         case .caretAfter(let o, let strict):
             read = .caretAfter(context.field(o..<o).lowerBound, strict: strict)
         case .caretBefore(let o, let strict):
