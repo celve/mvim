@@ -2852,6 +2852,11 @@ precondition(webAbove[(pasted + 2)...].allSatisfy {
     guard case .settle(let expectation) = $0 else { return true }
     return expectation.length == nil && expectation.selection == nil
 })
+let rowKeys = adding([.nativeMotions], to: removing([.lineStartKey], from: keyProfile))
+let rowAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: rowKeys, breaks: ParagraphBreaks(offsets: [2])).steps
+precondition(chords(PhysicalPlan(steps: rowAbove)) == [.left, .up])
+precondition(rowAbove[rowAbove.firstIndex(of: .press(.up, count: 1))! + 1] == .settle(Expectation(landing: nil)),
+             "↑ past a pasted newline settles as blind as ⌃A does")
 for (keys, text) in [("oZ", "ab\nZ\ncd"), ("OZ", "Z\nab\ncd")] {
     var sim = Sim(text: "ab\ncd", caret: 1, profile: keyProfile)
     sim.webContent = true

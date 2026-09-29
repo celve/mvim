@@ -130,20 +130,17 @@ private extension PhysicalPlanner {
         /// Everything else is in `AXValue` offsets; ranges leave for the field through these.
         var breaks: ParagraphBreaks?
 
-        /// A typed `\n` may have made a paragraph or a line break.
-        var breaksUncertain = false
+        /// What the edits so far left settles unable to check.
+        var unknown: Set<Unknown> = []
 
-        /// Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so after a blind newline the length is unknown.
-        var lengthUncertain = false
+        enum Unknown {
+            case selection, length, edge
+        }
 
         /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
         let valueGap: Int
 
         let holdsEmptyParagraphs: Bool
-
-        /// Where empty paragraphs were found, an edit that empties or fills a line leaves `AXValue`'s length and the
-        /// paragraph sides guesses: which of them `AXValue` shows changes with it.
-        var paragraphsUncertain = false
 
         var textlessLeaves = false
 
@@ -167,9 +164,6 @@ private extension PhysicalPlanner {
 
         var model: TextModel? { text.map(TextModel.init) }
 
-        /// What a settle expects `AXValue`'s length to be.
-        var valueLength: Int? { lengthUncertain || paragraphsUncertain ? nil : text.map { $0.utf16.count - valueGap } }
-
         func field(_ range: Range<Int>) -> Range<Int> {
             breaks?.fieldRange(range) ?? range
         }
@@ -190,6 +184,37 @@ private extension PhysicalPlanner {
             guard candidates.count > 1 else { return nil }
             // Between two breaks is a line Chromium makes for a text-less or uneditable element, past the paragraph's end.
             return offset == candidates.lowerBound ? .paragraphEnd : .paragraphStart
+        }
+
+        /// Every settle's expectation: a landing in `AXValue` offsets leaves in the field's, less what is unknown.
+        func expectation(
+            _ landing: Landing, blame: Expectation.Blame? = nil, selectedText: String? = nil,
+            keeps: Int? = nil, within: Range<Int>? = nil, profile: CapabilityProfile
+        ) -> Expectation {
+            let length = profile.has(.readLength) && !unknown.contains(.length)
+                ? text.map { $0.utf16.count - valueGap } : nil
+            // Without a landing no selection is read, so its edge and slots would check nothing.
+            guard !unknown.contains(.selection) else {
+                return Expectation(landing: nil, length: length, blame: blame, selectedText: selectedText)
+            }
+            let read: Landing
+            var side: Expectation.Edge?
+            switch landing {
+            case .exact(let range):
+                read = .exact(field(range))
+                side = unknown.contains(.edge) ? nil : edge(range.upperBound)
+            case .caretAfter(let o, let strict):
+                read = .caretAfter(field(o..<o).lowerBound, strict: strict)
+            case .caretBefore(let o, let strict):
+                read = .caretBefore(field(o..<o).lowerBound, strict: strict)
+            case .between:
+                read = landing
+            }
+            var expectation = Expectation(landing: read, length: length, edge: side, blame: blame, selectedText: selectedText)
+            expectation.within = within.map(field)
+            expectation.longest = expectation.within?.count
+            expectation.keeps = keeps
+            return expectation
         }
 
         /// The model, but only where its geography is trustworthy.
@@ -237,12 +262,15 @@ private extension PhysicalPlanner {
             text = model?.replacing(range, with: replacement)
             if holdsEmptyParagraphs, !replacement.contains("\n"), let before, let after = model {
                 let caret = range.lowerBound + replacement.utf16.count
-                paragraphsUncertain = paragraphsUncertain || before.touchesEmptyLine(range)
-                    || after.touchesEmptyLine(range.lowerBound..<caret)
+                // Emptying or filling a line changes which of the empty paragraphs `AXValue` shows.
+                if before.touchesEmptyLine(range) || after.touchesEmptyLine(range.lowerBound..<caret) {
+                    unknown.formUnion([.length, .edge])
+                }
             }
             if let current = breaks {
                 breaks = current.replacing(range, with: replacement)
-                breaksUncertain = breaksUncertain || replacement.contains("\n")
+                // A typed `\n` may have made a paragraph or a line break.
+                if replacement.contains("\n") { unknown.formUnion([.selection, .edge]) }
             }
             let caretAfter = range.lowerBound + replacement.utf16.count
             selection = caretAfter..<caretAfter
@@ -268,14 +296,7 @@ private extension PhysicalPlanner {
         blame: Expectation.Blame? = nil, selectedText: String? = nil
     ) -> [PhysicalStep] {
         guard profile.has(.readCaret), let selection = context.selection else { return [] }
-        let length = profile.has(.readLength) ? context.valueLength : nil
-        var expectation = Expectation(
-            selection: context.breaksUncertain ? nil : context.field(selection),
-            length: length,
-            edge: context.breaksUncertain || context.paragraphsUncertain ? nil : context.edge(selection.upperBound),
-            selectedText: selectedText
-        )
-        expectation.blame = blame
+        let expectation = context.expectation(.exact(selection), blame: blame, selectedText: selectedText, profile: profile)
         return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
 
@@ -928,30 +949,11 @@ private extension PhysicalPlanner {
             + wordKeys(after: under, at: p, model: model, context: context, profile: profile)
     }
 
-    /// Landings come in `AXValue` offsets and leave in the field's, with the side a boundary caret must settle on.
     static func appSettle(
         _ landing: Landing, blame: Expectation.Blame?, keeps: Int? = nil, within: Range<Int>? = nil,
         context: Context, profile: CapabilityProfile
     ) -> PhysicalStep {
-        let length = profile.has(.readLength) ? context.valueLength : nil
-        let read: Landing
-        var edge: Expectation.Edge?
-        switch landing {
-        case .exact(let range):
-            read = .exact(context.field(range))
-            edge = context.paragraphsUncertain ? nil : context.edge(range.upperBound)
-        case .caretAfter(let o, let strict):
-            read = .caretAfter(context.field(o..<o).lowerBound, strict: strict)
-        case .caretBefore(let o, let strict):
-            read = .caretBefore(context.field(o..<o).lowerBound, strict: strict)
-        case .between:
-            read = landing
-        }
-        var expectation = Expectation(landing: read, length: length, edge: edge, blame: blame)
-        expectation.within = within.map(context.field)
-        expectation.longest = expectation.within?.count
-        expectation.keeps = keeps
-        return .settle(expectation)
+        .settle(context.expectation(landing, blame: blame, keeps: keeps, within: within, profile: profile))
     }
 
     /// Blamed only if the field still reads p after the keys.
@@ -1332,8 +1334,10 @@ private extension PhysicalPlanner {
             // Blind (typeText) over-type: soft, so a mismatch does not abort
             // the `setMode(.insert)` behind an `o`/`O`/`i`.
             let steps = check + [action] + settle(context, profile: profile, hard: profile.has(.insertText))
-            context.lengthUncertain = context.lengthUncertain
-                || !profile.has(.insertText) && context.breaks != nil && replacement.contains("\n")
+            // Chromium leaves a new empty paragraph out of `AXValue` until it holds text, so later settles stop checking the length.
+            if !profile.has(.insertText), context.breaks != nil, replacement.contains("\n") {
+                context.unknown.insert(.length)
+            }
             return steps
         }
         context.invalidate()
