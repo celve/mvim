@@ -294,12 +294,7 @@ public struct Expectation: Equatable, Sendable {
     static func sameText(_ expected: String, _ observed: String?) -> Bool {
         guard let observed else { return false }
         return observed == expected
-            || !expected.utf16.contains(0xFFFC) && withoutAttachments(observed) == expected
-    }
-
-    /// Chromium writes a U+FFFC into its text for each element with no text; `AXValue` has none.
-    public static func withoutAttachments(_ text: String) -> String {
-        String(decoding: text.utf16.filter { $0 != 0xFFFC }, as: UTF16.self)
+            || !expected.utf16.contains(0xFFFC) && FieldReads.withoutAttachments(observed) == expected
     }
 
     public func rangeHeld(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
