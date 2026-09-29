@@ -583,7 +583,7 @@ extension Sim {
 
     var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text) }
 
-    /// What a marker read says of the upper end's side, in every Chromium mode; nil where none answers.
+    /// The upper end's paragraph side from the Sim's own text, in every Chromium mode.
     var upperSide: ParagraphBreaks.Side? {
         reads != nil || markers || emptyParagraphs ? ChromiumParagraphs.side(selection.upperBound, in: text) : nil
     }
