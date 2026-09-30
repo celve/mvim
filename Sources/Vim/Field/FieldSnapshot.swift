@@ -80,3 +80,108 @@ public struct FieldSnapshot: Equatable, Sendable {
         selection.flatMap { $0.isEmpty ? $0.lowerBound : nil }
     }
 }
+
+public extension FieldSnapshot {
+    /// One snapshot's reads, which the runtime takes over AX and the Sim from its fake field.
+    struct Reads {
+        /// As the learner observed them.
+        public var field: FieldReads
+        /// `AXNumberOfCharacters`.
+        public var length: Int?
+        public var webContent: Bool
+        /// The child count, which the empty paragraphs found are kept against.
+        public var blocks: Int?
+        public var marked: MarkerSelection?
+
+        public init(field: FieldReads, length: Int?, webContent: Bool, blocks: Int?, marked: MarkerSelection?) {
+            self.field = field
+            self.length = length
+            self.webContent = webContent
+            self.blocks = blocks
+            self.marked = marked
+        }
+    }
+
+    /// What putting empty paragraphs back needs of the marker selection, read only when the snapshot gets that far.
+    struct MarkerSelection {
+        /// In plain marker offsets.
+        public var range: Range<Int>
+        /// The raw marker text `field.markers` aligned with; nil where `AXValue` breaks no line.
+        public var text: String?
+        public var side: (ParagraphBreaks.End) -> ParagraphBreaks.Side?
+        public var inEmptyParagraph: () -> Bool
+        /// Discovery over the raw marker text: the plain offsets of the empty paragraphs' `<br>`s, nil if it failed.
+        public var emptyParagraphs: (String) -> [Int]?
+
+        public init(
+            range: Range<Int>, text: String?, side: @escaping (ParagraphBreaks.End) -> ParagraphBreaks.Side?,
+            inEmptyParagraph: @escaping () -> Bool, emptyParagraphs: @escaping (String) -> [Int]?
+        ) {
+            self.range = range
+            self.text = text
+            self.side = side
+            self.inEmptyParagraph = inEmptyParagraph
+            self.emptyParagraphs = emptyParagraphs
+        }
+    }
+
+    /// Everything after the learner, for the runtime and the Sim alike; `memo` is the last discovery, handed back current.
+    static func build(
+        _ reads: Reads, capabilities: CapabilityProfile, answer: OffsetsAnswer, anchor: Int?, cursor: Range<Int>?,
+        memo known: EmptyParagraphs.Memo?
+    ) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?) {
+        var field = reads.field
+        // Only the snapshot reads the empty paragraph, which costs four more round trips.
+        if answer == .textContent, let marked = reads.marked, field.markers?.breaks != nil {
+            field.markers?.emptyParagraph = marked.inEmptyParagraph()
+        }
+        var interpreted = field.interpreted(under: answer)
+        if !capabilities.has(.readCaret) {
+            interpreted = (nil, answer == .textContent ? ParagraphBreaks() : nil, false, false)
+        }
+        var text = capabilities.has(.readText) ? field.text : nil
+        var selection = interpreted.selection
+        var breaks = interpreted.breaks
+        var emptyParagraph = interpreted.emptyParagraph
+        var gap = 0
+        var holdsEmptyParagraphs = false
+        var memo: EmptyParagraphs.Memo?
+        // After the learner, which judges the reads as the field gave them.
+        if answer == .textContent, let value = text, let aligned = breaks, let marked = reads.marked, let raw = marked.text,
+           case let plainMarkers = FieldReads.withoutAttachments(raw), plainMarkers.utf16.contains(10) {
+            memo = known.flatMap { $0.holds(value: value, markers: raw, blocks: reads.blocks) ? $0 : nil }
+                ?? EmptyParagraphs.Memo(value: value, markers: raw, blocks: reads.blocks, found: marked.emptyParagraphs(raw))
+            if let found = memo?.found,
+               let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found),
+               let resolved = restored.breaks.valueRange(marked.range, side: marked.side),
+               resolved.upperBound <= restored.text.utf16.count {
+                text = restored.text
+                breaks = restored.breaks
+                selection = resolved
+                gap = restored.gap
+                holdsEmptyParagraphs = !found.isEmpty
+                let model = TextModel(restored.text)
+                // A caret on an empty line is in a paragraph the model already holds.
+                let onEmptyLine = resolved.isEmpty && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
+                emptyParagraph = emptyParagraph && !onEmptyLine
+            }
+        }
+        // The drawn cursor counts only while it still IS the selection; otherwise the selection is the user's.
+        let stampedCursor = (cursor != nil && !cursor!.isEmpty && cursor == selection) ? cursor : nil
+        let snapshot = FieldSnapshot(
+            capabilities: capabilities,
+            text: text,
+            selection: selection,
+            length: capabilities.has(.readLength) ? reads.length : nil,
+            anchor: anchor,
+            cursor: stampedCursor,
+            webContent: reads.webContent,
+            breaks: breaks,
+            caretInEmptyParagraph: emptyParagraph,
+            textlessLeaves: interpreted.textlessLeaves,
+            valueGap: gap,
+            holdsEmptyParagraphs: holdsEmptyParagraphs
+        )
+        return (snapshot, memo)
+    }
+}

@@ -2152,6 +2152,12 @@ precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.text == "say hello world")
 
+var unreadCaret = Sim(text: "say hello world", caret: 6, profile: CapabilityProfile(available: [
+    .readText, .readLength, .readSelectedText, .writeSelection, .insertText, .wholeDocument,
+]))
+unreadCaret.type("dd")
+precondition(unreadCaret.text == "say hello world" && unreadCaret.unsupportedSteps == 1, "a caret the field cannot read goes blind")
+
 // The pasteboard IS the register (clipboard=unnamed): cut writes it, a
 // marker commit remembers only the wise, and a nil insert pastes it back.
 // Step-level: blind plans carry .press moves the Sim can't emulate.
@@ -3681,6 +3687,23 @@ precondition(blankModel.breaks.valueRange(43..<43) { _ in .start(skipping: 0) } 
 precondition(blankModel.breaks.valueRange(43..<43) { _ in .end } == 44..<44)
 precondition(blankModel.breaks.valueRange(44..<44) { _ in .start(skipping: 0) } == 46..<46)
 precondition(EmptyParagraphs.chromium(blankParagraphs) == (blankValue, blankMarkers, [43]))
+
+var discoveries = 0
+let blankReads = FieldSnapshot.Reads(
+    field: FieldReads(text: blankValue, plain: 43..<43, markers: MarkerReads(
+        breaks: blankAligned, value: blankAligned.valueRange(43..<43) { _ in .start(skipping: 0) }
+    )),
+    length: blankValue.utf16.count, webContent: true, blocks: blankParagraphs.count,
+    marked: FieldSnapshot.MarkerSelection(range: 43..<43, text: blankMarkers, side: { _ in .start(skipping: 0) },
+                                          inEmptyParagraph: { true }, emptyParagraphs: { _ in discoveries += 1; return [43] })
+)
+let blankBuilt = FieldSnapshot.build(blankReads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: nil)
+precondition(blankBuilt.snapshot.text == blankModel.text && blankBuilt.snapshot.selection == 45..<45 && blankBuilt.snapshot.valueGap == 1)
+precondition(blankBuilt.snapshot.holdsEmptyParagraphs && !blankBuilt.snapshot.caretInEmptyParagraph, "its own line holds the caret")
+let blankRebuilt = FieldSnapshot.build(blankReads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil,
+                                       memo: blankBuilt.memo)
+precondition(blankRebuilt.snapshot == blankBuilt.snapshot && blankRebuilt.memo == blankBuilt.memo && discoveries == 1,
+             "a memo that holds spares discovery")
 
 // Each placement Chrome 153 was measured in, round-tripped through every caret.
 for paragraphs in [["L", "", "N"], ["L", "", "", "N"], ["L", "", "", "", "N"], ["", "L"], ["", "", "L"], ["L", ""], ["L", "", ""],
