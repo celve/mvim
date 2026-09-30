@@ -311,20 +311,16 @@ public final class Executor {
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            let matched = expectation.matches(selection: selection, length: length, selectedText: text)
-            if paragraphs, selectionSlot != nil, !matched || expectation.edge != nil {
-                // Only the markers place a caret between elements or tell a boundary's sides apart.
-                if let marked = AX.markedSelection(of: element) {
-                    selection = marked.range
-                    let edge = expectation.edge.map { edge in
-                        Snapshotter.paragraphSide(of: marked, upper: true).map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
-                    } ?? true
-                    if edge, expectation.matches(selection: selection, length: length, selectedText: text) {
-                        return outcome(true)
-                    }
-                }
-            } else if matched {
+            if expectation.converged(selection: selection, length: length, selectedText: text, side: nil) {
                 return outcome(true)
+            }
+            // Only the markers place a caret between elements or tell a boundary's sides apart.
+            if paragraphs, selectionSlot != nil, let marked = AX.markedSelection(of: element) {
+                selection = marked.range
+                let side = expectation.edge == nil ? nil : Snapshotter.paragraphSide(of: marked, upper: true)
+                if expectation.converged(selection: selection, length: length, selectedText: text, side: side) {
+                    return outcome(true)
+                }
             }
             guard Date() < deadline else { return outcome(false) }
             Thread.sleep(forTimeInterval: 0.01)

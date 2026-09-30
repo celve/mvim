@@ -2778,6 +2778,15 @@ precondition(!Expectation(selectedText: "a\u{FFFC}b").matches(selection: nil, le
 precondition(checkedWord.traceFields == "sel=4..9 len=15 text=(5)")
 precondition(!Expectation(selectedText: secret).traceFields.contains(secret), "traceFields leaked the selected text")
 
+let paragraphEnd = Expectation(selection: 2..<2, length: 5, edge: .paragraphEnd)
+precondition(paragraphEnd.converged(selection: 2..<2, length: 5, selectedText: nil, side: .end))
+precondition(!paragraphEnd.converged(selection: 2..<2, length: 5, selectedText: nil, side: .start(skipping: 0)), "the other side")
+precondition(!paragraphEnd.converged(selection: 2..<2, length: 5, selectedText: nil, side: nil), "no marker read")
+precondition(!paragraphEnd.converged(selection: 3..<3, length: 5, selectedText: nil, side: .end), "offsets still decide")
+precondition(Expectation(selection: 2..<2, edge: .paragraphStart)
+    .converged(selection: 2..<2, length: nil, selectedText: nil, side: .start(skipping: 2)), "past a list marker")
+precondition(Expectation(selection: 4..<9).converged(selection: 4..<9, length: nil, selectedText: nil, side: nil))
+
 
 
 
@@ -3570,6 +3579,33 @@ chipKey.type("0")
 precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)
 precondition(chipKey.attribution.evidence.contains { $0.question == .key(.lineStartKey) && $0.outcome == .neutral && $0.why == .paragraphLines })
 precondition(chipKey.learner!.lessons.last?.committed == nil && chipKey.profile.has(.lineStartKey))
+
+// MARK: - Paragraph edges
+
+let chromiumModes: [(name: String, apply: (inout Sim) -> Void)] = [
+    ("reads", { $0.reads = omitsBreaks }),
+    ("markers", { $0.reads = omitsBreaks; $0.markers = true }),
+    ("emptyParagraphs", { $0.emptyParagraphs = true }),
+]
+for mode in chromiumModes {
+    for (edge, settles) in [(Expectation.Edge.paragraphStart, true), (.paragraphEnd, false)] {
+        var host = Sim(text: "ab\ncd", caret: 3, profile: readProfile)
+        mode.apply(&host)
+        precondition(host.perform([.settle(Expectation(selection: 2..<2, edge: edge))]) == settles, "\(mode.name) \(edge)")
+    }
+}
+
+var appended = Sim(text: "ab\ncd", caret: 1, profile: axProfile)
+appended.reads = omitsBreaks
+appended.markers = true
+appended.writesInReadOffsets = true
+appended.readModel = .textContent
+var misplaced = appended
+misplaced.ignoredChords = [.left]
+appended.type("A")
+precondition(appended.caret == 2 && appended.settleFailures == 0 && appended.state.field.mode == .insert)
+misplaced.type("A")
+precondition(misplaced.caret == 3 && misplaced.settleFailures == 1, "the next paragraph's start reads the same offset")
 
 // MARK: - Empty paragraphs (LIN-1612)
 
