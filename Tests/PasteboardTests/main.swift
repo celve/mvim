@@ -4,7 +4,7 @@ import AppKit
 
 typealias Flavours = [[(NSPasteboard.PasteboardType, Data)]]
 
-let privateType = NSPasteboard.PasteboardType("com.loom.mvim.test.private")
+let privateType = NSPasteboard.PasteboardType("io.github.celve.mvim.test.private")
 
 func dump(_ pasteboard: NSPasteboard) -> Flavours {
     (pasteboard.pasteboardItems ?? []).map { item in

@@ -8,7 +8,7 @@ import CoreGraphics
 /// the same value and both apps bypass tagged events before any handler runs;
 /// never change it in one app without the other (see README).
 public enum SynthTag {
-    public static let magic: Int64 = 0x4C4F_4F4D   // 'LOOM'
+    public static let magic: Int64 = 0x4345_4C56   // 'CELV'
     public static func tag(_ event: CGEvent?) { event?.setIntegerValueField(.eventSourceUserData, value: magic) }
     public static func isSelf(_ event: CGEvent) -> Bool { event.getIntegerValueField(.eventSourceUserData) == magic }
 }
