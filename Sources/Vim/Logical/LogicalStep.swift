@@ -199,7 +199,7 @@ public extension LogicalStep {
 // MARK: - Recorder
 
 extension LogicalStep {
-    /// The step type is what identifies a rejection among the planner's 26 `return nil` sites.
+    /// The step type is what identifies a rejection, which carries no reason of its own.
     var traceName: String {
         switch self {
         case .moveCaret: return "moveCaret"

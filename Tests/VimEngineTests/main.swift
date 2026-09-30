@@ -2722,7 +2722,7 @@ for plain in ["ciw", "w", "b", "dd", "x", "p", "gg", "A", "S", "gU", "diw", "yy"
 
 // MARK: - Rejections and the reason that already existed
 
-// 26 of the 27 rejection sites carry no reason, so the failing step's type is it.
+// A rejection carries no reason, so the failing step's type is it.
 let joinReject = traced("J", text: "a\nb", caret: 0, profile: blockProfile)
 precondition(joinReject.plan == .rejected)
 precondition(joinReject.rejection?.index == 0)
