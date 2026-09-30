@@ -30,7 +30,7 @@ settings:
 
 targets:
   # Input tap, key model, text I/O (AX/Synth), capability config and Prefs; deliberately no Keychain.
-  LoomCore:
+  Core:
     type: framework
     platform: macOS
     deploymentTarget: "14.0"
@@ -38,21 +38,21 @@ targets:
       - path: Sources/Core
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomCore
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.Core
         GENERATE_INFOPLIST_FILE: YES
 
-  # Modal editing engine + runtime. Depends on LoomCore for the key model + text I/O.
-  LoomVim:
+  # Modal editing engine + runtime. Depends on Core for the key model + text I/O.
+  Vim:
     type: framework
     platform: macOS
     deploymentTarget: "14.0"
     sources:
       - path: Sources/Vim
     dependencies:
-      - target: LoomCore
+      - target: Core
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.loom.LoomVim
+        PRODUCT_BUNDLE_IDENTIFIER: com.loom.Vim
         GENERATE_INFOPLIST_FILE: YES
 
   # The menu-bar app: composition root + the menu, its whole UI. Embeds the two frameworks and Sparkle.
@@ -64,8 +64,8 @@ targets:
       - path: Sources/App
       - path: Resources
     dependencies:
-      - target: LoomCore
-      - target: LoomVim
+      - target: Core
+      - target: Vim
       - package: Sparkle
     postBuildScripts:
       # Code Sign On Copy re-signs Sparkle.framework but not the helpers inside it, which would

@@ -1,9 +1,8 @@
-import LoomCore
+import Core
 
 /// The runtime half of the gate: a tapped `KeyEvent` in, the pure policy's
 /// verdict out. Nothing but the mapping lives here — the policy itself sits in
-/// `Key/KeyNotation.swift`, where `make test` can assert it without linking
-/// LoomCore.
+/// `Key/KeyNotation.swift`, where `make test` can assert it without linking Core.
 public extension KeyNotation {
     /// nil means "not vim's key" — the controller passes it through untouched.
     static func token(

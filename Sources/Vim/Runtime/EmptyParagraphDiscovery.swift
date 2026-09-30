@@ -1,5 +1,5 @@
 import ApplicationServices
-import LoomCore
+import Core
 
 /// `EmptyBlockScan` over a Chromium field's accessibility tree, for `EmptyParagraphs.restore` (LIN-1612).
 enum EmptyParagraphDiscovery {

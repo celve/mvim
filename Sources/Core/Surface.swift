@@ -217,7 +217,7 @@ public extension Surface {
 /// Kept apart from `CapabilityConfig` so it can be compiled into the
 /// permission-free test binary, which does not build `Sources/Core` wholesale.
 /// Capabilities are raw strings here for the same reason they are there —
-/// LoomCore cannot see the engine's `Capability` type.
+/// Core cannot see the engine's `Capability` type.
 public enum SurfaceLadder {
     /// The user's stored choices, as the beliefs file's `overrides` hold them.
     public typealias UserStore = [String: [String: String]]

@@ -2,8 +2,7 @@ import ApplicationServices
 import AppKit
 import CoreGraphics
 
-/// Thin, honest wrappers over the macOS Accessibility API — mvim's copy of
-/// the shared Loom substrate, trimmed to the vim probe/read/write surface.
+/// Thin, honest wrappers over the macOS Accessibility API, trimmed to the vim probe/read/write surface.
 public enum AX {
     @discardableResult
     public static func ensureTrusted(prompt: Bool = true) -> Bool {
@@ -23,8 +22,7 @@ public enum AX {
 
     /// The focused UI element, resolved overlay-aware: if a non-activating
     /// accessory panel (Raycast/Spotlight) is frontmost and differs from the
-    /// system-wide focus, prefer it. Preserved from the validated Loom
-    /// prototype.
+    /// system-wide focus, prefer it.
     public static func focusedElement() -> AXUIElement? {
         let systemwide = AXUIElementCreateSystemWide()
         let sysFocused = copyElement(systemwide, kAXFocusedUIElementAttribute)

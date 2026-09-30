@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import LoomCore
+import Core
 
 /// The runtime loop — `Sim`'s impure twin. Wires the tap's key events
 /// through monitor → planners → executor against the currently-bound

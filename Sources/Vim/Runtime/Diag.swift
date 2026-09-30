@@ -1,5 +1,5 @@
+import Core
 import Foundation
-import LoomCore
 import os
 
 /// One line per command decision; no call sits on `InputHub`'s per-keystroke path.

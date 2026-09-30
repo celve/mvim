@@ -202,13 +202,13 @@ mvim/
 ├── scripts/
 │   └── sparkle-release.sh      # stages and publishes an update (make dist / publish)
 ├── Sources/
-│   ├── Core/                   # LoomCore framework — what the engine stands on: InputHub
+│   ├── Core/                   # Core framework — what the engine stands on: InputHub
 │   │                           #   (one shared CGEventTap), KeyEvent/Mods, field reads
 │   │                           #   (AX, MarkerText, WebAreaWalk), Synth (posted keys), Prefs,
 │   │                           #   capability config (Surface, CapabilityConfig,
 │   │                           #   CapabilitySeeds), SecureInput, LoginItem, Log.
 │   │                           #   NO Keychain in mvim's copy.
-│   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
+│   ├── Vim/                    # Vim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
@@ -228,10 +228,9 @@ mvim/
 
 ### Modules
 
-`mvim (app) → LoomVim → LoomCore`, one-way and compiler-enforced; the app also imports LoomCore
-directly. The framework names keep their Loom heritage — they are internal targets, invisible at
-runtime — and so does the `com.loom` prefix, which names the bundle ID, the defaults domain and the
-log subsystem. Vim's pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX
+`mvim (app) → Vim → Core`, one-way and compiler-enforced; the app also imports Core directly. The
+`com.loom` prefix keeps its Loom heritage: it names the bundle ID, the defaults domain and the log
+subsystem. Vim's pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX
 dependency and is unit-tested standalone via `make test`, with the pure Core files the Makefile
 lists. Only the app links [Sparkle](https://sparkle-project.org), pinned to an exact version in
 `project.yml`.

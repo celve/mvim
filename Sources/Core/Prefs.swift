@@ -12,7 +12,7 @@ public enum NormalModeKey: String, CaseIterable, Sendable {
     case controlBracket, escape
 }
 
-/// The neutral Prefs store — LoomCore's UserDefaults-backed configuration
+/// The neutral Prefs store — Core's UserDefaults-backed configuration
 /// surface. First resident: the per-app vim policy, consulted by the
 /// runtime at *binding* time (never per keystroke).
 public enum Prefs {

@@ -18,7 +18,7 @@
 /// mode is engaged, which is the one thing modality may not do.
 public enum KeyNotation {
     /// The modifier state — a local projection of Core's `Mods`, because this
-    /// layer is pure and `Mods` lives in LoomCore. Same move as
+    /// layer is pure and `Mods` lives in Core. Same move as
     /// `RawMonitor.Mode`; the runtime adapter maps between the two.
     public struct Chord: OptionSet, Hashable, Sendable {
         public let rawValue: Int
