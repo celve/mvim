@@ -153,8 +153,7 @@ public struct UnreachableScan<Node> {
         return .some(nil)
     }
 
-    /// For an empty group at `path`, its place in its paragraph if it is a drawn caret: it, or an inline group it starts
-    /// or ends, is beside a code span, or a code span holds it. `.some(nil)` where it is none, nil on a failed read.
+    /// Where a drawn caret at `path` sits in its paragraph; `.some(nil)` for an empty group that is none, nil on a failed read.
     private mutating func place(
         of path: [Int], among siblings: [Node], under ancestors: [Ancestor]
     ) -> UnreachableLines.Caret.Place?? {

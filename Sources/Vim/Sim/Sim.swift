@@ -520,8 +520,7 @@ private extension Sim {
         listLines != nil && codeSpans.contains { (start ? $0.lowerBound : $0.upperBound) == offset }
     }
 
-    /// `spans` once `range` is `replacement`: an edit inside a span stays in it, one at its edge stays out, and spans
-    /// an edit brings together are one, as ProseMirror joins marks.
+    /// `spans` after an edit: inside a span it stays in, at an edge out, and spans it brings together join, as ProseMirror's.
     static func carried(_ spans: [Range<Int>], replacing range: Range<Int>, with replacement: String) -> [Range<Int>] {
         let count = replacement.utf16.count
         let delta = count - range.count

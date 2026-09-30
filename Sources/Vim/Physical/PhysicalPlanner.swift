@@ -609,8 +609,7 @@ private extension PhysicalPlanner {
         selecting && count > 0 ? counted(arrows(arrow, count: count, selecting: true, to: to)) : [.press(arrow, count: count)]
     }
 
-    /// `count` arrows, or as many shifted ones and the arrow that collapses them, which no code span's edge holds up;
-    /// moving left, it steps back out of a code span it lands at the start of, which Linear's shifted → cannot leave.
+    /// `count` arrows, or shifted ones and a collapse no code edge holds up, leftward stepping out of a span it starts.
     static func arrows(_ arrow: Chord, count: Int, selecting: Bool, to: Int) -> [Chord] {
         guard selecting else { return Array(repeating: arrow, count: count) }
         let run = Array(repeating: arrow.shifted, count: count) + [arrow]
