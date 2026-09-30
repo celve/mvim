@@ -1,15 +1,15 @@
 import AppKit
 import ApplicationServices
-import LoomCore
+import Core
 
 /// The real `PhysicalStep` interpreter — `Sim.execute`'s impure twin, and
 /// the **sole caller of `VimReducer`**: state changes happen only when
 /// execution reaches a commit step the run did not abort past (or when the
 /// controller routes a runtime-authored effect through `commit(_:state:)`).
 ///
-/// Runs synchronously on the main run loop, the Loom-proven model: AX
-/// writes are fast, settle polls are bounded, and blocking the tap callback
-/// is precisely what serializes keys during execution.
+/// Runs synchronously on the main run loop: AX writes are fast, settle polls
+/// are bounded, and blocking the tap callback is precisely what serializes
+/// keys during execution.
 @MainActor
 public final class Executor {
     public init() {}

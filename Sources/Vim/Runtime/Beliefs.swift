@@ -94,7 +94,7 @@ final class Beliefs {
             throw Failure(description: "\(belief.question.rawValue) cannot be \(belief.answer) at \(belief.rung)")
         }
         for (rung, choices) in contents.overrides {
-            // `CapabilityConfig.Override`, which LoomCore keeps out of this file's reach.
+            // `CapabilityConfig.Override`, which Core keeps out of this file's reach.
             for (capability, value) in choices where value != "on" && value != "off" {
                 throw Failure(description: "\(capability) cannot be \(value) at \(rung)")
             }

@@ -1,5 +1,5 @@
 import ApplicationServices
-import LoomCore
+import Core
 
 /// Reads prove the read capabilities; settable flags only claim the writes, which beliefs then correct.
 public enum FieldProber {

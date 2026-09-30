@@ -1,7 +1,7 @@
 import AppKit
-import LoomCore
-import LoomVim
+import Core
 import SwiftUI
+import Vim
 
 /// mvim's composition root: a menu-bar agent (LSUIElement) whose only UI is
 /// the status menu. The tap feeds the `Controller`; everything else is

@@ -1,5 +1,5 @@
+import Core
 import Foundation
-import LoomCore
 import os
 
 /// One line per command decision; no call sits on `InputHub`'s per-keystroke path.
@@ -53,7 +53,7 @@ enum Diag {
         }
         if recordsText {
             self.bind.log("""
-                TEXT RECORDING ON — to stop: defaults delete com.loom.mvim \
+                TEXT RECORDING ON — to stop: defaults delete io.github.celve.mvim \
                 \(recordsTextKey, privacy: .public), then RELAUNCH mvim (read once per process)
                 """)
         }

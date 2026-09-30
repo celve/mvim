@@ -1,4 +1,4 @@
-/// Shipped seeds plus the user's overrides from the beliefs file, in raw strings since LoomCore cannot see `Capability`.
+/// Shipped seeds plus the user's overrides from the beliefs file, in raw strings since Core cannot see `Capability`.
 public enum CapabilityConfig {
     /// A user's per-(surface, capability) choice. Absent = auto: defer to the
     /// probe and the seeds.

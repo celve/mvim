@@ -6,7 +6,7 @@ let root = FileManager.default.temporaryDirectory.appending(path: "mvim-beliefs-
 var suites: [String] = []
 
 func fresh() -> Beliefs {
-    let suite = "com.loom.mvim.test.beliefs.\(getpid()).\(suites.count)"
+    let suite = "io.github.celve.mvim.test.beliefs.\(getpid()).\(suites.count)"
     suites.append(suite)
     return Beliefs(url: root.appending(path: "\(suites.count)/mvim/beliefs.json"), defaults: UserDefaults(suiteName: suite)!)
 }

@@ -1,9 +1,8 @@
 import CoreGraphics
 import Foundation
 
-/// The single system-wide keystroke monitor — mvim's copy of the shared Loom
-/// substrate. Owns ONE consuming `CGEventTap` and fans each event out to an
-/// ordered set of registered handlers.
+/// The single system-wide keystroke monitor. Owns ONE consuming `CGEventTap`
+/// and fans each event out to an ordered set of registered handlers.
 ///
 /// Handler contract (READ THIS): a handler runs SYNCHRONOUSLY on the main run
 /// loop for EVERY keystroke system-wide, and its return value is the consume
@@ -14,9 +13,8 @@ import Foundation
 /// Dispatch is OBSERVE-ALL / CONSUME-IF-ANY: every handler sees every
 /// (non-self) event in priority order, and the event is consumed iff ANY
 /// handler returns true. mvim registers a single editor handler today; the
-/// shape is kept because it is proven under fire in Loom and its
-/// teardown-on-empty keeps a handler-less app from holding a tap (and from
-/// triggering an Input-Monitoring prompt).
+/// shape is kept because its teardown-on-empty keeps a handler-less app from
+/// holding a tap (and from triggering an Input-Monitoring prompt).
 @MainActor
 public final class InputHub {
     public static let shared = InputHub()
@@ -62,9 +60,8 @@ public final class InputHub {
     private func ensureTap() {
         guard tap == nil else { return }
         if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }   // register mvim + prompt
-        // keyDown only: vim consumes key-downs. flagsChanged (Loom's
-        // modifier-tap triggers) and keyUp are deliberately not observed —
-        // mvim has no consumer for either.
+        // keyDown only: vim consumes key-downs. flagsChanged and keyUp are
+        // deliberately not observed — mvim has no consumer for either.
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,

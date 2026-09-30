@@ -40,8 +40,32 @@ Development** signing certificate, which Xcode → Settings → Accounts → Man
 To update, quit mvim, run `git pull --autostash && make release` and copy the app again; the
 permissions carry over while the same Apple Development identity signs it. To uninstall, switch
 **Start at Login** off, quit and delete the app, remove it from Accessibility and Input Monitoring in
-System Settings → Privacy & Security, run `defaults delete com.loom.mvim`, and delete
+System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and delete
 `~/Library/Application Support/mvim`.
+
+**Updating across the identifier change.** mvim's identifier was `com.loom.mvim` until it became
+`io.github.celve.mvim`, and to macOS the two are different apps: the permissions, the settings and
+the login item stay with the old one. If this prints `com.loom.mvim`, update this way once:
+
+```sh
+defaults read /Applications/mvim.app/Contents/Info CFBundleIdentifier
+```
+
+1. Switch **Start at Login** off, and wait until its checkmark clears: it switches in the background.
+2. Quit mvim, and Vibe too if you run it (step 6 says why).
+3. Remove mvim from Accessibility and Input Monitoring in System Settings → Privacy & Security.
+4. Carry the settings over:
+
+   ```sh
+   defaults export com.loom.mvim - | defaults import io.github.celve.mvim -
+   ```
+
+5. Update as above, open mvim and grant both permissions as on a first install. The beliefs file
+   carries over as it is, and **Start at Login** can go back on.
+6. If you run Vibe, rebuild it from a checkout whose `SynthTag.magic` is `0x4345_4C56`, as mvim's now
+   is ([Synthesized events](#synthesized-events)), before opening it again. An mvim and a Vibe with
+   different tags each take the other's typing for yours, so Normal mode would run a dictated
+   transcript as commands.
 
 ## Using it
 
@@ -154,7 +178,7 @@ and what you expected, and a screenshot of the **Capabilities** menu. A command 
 logged, so attach the last hour of mvim's log, after reading it, since it names apps and sites:
 
 ```sh
-log show --predicate 'subsystem == "com.loom.mvim"' --last 1h --info --debug > mvim.log
+log show --predicate 'subsystem == "io.github.celve.mvim"' --last 1h --info --debug > mvim.log
 ```
 
 Never post a `log collect` archive: it holds your whole system log. To log the commands that succeed
@@ -204,13 +228,13 @@ mvim/
 ├── scripts/
 │   └── sparkle-release.sh      # stages and publishes an update (make dist / publish)
 ├── Sources/
-│   ├── Core/                   # LoomCore framework — what the engine stands on: InputHub
+│   ├── Core/                   # Core framework — what the engine stands on: InputHub
 │   │                           #   (one shared CGEventTap), KeyEvent/Mods, field reads
 │   │                           #   (AX, MarkerText, WebAreaWalk), Synth (posted keys), Prefs,
 │   │                           #   capability config (Surface, CapabilityConfig,
 │   │                           #   CapabilitySeeds), SecureInput, LoginItem, Log.
 │   │                           #   NO Keychain in mvim's copy.
-│   ├── Vim/                    # LoomVim framework (→ Core) — modal editing:
+│   ├── Vim/                    # Vim framework (→ Core) — modal editing:
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
@@ -230,13 +254,10 @@ mvim/
 
 ### Modules
 
-`mvim (app) → LoomVim → LoomCore`, one-way and compiler-enforced; the app also imports LoomCore
-directly. The framework names keep their Loom heritage — they are internal targets, invisible at
-runtime — and so does the `com.loom` prefix, which names the bundle ID, the defaults domain and the
-log subsystem. Vim's pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX
-dependency and is unit-tested standalone via `make test`, with the pure Core files the Makefile
-lists. Only the app links [Sparkle](https://sparkle-project.org), pinned to an exact version in
-`project.yml`.
+`mvim (app) → Vim → Core`, one-way and compiler-enforced; the app also imports Core directly. Vim's
+pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX dependency and is
+unit-tested standalone via `make test`, with the pure Core files the Makefile lists. Only the app
+links [Sparkle](https://sparkle-project.org), pinned to an exact version in `project.yml`.
 
 ### Signing
 
@@ -345,11 +366,11 @@ certificate, the hardened runtime and `notarytool`.
 ### Diagnostics
 
 mvim records one line per **command decision** to `os_log`, under subsystem
-`com.loom.mvim`. The unit is the decision, not the keystroke: what a reader wants back is
+`io.github.celve.mvim`. The unit is the decision, not the keystroke: what a reader wants back is
 *"the engine believed X about this field, and X was false"*.
 
 ```sh
-log show --predicate 'subsystem == "com.loom.mvim"' --last 1h --info --debug
+log show --predicate 'subsystem == "io.github.celve.mvim"' --last 1h --info --debug
 log collect --last 2h --output mvim.logarchive     # the whole system log: share it privately
 ```
 
@@ -358,8 +379,8 @@ free, surviving the quit a stranded user is about to perform. A clean command lo
 `.debug`, which is off until asked for:
 
 ```sh
-sudo log config --subsystem com.loom.mvim --mode "level:debug,persist:debug"
-sudo log config --subsystem com.loom.mvim --mode "level:default"    # off again — it is sticky
+sudo log config --subsystem io.github.celve.mvim --mode "level:debug,persist:debug"
+sudo log config --subsystem io.github.celve.mvim --mode "level:default"    # off again — it is sticky
 ```
 
 The renderers live on the engine types themselves, under a `// MARK: - Recorder` banner in
@@ -453,8 +474,8 @@ a card number with a `w` on the end. The opt-in for recording content, which the
 not offer and every `bind` line announces while it is on:
 
 ```sh
-defaults write com.loom.mvim mvimRecordText -bool YES
-defaults delete com.loom.mvim mvimRecordText
+defaults write io.github.celve.mvim mvimRecordText -bool YES
+defaults delete io.github.celve.mvim mvimRecordText
 ```
 
 **Both edges need a relaunch.** The flag is read once per process, deliberately — re-reading
@@ -678,7 +699,7 @@ instead of counting arrows or ringing, and the app decides where they land:
 
 ### Synthesized events
 
-mvim tags every event it posts with `SynthTag.magic` (`0x4C4F_4F4D`, in `Sources/Core/Synth.swift`),
+mvim tags every event it posts with `SynthTag.magic` (`0x4345_4C56`, in `Sources/Core/Synth.swift`),
 and its tap passes tagged events through before any handler runs. **The magic is a cross-app ABI:**
 Vibe, the author's dictation app, tags its typing with the same value, so Normal mode never runs a
 transcript as commands. Never change the magic in one app without the other.

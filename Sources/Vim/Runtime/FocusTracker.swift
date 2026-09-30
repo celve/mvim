@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import LoomCore
+import Core
 
 /// "Which field does vim own right now?" as event-driven cached state — the
 /// answer the tap callback reads for free, instead of re-deriving it with
