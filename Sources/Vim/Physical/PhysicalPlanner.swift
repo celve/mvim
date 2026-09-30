@@ -217,11 +217,13 @@ private extension PhysicalPlanner {
         /// The caret is where Linear draws it, which may be inside a code span's start.
         var drawnCaret = false
 
-        /// A range in field offsets as a write meets it, past that `<br>` while it is there.
+        /// `range` in field offsets as a write meets them: past that `<br>`, one more while it is there.
         func written(_ range: Range<Int>) -> Range<Int> {
-            guard let drawnBreak else { return range }
-            func past(_ offset: Int) -> Int { offset > drawnBreak ? offset + 1 : offset }
-            return past(range.lowerBound)..<past(range.upperBound)
+            let written = field(range)
+            guard let drawnBreak, let breaks else { return written }
+            let end = breaks.valueOffsets(drawnBreak).lowerBound
+            return (range.lowerBound > end ? written.lowerBound + 1 : written.lowerBound)
+                ..< (range.upperBound > end ? written.upperBound + 1 : written.upperBound)
         }
 
         /// Model offsets of the chips, which keys cross in one step.
@@ -376,8 +378,8 @@ private extension PhysicalPlanner {
     /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         if context.folded, let model = context.model { return foldedWrite(range, model: model, context: context) }
-        let field = context.written(context.field(range))
-        if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
+        let field = context.written(range)
+        if !range.isEmpty, landsPast(range.lowerBound, context: context), let model = context.model {
             return [
                 .setSelection(field.lowerBound..<field.lowerBound),
                 .press(.left, count: 1),
@@ -385,8 +387,13 @@ private extension PhysicalPlanner {
             ]
         }
         let step = PhysicalStep.setSelection(field)
-        guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
+        guard landsPast(range.upperBound, context: context) else { return [step] }
         return [step] + back(range.isEmpty, context: context)
+    }
+
+    /// A paragraph's end, whose write lands on the next paragraph, unless the `<br>` after a drawn caret still ends it.
+    static func landsPast(_ offset: Int, context: Context) -> Bool {
+        context.edge(offset) == .paragraphEnd && context.field(offset..<offset).lowerBound != context.drawnBreak
     }
 
     /// From the next paragraph's start to this one's end, as a shifted ← and a collapse where a code span can take a plain ←.
@@ -400,17 +407,17 @@ private extension PhysicalPlanner {
         guard range.isEmpty else {
             let ends = [range.lowerBound, range.upperBound]
             guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
-            else { return [.setSelection(context.field(range))] }
+            else { return [.setSelection(context.written(range))] }
             let start = range.lowerBound..<range.lowerBound
             return foldedWrite(start, model: model, context: context) + [.press(.selectRight, count: model.graphemes(in: range))]
         }
         let caret = range.lowerBound
-        let field = context.field(range)
+        let field = context.written(range)
         if context.isAtom(caret) {
             // Past the run of chips it starts, since each chip's end is the next one's start.
             var end = caret
             while context.isAtom(end) { end += 1 }
-            let written = context.field(caret..<end).upperBound
+            let written = context.written(caret..<end).upperBound
             return [.setSelection(written..<written), .press(.left, count: end - caret)]
         }
         if context.breaks?.endsBeforeBreak(caret) ?? false {
@@ -428,9 +435,9 @@ private extension PhysicalPlanner {
             guard inside < end, !context.isAtom(inside) else {
                 return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
             }
-            return [.setSelection(context.field(inside..<inside)), .press(.left, count: 1)]
+            return [.setSelection(context.written(inside..<inside)), .press(.left, count: 1)]
         }
-        guard context.edge(caret) == .paragraphEnd else { return [.setSelection(field)] }
+        guard landsPast(caret, context: context) else { return [.setSelection(field)] }
         return [.setSelection(field)] + back(true, context: context)
     }
 
@@ -584,7 +591,7 @@ private extension PhysicalPlanner {
         let toLine = model.lineStart(of: to)
         if fromLine == toLine {
             let count = model.graphemes(in: min(from, to)..<max(from, to))
-            return presses + counted(arrows(to > from ? .right : .left, count: count, selecting: selecting, to: to))
+            return presses + run(to > from ? .right : .left, count: count, selecting: selecting, to: to)
         }
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
         presses.append(.press(toLine > fromLine ? .down : .up, count: lines))
@@ -592,9 +599,14 @@ private extension PhysicalPlanner {
         if selecting, toLine > 0 { presses += outside }
         let column = model.graphemes(in: toLine..<to)
         if column > 0 {
-            presses += counted(arrows(.right, count: column, selecting: selecting, to: to))
+            presses += run(.right, count: column, selecting: selecting, to: to)
         }
         return presses
+    }
+
+    /// `arrows` as presses; a run inside one grapheme presses nothing.
+    static func run(_ arrow: Chord, count: Int, selecting: Bool, to: Int) -> [PhysicalStep] {
+        selecting && count > 0 ? counted(arrows(arrow, count: count, selecting: true, to: to)) : [.press(arrow, count: count)]
     }
 
     /// `count` arrows, or as many shifted ones and the arrow that collapses them, which no code span's edge holds up;

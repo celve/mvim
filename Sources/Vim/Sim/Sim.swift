@@ -510,7 +510,7 @@ private extension Sim {
         let arrived = selection.isEmpty ? selection.lowerBound : -1
         switch (chord.key, chord.modifiers) {
         case (.arrowRight, []), (.arrowRight, [.option]): codeInside = isCodeEdge(arrived, start: false)
-        case (.arrowLeft, []): codeInside = isCodeEdge(arrived, start: true)
+        case (.arrowLeft, []): codeInside = arrived > 0 && isCodeEdge(arrived, start: true)
         default: codeInside = false
         }
         return true
@@ -520,11 +520,12 @@ private extension Sim {
         listLines != nil && codeSpans.contains { (start ? $0.lowerBound : $0.upperBound) == offset }
     }
 
-    /// `spans` once `range` is `replacement`: an edit inside a span stays in it, and one at its edge stays out.
+    /// `spans` once `range` is `replacement`: an edit inside a span stays in it, one at its edge stays out, and spans
+    /// an edit brings together are one, as ProseMirror joins marks.
     static func carried(_ spans: [Range<Int>], replacing range: Range<Int>, with replacement: String) -> [Range<Int>] {
         let count = replacement.utf16.count
         let delta = count - range.count
-        return spans.compactMap { span in
+        let kept = spans.compactMap { span -> Range<Int>? in
             let kept: Range<Int>
             if range.upperBound <= span.lowerBound {
                 kept = (span.lowerBound + delta)..<(span.upperBound + delta)
@@ -540,6 +541,13 @@ private extension Sim {
                 kept = span.lowerBound..<range.lowerBound
             }
             return kept.isEmpty ? nil : kept
+        }.sorted { $0.lowerBound < $1.lowerBound }
+        return kept.reduce(into: []) { joined, span in
+            if let last = joined.last, last.upperBound >= span.lowerBound {
+                joined[joined.count - 1] = last.lowerBound..<max(last.upperBound, span.upperBound)
+            } else {
+                joined.append(span)
+            }
         }
     }
 

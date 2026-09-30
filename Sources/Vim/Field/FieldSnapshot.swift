@@ -187,6 +187,7 @@ public extension FieldSnapshot {
                 }
             }
         }
+        var textlessLeaves = interpreted.textlessLeaves
         var foldedLength = 0
         var holdsChips = false
         var holdsDrawnCaret = false
@@ -226,6 +227,8 @@ public extension FieldSnapshot {
                     holdsChips = !found.chips.isEmpty
                     holdsDrawnCaret = !found.carets.isEmpty
                     drawnBreak = folded.drawnBreak
+                    // A drawn caret is no element a retyped break could take with it.
+                    textlessLeaves = textlessLeaves && raw.utf16.filter { $0 == 0xFFFC }.count > found.carets.count
                     // A marker on the drawn caret reads as an empty block.
                     let drawn = marked.isEmpty && found.carets.contains { $0.offset == marked.lowerBound }
                     emptyParagraph = emptyParagraph && !drawn && !onEmptyLine(resolved, in: folded.text)
@@ -245,7 +248,7 @@ public extension FieldSnapshot {
             webContent: reads.webContent,
             breaks: breaks,
             caretInEmptyParagraph: emptyParagraph,
-            textlessLeaves: interpreted.textlessLeaves,
+            textlessLeaves: textlessLeaves,
             valueGap: gap,
             holdsEmptyParagraphs: holdsEmptyParagraphs,
             foldedLength: foldedLength,

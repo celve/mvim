@@ -121,7 +121,7 @@ public enum UnreachableLines {
                 markers.append(start..<(start + count))
             }
             if line.units.starts(with: [0x2060, 0x00A0]) { chips.append(start..<(start + line.units.count)) }
-            if line.units.isEmpty, line.start > 0, generated.contains(line.start - 1), line.start < length, leaves[start] == 1 {
+            if line.units.isEmpty, line.start == 0 || generated.contains(line.start - 1), line.start < length, leaves[start] == 1 {
                 carets.append(start)
             }
         }
@@ -163,18 +163,19 @@ public enum UnreachableLines {
             var keepsTerminator = end < units.count
             // The `<br>` after a chip that ends its paragraph stays the line's end, which a caret reads past.
             let trailing = end < units.count && !generated.contains(end) && endings.contains(breaks.fieldOffset(end))
-            if line.units.isEmpty, let caret = carets[start], line.start > 0, generated.contains(line.start - 1),
+            if line.units.isEmpty, let caret = carets[start], line.start == 0 || generated.contains(line.start - 1),
                end < units.count, let count = leaves[start], count > 0 {
                 // A drawn caret's breaks go, and the `<br>` after one ending its paragraph goes with the caret.
                 leaves[start] = count - 1
-                if !terminated || caret.place != .start { dropped.insert(line.start - 1) }
-                if terminated {
+                if line.start > 0, !terminated || caret.place != .start { dropped.insert(line.start - 1) }
+                if terminated || end + 1 == units.count {
+                    // Ending the field, the `<br>` would leave an empty last line no caret reaches.
                     dropped.insert(end)
                     keepsTerminator = false
                 } else {
                     converted.insert(end)
-                    drawnBreak = start
                 }
+                if !terminated { drawnBreak = start }
             } else if line.units.isEmpty, endings.contains(start), end < units.count, !generated.contains(end),
                let count = leaves[start], count > 0, let previous = lastBreak, previous == line.start - 1,
                generated.contains(previous) {

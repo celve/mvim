@@ -4634,12 +4634,16 @@ for state in codeStates {
 }
 
 let tailSnapshot = codeBuild(codeStates[5], side: .end)
-let tailWrite = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("j"), state: .initial), snapshot: FieldSnapshot(
-    capabilities: writeKeys, text: tailSnapshot.text, selection: tailSnapshot.selection, webContent: true,
-    breaks: tailSnapshot.breaks, foldedLength: tailSnapshot.foldedLength, holdsDrawnCaret: true, drawnBreak: tailSnapshot.drawnBreak
-))
-precondition(tailWrite.steps.first == .setSelection(263..<263) && settleTraces(tailWrite).first == "sel=262..262 len=nil",
+func tailPlan(_ keys: String) -> PhysicalPlan {
+    PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: FieldSnapshot(
+        capabilities: writeKeys, text: tailSnapshot.text, selection: tailSnapshot.selection, webContent: true,
+        breaks: tailSnapshot.breaks, foldedLength: tailSnapshot.foldedLength, holdsDrawnCaret: true, drawnBreak: tailSnapshot.drawnBreak
+    ))
+}
+precondition(tailPlan("j").steps.first == .setSelection(263..<263) && settleTraces(tailPlan("j")).first == "sel=262..262 len=nil",
              "a write while the caret is drawn meets the <br>, which is gone once it lands")
+precondition(tailPlan("w").steps.first == .setSelection(229..<229), "the next paragraph's start is past the <br>")
+precondition(tailPlan("h").steps.first == .setSelection(227..<227), "and this one's end before it")
 
 // A Sim of Linear's editor with code spans moves and edits as Vim does, in both lanes.
 let codeDoc = ["Marks then code span then a link.", "lead starts here", "ends with tail", "x is one letter", "last line"]
