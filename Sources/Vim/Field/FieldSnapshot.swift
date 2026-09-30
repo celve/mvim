@@ -195,7 +195,9 @@ public extension FieldSnapshot {
         var unreachable: UnreachableLines.Memo?
         if answer == .textContent, capabilities.has(.readCaret), let value = field.text, let model = text, let current = breaks,
            let marked = reads.marked, let raw = reads.markerText {
-            let candidates = UnreachableLines.candidates(text: model, breaks: current, raw: raw)
+            let candidates = UnreachableLines.candidates(
+                text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil
+            )
             if !candidates.isEmpty {
                 guard let knownUnreachable, knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks) else {
                     return .needs(.unreachable(value: value, markers: raw, candidates: candidates))

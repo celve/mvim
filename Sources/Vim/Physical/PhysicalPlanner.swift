@@ -77,16 +77,17 @@ public enum PhysicalPlanner {
         // they touch nothing and the cursor stays up.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             steps += collapse(to: gap, context: context, profile: profile)
+            context.drawnBreak = nil
+            context.drawnCaret = false
         }
         for (index, step) in logical.steps.enumerated() {
             guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
-            if context.drawnCaret, let first = lowered.firstIndex(where: { if case .press = $0 { true } else { false } }) {
-                // Linear's shifted → and ⇧⌃E do nothing from inside a code span's start (LIN-1683).
-                if case .press(let chord, _) = lowered[first], [.selectRight, Chord.paragraphEnd.shifted].contains(chord) {
-                    lowered.insert(contentsOf: outside, at: first)
-                }
+            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, where only the snapshot's caret can be (LIN-1683).
+            if context.drawnCaret, let first = lowered.firstIndex(where: moves), case .press(let chord, _) = lowered[first],
+               [.selectRight, Chord.paragraphEnd.shifted].contains(chord) {
+                lowered.insert(contentsOf: outside, at: first)
             }
             steps.append(contentsOf: lowered)
             for step in lowered {
@@ -95,15 +96,21 @@ public enum PhysicalPlanner {
                 case .settle, .softSettle: context.keysQueued = false
                 default: break
                 }
-                switch step {
-                case .setSelection, .replaceSelection, .press, .typeText, .clipboardCut, .clipboardInsert:
-                    context.drawnBreak = nil
-                    context.drawnCaret = false
-                default: break
-                }
+            }
+            if lowered.contains(where: moves) {
+                context.drawnBreak = nil
+                context.drawnCaret = false
             }
         }
         return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
+    }
+
+    /// A step that can take the caret from where the snapshot saw it.
+    static func moves(_ step: PhysicalStep) -> Bool {
+        switch step {
+        case .setSelection, .replaceSelection, .press, .typeText, .clipboardCut, .clipboardInsert: true
+        default: false
+        }
     }
 
     private static func isBellOnly(_ logical: LogicalPlan) -> Bool {
@@ -427,15 +434,25 @@ private extension PhysicalPlanner {
         let end = model.lineEnd(of: caret)
         if caret == end, caret < model.length, start < caret {
             let inside = model.advance(caret, byGraphemes: -1)
-            return foldedWrite(inside..<inside, model: model, context: context) + [.press(.right, count: 1)]
+            // A plain → from a code span's start only steps into it.
+            return foldedWrite(inside..<inside, model: model, context: context)
+                + run(.right, count: 1, selecting: context.arrowsSelect, to: caret)
         }
         // A line's start sharing its offset with the line above's end, as a to-do's does, takes a write from below there.
         if context.edge(caret) == .paragraphStart, field.lowerBound > 0 {
             let inside = model.advance(caret, byGraphemes: 1)
             guard inside < end, !context.isAtom(inside) else {
-                return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+                let above = field.lowerBound - 1
+                guard let drawnBreak = context.drawnBreak, above > drawnBreak else {
+                    return [.setSelection(above..<above), .setSelection(field)]
+                }
+                // Leaving a drawn caret takes its `<br>` with it up to 300 ms later, which a read past it waits out.
+                return [.setSelection(above..<above), .settle(Expectation(landing: .exact(above - 1..<above - 1))),
+                        .setSelection(context.field(range))]
             }
-            return [.setSelection(context.written(inside..<inside)), .press(.left, count: 1)]
+            // A caret written at a code span's end takes no ← or ⇧← next, and a collapse onto its start may stay inside.
+            return [.setSelection(context.written(inside..<inside))]
+                + run(.left, count: 1, selecting: context.arrowsSelect, to: caret)
         }
         guard landsPast(caret, context: context) else { return [.setSelection(field)] }
         return [.setSelection(field)] + back(true, context: context)

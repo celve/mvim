@@ -39,7 +39,7 @@ public enum UnreachableLines {
     public struct Candidates: Equatable, Sendable {
         public let markers: [Range<Int>]
         public let chips: [Range<Int>]
-        /// Plain offsets of empty lines after a generated break that hold one text-less leaf, as a drawn caret does.
+        /// Plain offsets of empty lines after a generated break holding one text-less leaf, and the caret's by any leaf.
         public let carets: [Int]
 
         public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = []) {
@@ -106,7 +106,7 @@ public enum UnreachableLines {
     public static let readBudget = 1024
 
     /// Lines shaped like a marker or starting with one and a space, lines starting as Linear's chips do, and drawn carets'.
-    public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil) -> Candidates {
+    public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil) -> Candidates {
         let leaves = raw.map(leafCounts) ?? [:]
         let generated = Set(breaks.offsets)
         let length = text.utf16.count
@@ -125,6 +125,8 @@ public enum UnreachableLines {
                 carets.append(start)
             }
         }
+        // One can share its offset with a to-do's checkbox, or have no line after a `<br>`.
+        if let caret, leaves[caret] != nil, !carets.contains(caret) { carets.append(caret) }
         return Candidates(markers: markers, chips: chips, carets: carets)
     }
 
@@ -168,7 +170,7 @@ public enum UnreachableLines {
                 // A drawn caret's breaks go, and the `<br>` after one ending its paragraph goes with the caret.
                 leaves[start] = count - 1
                 if line.start > 0, !terminated || caret.place != .start { dropped.insert(line.start - 1) }
-                if terminated || end + 1 == units.count {
+                if terminated || breaks.fieldOffset(end) + 1 == plain {
                     // Ending the field, the `<br>` would leave an empty last line no caret reaches.
                     dropped.insert(end)
                     keepsTerminator = false

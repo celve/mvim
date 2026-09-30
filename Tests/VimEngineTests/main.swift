@@ -4330,7 +4330,8 @@ precondition(settleTraces(dia1Count).last == "sel=105..105 len=491", "3j counts 
 let dia1dd = dia1Planning("dd", caret: 53)
 precondition(checkedTexts(dia1dd) == ["Numbered one2."], "AXSelectedText runs through the next item's marker")
 precondition(settleTraces(dia1dd).last == "soft sel=54..54 len=nil", "a list renumbers, so the length goes unchecked")
-precondition(dia1Planning("$", caret: 0, profile: writeKeys).steps.prefix(2) == [.setSelection(51..<51), .press(.right, count: 1)],
+precondition(dia1Planning("$", caret: 0, profile: writeKeys).steps.prefix(3)
+             == [.setSelection(51..<51), .press(.selectRight, count: 1), .press(.right, count: 1)],
              "a write at a list marker lands by where the caret was, so the line's end is reached from inside it")
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
@@ -4344,8 +4345,10 @@ precondition(dia6Planning("0", caret: 80, profile: writeKeys).plan.steps.prefix(
              "a caret written at a chip's start stops the next arrow, so a chip's start is reached from its end")
 precondition(dia6Planning("$", caret: 60, profile: writeKeys).plan.steps.first == .setSelection(222..<222),
              "after a chip that ends its paragraph, the write goes before the <br>")
-precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(2) == [.setSelection(111..<111), .press(.left, count: 1)],
-             "a paragraph's start sharing an offset with the line above's end is reached from inside it")
+precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(5) == [
+    .setSelection(111..<111), .press(.selectLeft, count: 1), .press(.left, count: 1), .press(.selectLeft, count: 1),
+    .press(.right, count: 1),
+], "a paragraph's start sharing an offset with the line above's end is reached from inside it")
 precondition(checkedTexts(dia6Planning("x", caret: 37).plan) == [chipA], "x takes the chip whole")
 precondition(dia6Planning("yy", caret: 60).plan.steps.contains(
     .commit(.yanked(into: nil, content: .literal("Text then a chip " + chipB + "\n"), wise: .line))
@@ -4686,6 +4689,59 @@ for profile in [keyProfile, writeKeys] {
         precondition(code.caret == plain.caret && code.text == plain.text, "\(keys) then Esc")
         precondition(code.settleFailures == 0 && code.bells == 0 && code.unsupportedSteps == 0, "\(keys): \(code.settleFailures)")
     }
+}
+
+// Spans one letter long at the edges of list items, to-dos and lines beside chips, where writes are reached by keys.
+let listCodeDoc: [(String, String?, Int, Bool)] = [
+    ("Top line ab x", nil, 0, false), ("\u{2060} tail", nil, 0, false), ("x hi", "\u{2022}", 0, false),
+    ("item ends y", "\u{2022}", 0, false), ("z", nil, 0, false), ("q to do", nil, 2, true), ("done r", nil, 2, true),
+    ("\u{2060}", nil, 0, false), ("w", "1.", 0, false), ("Last code", nil, 0, false),
+]
+let listCodeStarts = listCodeDoc.indices.map { listCodeDoc.prefix($0).map { $0.0.utf16.count + 1 }.reduce(0, +) }
+let listCodeSpans = [(0, 12, 13), (2, 0, 1), (3, 10, 11), (5, 0, 1), (6, 5, 6), (8, 0, 1), (9, 5, 9)].map {
+    listCodeStarts[$0.0] + $0.1 ..< listCodeStarts[$0.0] + $0.2
+}
+func listCodeSim(_ profile: CapabilityProfile, caret: Int, spans: [Range<Int>]) -> Sim {
+    var host = Sim(text: listCodeDoc.map(\.0).joined(separator: "\n"), caret: caret, profile: profile)
+    host.emptyParagraphs = true
+    host.listLines = listCodeDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.3) }
+    host.codeSpans = spans
+    host.emulatesKeys = true
+    host.readModel = .textContent
+    return host
+}
+for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) {
+    for keys in ["AQ", "$", "l", "k", "2j", "dd", "yyp", "dw", "Vjd"] {
+        var code = listCodeSim(writeKeys, caret: caret, spans: listCodeSpans)
+        var plain = listCodeSim(writeKeys, caret: caret, spans: [])
+        for key in keys {
+            code.type(String(key))
+            plain.type(String(key))
+        }
+        code.feed("<Esc>")
+        plain.feed("<Esc>")
+        precondition(code.caret == plain.caret && code.text == plain.text && code.bells == plain.bells
+                     && code.settleFailures == plain.settleFailures, "\(keys) from \(caret)")
+    }
+}
+for (text, spans, caret, keys) in [
+    ("foo code\n\u{2060} text", [4..<8], 4, ["dd"]), ("ab x\n\u{2060} tail", [3..<4], 0, ["AQ"]),
+    ("aa\nx hi\n\u{2060} tail", [3..<4], 0, ["j", "x"]), ("ab x\nyyyy\nz\n\u{2060} tail", [3..<4], 4, ["2j"]),
+] {
+    var code = Sim(text: text, caret: caret, profile: writeKeys)
+    code.emptyParagraphs = true
+    code.listLines = text.split(separator: "\n", omittingEmptySubsequences: false).map { _ in Sim.ListLine() }
+    code.codeSpans = spans
+    code.emulatesKeys = true
+    code.readModel = .textContent
+    var plain = Sim(text: text, caret: caret, profile: writeKeys)
+    plain.emulatesKeys = true
+    for command in keys {
+        code.type(command)
+        plain.type(command)
+        if code.state.field.mode == .insert { code.feed("<Esc>"); plain.feed("<Esc>") }
+    }
+    precondition(code.caret == plain.caret && code.text == plain.text && code.settleFailures == 0, "\(text) \(keys)")
 }
 
 print("Vim engine tests passed")

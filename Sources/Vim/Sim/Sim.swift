@@ -64,6 +64,8 @@ public struct Sim {
     /// A caret at a code span's edge is inside it; a plain arrow from the edge's near side only crosses the edge.
     private var codeInside = false
 
+    /// A caret written at a code span's end, where Linear's next ← or ⇧← can do nothing.
+    private var atWrittenCodeEnd = false
 
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
@@ -392,6 +394,7 @@ private extension Sim {
                 atChipStart = selection.isEmpty && atoms.contains(lower)
                 // Measured, a caret written at a code span's start lands outside it, one at its end inside.
                 codeInside = selection.isEmpty && isCodeEdge(lower, start: false) && !isCodeEdge(lower, start: true)
+                atWrittenCodeEnd = codeInside
                 backward = false
 
             case .replaceSelection(let replacement):
@@ -473,6 +476,9 @@ private extension Sim {
             return true
         }
         atChipStart = false
+        // Measured at some ends and not others, so always here: the first ← or ⇧← after a write at a code span's end.
+        defer { atWrittenCodeEnd = false }
+        if atWrittenCodeEnd, [.left, .selectLeft].contains(chord) { return true }
         // Measured: from inside a code span's start, shifted → and ⇧⌃E do nothing.
         if [.selectRight, Chord.paragraphEnd.shifted].contains(chord), selection.isEmpty, codeInside,
            isCodeEdge(selection.lowerBound, start: true) {
@@ -506,11 +512,12 @@ private extension Sim {
         text = keys.text
         selection = keys.selection
         backward = keys.focus < keys.anchor
-        // Measured: → and ⌥→ arrive outside a start and inside an end, ← the other way round, and ⌥←, ⌃A and ⌃E outside.
+        // Measured: → and ⌥→ arrive outside a start and inside an end, ← the reverse but at a line start, the rest outside.
         let arrived = selection.isEmpty ? selection.lowerBound : -1
         switch (chord.key, chord.modifiers) {
         case (.arrowRight, []), (.arrowRight, [.option]): codeInside = isCodeEdge(arrived, start: false)
-        case (.arrowLeft, []): codeInside = arrived > 0 && isCodeEdge(arrived, start: true)
+        case (.arrowLeft, []):
+            codeInside = isCodeEdge(arrived, start: true) && TextModel(text).lineStart(of: arrived) != arrived
         default: codeInside = false
         }
         return true
@@ -891,7 +898,8 @@ struct ChromiumParagraphs {
             for (offset, unit) in units.enumerated() {
                 if offset == drawn {
                     flush()
-                    parts.append([])
+                    // Measured, one starting a paragraph right after a `<br>` has no line of its own.
+                    if offset > 0 || !followsBreak { parts.append([]) }
                     partsRaw.append(0xFFFC)
                     drawnCaret = UnreachableLines.Caret(offset: plain, place: offset == 0 ? .start : .middle)
                 }
