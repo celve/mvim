@@ -56,6 +56,9 @@ public final class Controller {
     /// The bound field's empty paragraphs, found again when its text changes.
     private var emptyParagraphs: EmptyParagraphs.Memo?
 
+    /// Its list markers and chips, found again the same way.
+    private var unreachable: UnreachableLines.Memo?
+
     /// Per-rung evidence this process, stored with the read model.
     private var tallies: [String: Tally] = [:]
 
@@ -279,6 +282,7 @@ public final class Controller {
         if transition != .sameElement {
             sampling = OffsetsSampling()
             emptyParagraphs = nil
+            unreachable = nil
         }
         binding = new
         Diag.bind(tracker.epoch, transition, new)
@@ -332,12 +336,17 @@ public final class Controller {
             chromium: binding.isChromium,
             model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
             sampling: sampling,
-            known: emptyParagraphs
+            known: emptyParagraphs,
+            knownUnreachable: unreachable
         )
         if reading.emptyParagraphs != emptyParagraphs, let memo = reading.emptyParagraphs {
             Diag.emptyParagraphs(tracker.epoch, commandSeq, memo)
         }
         emptyParagraphs = reading.emptyParagraphs
+        if reading.unreachable != unreachable, let memo = reading.unreachable {
+            Diag.unreachable(tracker.epoch, commandSeq, memo)
+        }
+        unreachable = reading.unreachable
         if reading.sampled {
             sampling.sampled(markers: reading.markers, evidence: reading.observed.evidence, text: reading.reads.text,
                              plain: reading.reads.plain)
@@ -370,7 +379,8 @@ public final class Controller {
                 executed: executed,
                 evidence: evidence,
                 insertPayload: completed.insertPayload,
-                emptyLines: snapshot.valueGap
+                emptyLines: snapshot.valueGap,
+                foldedLength: snapshot.foldedLength
             )
         }
         guard executed else {

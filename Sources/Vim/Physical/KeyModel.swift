@@ -8,6 +8,9 @@ struct KeyModel {
     /// Graphemes per visual row for ↓ ↑ ⌘← ⌘→; nil lays each line on one row.
     var wrap: Int?
 
+    /// Offsets of chips, where Linear's shifted ⌃A and ⌃E stop (LIN-1652).
+    var atoms: Set<Int> = []
+
     var selection: Range<Int> { min(anchor, focus)..<max(anchor, focus) }
 
     /// Applies one press; false for a key the model does not know.
@@ -28,9 +31,13 @@ struct KeyModel {
         case .right:
             moved = !shift && !collapsed ? selection.upperBound : model.advance(focus, byGraphemes: 1)
         case .paragraphStart:
-            moved = model.lineStart(of: shift ? focus : selection.lowerBound)
+            let from = shift ? focus : selection.lowerBound
+            let start = model.lineStart(of: from)
+            moved = shift ? atoms.map { $0 + 1 }.filter { start < $0 && $0 <= from }.max() ?? start : start
         case .paragraphEnd:
-            moved = model.lineEnd(of: shift ? focus : selection.upperBound)
+            let from = shift ? focus : selection.upperBound
+            let end = model.lineEnd(of: from)
+            moved = shift ? atoms.filter { from <= $0 && $0 < end }.min() ?? end : end
         case .documentStart:
             moved = 0
         case .documentEnd:

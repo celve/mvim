@@ -158,10 +158,11 @@ private extension PhysicalPlanner {
             case selection, length, edge
         }
 
-        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
+        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back, less the lines folded out.
         let valueGap: Int
 
-        let holdsEmptyParagraphs: Bool
+        /// Emptying or filling a line changes which lines `AXValue` shows beside it.
+        let reshapes: Bool
 
         var textlessLeaves = false
 
@@ -173,8 +174,9 @@ private extension PhysicalPlanner {
             breaks = snapshot.breaks
             emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
-            valueGap = snapshot.valueGap
-            holdsEmptyParagraphs = snapshot.holdsEmptyParagraphs
+            valueGap = snapshot.valueGap - snapshot.foldedLength
+            reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
+            if snapshot.holdsChips { unknown.insert(.length) }
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -189,13 +191,26 @@ private extension PhysicalPlanner {
             breaks?.fieldRange(range) ?? range
         }
 
+        /// The model holds folded text, where Linear lands a write by where the caret came from (LIN-1652).
+        var folded: Bool { !(breaks?.hidden.isEmpty ?? true) }
+
+        /// Model offsets of the chips, which keys cross in one step.
+        var atoms: Set<Int> { breaks?.atoms ?? [] }
+
+        func isAtom(_ offset: Int) -> Bool { breaks?.isAtom(offset) ?? false }
+
+        /// A register's text for `range`, each chip's label whole.
+        func content(_ range: Range<Int>, _ text: String) -> String {
+            breaks?.withAtoms(text, at: range) ?? text
+        }
+
         /// The snapshot's caret when it is in an empty paragraph, which `AXValue` can leave out and read beside, so a
         /// key pressed from it can seem to do nothing when it did.
         let emptyParagraphCaret: Range<Int>?
 
-        /// Typing over `range` would drop a break that may bound an `<hr>` or a table cell, which no typed text rebuilds.
+        /// Typing over `range` would drop a break bounding an `<hr>` or a table cell, or a chip: no typed text rebuilds them.
         func retypesStructure(_ range: Range<Int>) -> Bool {
-            textlessLeaves && (breaks?.offsets.contains { range.contains($0) } ?? false)
+            textlessLeaves && (breaks?.offsets.contains { range.contains($0) } ?? false) || (breaks?.coversAtom(range) ?? false)
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -281,17 +296,24 @@ private extension PhysicalPlanner {
             if !range.isEmpty { operand = field(range) }
             let before = model
             text = model?.replacing(range, with: replacement)
-            if holdsEmptyParagraphs, !replacement.contains("\n"), let before, let after = model {
+            if reshapes, !replacement.contains("\n"), let before, let after = model {
                 let caret = range.lowerBound + replacement.utf16.count
-                // Emptying or filling a line changes which of the empty paragraphs `AXValue` shows.
                 if before.touchesEmptyLine(range) || after.touchesEmptyLine(range.lowerBound..<caret) {
                     unknown.formUnion([.length, .edge])
                 }
             }
             if let current = breaks {
-                breaks = current.replacing(range, with: replacement)
+                // Deleting a plain line into a list item leaves the item; otherwise the first line keeps its own.
+                let ownRuns = current.hidden.filter { $0.at == range.lowerBound && $0.isStructure }
+                let plainLine = replacement.isEmpty && ownRuns.isEmpty && before?.lineStart(of: range.lowerBound) == range.lowerBound
+                let ownMarker = ownRuns.contains { !$0.text.isEmpty }
+                let coversMarker = current.hidden.contains { range.lowerBound < $0.at && $0.at <= range.upperBound && $0.isMarker }
+                breaks = current.replacing(range, with: replacement, keepingCovered: plainLine)
                 // A typed `\n` may have made a paragraph or a line break.
                 if replacement.contains("\n") { unknown.formUnion([.selection, .edge]) }
+                // An item made or merged gains or loses `AXValue` lines, and its list renumbers.
+                if !current.hidden.isEmpty, replacement.contains("\n") || current.covers(range) { unknown.insert(.length) }
+                if coversMarker, !plainLine, !ownMarker { unknown.formUnion([.selection, .edge]) }
             }
             let caretAfter = range.lowerBound + replacement.utf16.count
             selection = caretAfter..<caretAfter
@@ -323,6 +345,7 @@ private extension PhysicalPlanner {
 
     /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
+        if context.folded, let model = context.model { return foldedWrite(range, model: model, context: context) }
         let field = context.field(range)
         if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
             return [
@@ -334,6 +357,45 @@ private extension PhysicalPlanner {
         let step = PhysicalStep.setSelection(field)
         guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
         return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+    }
+
+    /// Linear lands a write at a marker, checkbox or chip by where the caret was, so boundaries are reached by keys (LIN-1652).
+    static func foldedWrite(_ range: Range<Int>, model: TextModel, context: Context) -> [PhysicalStep] {
+        guard range.isEmpty else {
+            let ends = [range.lowerBound, range.upperBound]
+            guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
+            else { return [.setSelection(context.field(range))] }
+            let start = range.lowerBound..<range.lowerBound
+            return foldedWrite(start, model: model, context: context) + [.press(.selectRight, count: model.graphemes(in: range))]
+        }
+        let caret = range.lowerBound
+        let field = context.field(range)
+        if context.isAtom(caret) {
+            // Past the run of chips it starts, since each chip's end is the next one's start.
+            var end = caret
+            while context.isAtom(end) { end += 1 }
+            let written = context.field(caret..<end).upperBound
+            return [.setSelection(written..<written), .press(.left, count: end - caret)]
+        }
+        if context.breaks?.endsBeforeBreak(caret) ?? false {
+            return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1)]
+        }
+        let start = model.lineStart(of: caret)
+        let end = model.lineEnd(of: caret)
+        if caret == end, caret < model.length, start < caret {
+            let inside = model.advance(caret, byGraphemes: -1)
+            return foldedWrite(inside..<inside, model: model, context: context) + [.press(.right, count: 1)]
+        }
+        // A line's start sharing its offset with the line above's end, as a to-do's does, takes a write from below there.
+        if context.edge(caret) == .paragraphStart, field.lowerBound > 0 {
+            let inside = model.advance(caret, byGraphemes: 1)
+            guard inside < end, !context.isAtom(inside) else {
+                return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+            }
+            return [.setSelection(context.field(inside..<inside)), .press(.left, count: 1)]
+        }
+        guard context.edge(caret) == .paragraphEnd else { return [.setSelection(field)] }
+        return [.setSelection(field), .press(.left, count: 1)]
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
@@ -445,7 +507,8 @@ private extension PhysicalPlanner {
             return [.commit(.setCursor(nil))]
         }
         let end = model.advance(gap, byGraphemes: 1)
-        guard end > gap, gap < model.lineEnd(of: gap) else {
+        // A selection written over a chip collapses past it.
+        guard end > gap, gap < model.lineEnd(of: gap), !context.isAtom(gap) else {
             return [.commit(.setCursor(nil))]   // end of line/text: nothing to cover
         }
         context.selection = gap..<end
@@ -658,7 +721,7 @@ private extension PhysicalPlanner {
             }
         }
         // Only the column is counted, in its own settle so the line the field reports decides it.
-        var landing = KeyModel(text: model.text, anchor: position, focus: position)
+        var landing = KeyModel(text: model.text, anchor: position, focus: position, atoms: context.atoms)
         guard groups.flatMap(\.chords).allSatisfy({ landing.press($0) }),
               model.lineStart(of: landing.focus) == targetLine else { return .next }
         let reached = landing.focus
@@ -719,7 +782,7 @@ private extension PhysicalPlanner {
         var context = original
         var steps = collapsing(&context)
         // One model throughout: which end of a selection moves is state the keys build up.
-        var model = KeyModel(text: text, anchor: position, focus: position)
+        var model = KeyModel(text: text, anchor: position, focus: position, atoms: original.atoms)
         for group in groups where !group.chords.isEmpty {
             for chord in group.chords {
                 guard model.press(chord) else { return .next }
@@ -749,7 +812,8 @@ private extension PhysicalPlanner {
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
             let emptyParagraph = before == context.emptyParagraphCaret
-            let unmoved = emptyParagraph || mayStayPut(chords, from: before, in: model) ? [] : [context.field(before)]
+            let unmoved = emptyParagraph || mayStayPut(chords, from: before, in: model, atoms: context.atoms)
+                ? [] : [context.field(before)]
             // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
             let offTarget = context.breaks == nil
             var exemptions: [Expectation.Exemption] = []
@@ -772,9 +836,9 @@ private extension PhysicalPlanner {
     }
 
     /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
-    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel) -> Bool {
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel, atoms: Set<Int>) -> Bool {
         guard read.isEmpty else { return true }
-        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound)
+        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound, atoms: atoms)
         guard chords.allSatisfy({ keys.press($0) }) else { return true }
         return keys.selection == read
     }
@@ -1329,8 +1393,9 @@ private extension PhysicalPlanner {
         let blackhole = register?.name == "_"
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
-            let content = model.substring(selection)
-            var steps = checkSelectedText(content, context: context, profile: profile)
+            let text = model.substring(selection)
+            let content = context.content(selection, text)
+            var steps = checkSelectedText(text, context: context, profile: profile)
             steps.append(profile.has(.insertText) ? .replaceSelection("") : .press(.deleteBack, count: 1))
             context.applyEdit(range: selection, replacement: "")
             // Blind (press) delete: soft — a mismatch must not abort the
@@ -1364,7 +1429,7 @@ private extension PhysicalPlanner {
         let wise = registerWise(context.selectionWise)
         if let model = context.model, let selection = context.selection {
             guard !selection.isEmpty else { return [] }
-            let content = model.substring(selection)
+            let content = context.content(selection, model.substring(selection))
             guard registersFromField(content, profile) else {
                 return [.commit(.yanked(into: register, content: .literal(content), wise: wise))]
             }

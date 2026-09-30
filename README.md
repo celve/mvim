@@ -110,8 +110,10 @@ its selection. There mvim runs the same Normal-mode commands by pressing keys (a
 and ⌘↓), and checks the field after each step: when the field does not answer as planned, it beeps and
 stops rather than edit the wrong text. There is no block cursor there, and `o` and `O` paste their
 new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
-of more than about 250 paragraphs. In a field mvim cannot read at all, and under **Force**,
-moves are approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
+of more than about 250 paragraphs, a list's markers and to-do boxes are not, and a mention chip is
+one character on its paragraph's line, so `j` and `k` count the lines Linear shows, and columns start
+after a list item's `• ` or `1. `. In a field mvim cannot read at all, and under **Force**, moves are
+approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
 
@@ -414,6 +416,10 @@ paragraph's end and the next one's start, `edge=end` or `edge=start` says which 
 for. `AXValue` leaves out an empty paragraph that sits between two others; mvim finds those in the
 accessibility tree and plans with each as a line of its own, while a settle's `len` stays
 `AXValue`'s, and `empty=N` on a `cmd` line is how many lines the plan had that `AXValue` lacks.
+The reverse holds for the text `AXValue` gives that no caret reaches, such as a list marker, a
+to-do's checkbox or a mention chip past its first character: the plan leaves it out, so the field's
+offsets run ahead of the plan's by what it left out before them, and `folded=N` is how many units of
+`AXValue` it took.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -485,7 +491,22 @@ in it reading as the end of the line above, so mvim looks for these in the acces
 per text and gives each a line. Where it cannot, in a field of more than about 250 blocks
 or when a read fails, a key pressed from a caret whose marker sits on an empty paragraph is not
 blamed for seeming to do nothing. In such a field a yank within one line takes its register from
-the text the field selected.
+the text the field selected. A list item's marker (`•`, `1.`) is a line of its own in Linear's
+`AXValue`, and so is each icon, checkbox or heading menu that is a block; no caret stands on any of
+them, so mvim leaves them out of its lines. A page's own list (`<li>`) starts each item's line with
+its marker and a space, which no caret stands in either, so mvim leaves those out too. A mention
+chip is a line of its own in Linear's `AXValue` too, though it sits inside its paragraph, and the
+caret crosses it in one step: mvim gives it its paragraph's line back and counts it as one
+character, whose register text is the chip's label. mvim tells markers
+and chips from text in the accessibility tree, once per text; where it cannot, in a field of more
+than about a hundred list items and chips or when a read fails, they stay lines and `j` or `k` into
+one beeps. Edits across list items run without checking the length, since a list renumbers and
+items gain or lose their markers, and nothing types over a chip, since typed text cannot rebuild
+one. A chip that ends its paragraph is followed by a `<br>` the caret reads as already past, and
+beside a chip Linear gives the caret an `AXValue` line of its own for as long as it stays there, so
+in a document with chips the settles do not check the length. Where mvim can set the selection, it
+never sets the caret at a chip's start, after which the next arrow does nothing; it sets it at the
+chip's end and presses ←.
 
 A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
 item in every type it holds, puts the text up for one ⌘V (marked `org.nspasteboard.TransientType`,
