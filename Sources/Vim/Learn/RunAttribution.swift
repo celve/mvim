@@ -52,3 +52,63 @@ public struct RunAttribution: Equatable, Sendable {
         return expectation.exemption(selection).map { Evidence(Question(blame.capability), .neutral, why: $0, seen: .settle(index)) }
     }
 }
+
+// MARK: - Verdicts
+
+extension Expectation {
+    /// The key a non-converged settle blames, given the last selection it read.
+    public func blamed(observed: Range<Int>?) -> Capability? {
+        guard let observed, strike(observed) != nil else { return nil }
+        return blame?.capability
+    }
+
+    /// The rule a failed settle's read broke, which strikes its key; nil when exempt.
+    public func strike(_ observed: Range<Int>) -> Evidence.Why? {
+        guard let blame, !blame.exempt else { return nil }
+        return broken(blame, observed)
+    }
+
+    /// The exemption that leaves a failed settle's key unblamed.
+    public func exemption(_ observed: Range<Int>) -> Evidence.Why? {
+        guard let blame, strike(observed) == nil else { return nil }
+        return blame.exemptions.first { exemption in
+            exemption.all ? broken(blame, observed) != nil
+                : exemption.offTarget && landing?.matches(observed) == false || exemption.unmoved.contains(observed)
+        }.map { Evidence.Why($0.reason) }
+    }
+
+    /// Why a failed settle after a write missed, when its selected text is not the reason.
+    public func miss(selection observed: Range<Int>?, length observedLength: Int?) -> Evidence.Why {
+        if landing != nil && observed == nil || length != nil && observedLength == nil { return .unanswered }
+        if let length, observedLength != length { return .length }
+        if let landing, let observed, !landing.matches(observed) { return .moved }
+        if let longest, let observed, observed.count > longest { return .tooLong }
+        return .edge
+    }
+
+    public var checkedKey: Capability? {
+        blame.flatMap { $0.exempt ? nil : $0.capability }
+    }
+
+    private func broken(_ blame: Blame, _ observed: Range<Int>) -> Evidence.Why? {
+        if blame.unmoved.contains(observed) { return .unmoved }
+        if blame.leavesCaret && !observed.isEmpty { return .leftSelection }
+        if let longest, observed.count > longest { return .tooLong }
+        if blame.offTarget && landing?.matches(observed) == false { return .offTarget }
+        return nil
+    }
+}
+
+private extension Expectation.Blame {
+    var exempt: Bool { exemptions.contains(where: \.all) }
+}
+
+extension Evidence.Why {
+    init(_ reason: Expectation.Exemption.Reason) {
+        switch reason {
+        case .paragraphLines: self = .paragraphLines
+        case .emptyParagraph: self = .emptyParagraph
+        case .webContent: self = .webContent
+        }
+    }
+}

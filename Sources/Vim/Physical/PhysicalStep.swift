@@ -232,18 +232,25 @@ public struct Expectation: Equatable, Sendable {
             self.offTarget = offTarget
             self.exemptions = exemptions
         }
-
-        var exempt: Bool { exemptions.contains(where: \.all) }
     }
 
     /// A failure left unblamed: staying at `unmoved`, landing elsewhere with `offTarget`, or any with `all`.
     public struct Exemption: Equatable, Sendable {
-        public let reason: Evidence.Why
+        public enum Reason: Equatable, Sendable {
+            /// One Chromium paragraph can be several `AXValue` lines (a mention chip).
+            case paragraphLines
+            /// `AXValue` can leave an empty paragraph out, so a key from one can seem to do nothing.
+            case emptyParagraph
+            /// Raw reads in web content cannot tell a key that did nothing (LIN-1564).
+            case webContent
+        }
+
+        public let reason: Reason
         public let unmoved: [Range<Int>]
         public let offTarget: Bool
         public let all: Bool
 
-        public init(_ reason: Evidence.Why, unmoved: [Range<Int>] = [], offTarget: Bool = false, all: Bool = false) {
+        public init(_ reason: Reason, unmoved: [Range<Int>] = [], offTarget: Bool = false, all: Bool = false) {
             self.reason = reason
             self.unmoved = unmoved
             self.offTarget = offTarget
@@ -287,7 +294,12 @@ public struct Expectation: Equatable, Sendable {
     static func sameText(_ expected: String, _ observed: String?) -> Bool {
         guard let observed else { return false }
         return observed == expected
-            || !expected.utf16.contains(0xFFFC) && FieldReads.withoutAttachments(observed) == expected
+            || !expected.utf16.contains(0xFFFC) && withoutAttachments(observed) == expected
+    }
+
+    /// Chromium writes a U+FFFC into its text for each element with no text; `AXValue` has none.
+    public static func withoutAttachments(_ text: String) -> String {
+        String(decoding: text.utf16.filter { $0 != 0xFFFC }, as: UTF16.self)
     }
 
     public func rangeHeld(selection observed: Range<Int>?, length observedLength: Int?) -> Bool {
@@ -311,48 +323,6 @@ public struct Expectation: Equatable, Sendable {
         resolved.keeps = keeps
         resolved.within = within
         return resolved
-    }
-
-    /// The key a non-converged settle blames, given the last selection it read.
-    public func blamed(observed: Range<Int>?) -> Capability? {
-        guard let observed, strike(observed) != nil else { return nil }
-        return blame?.capability
-    }
-
-    /// The rule a failed settle's read broke, which strikes its key; nil when exempt.
-    public func strike(_ observed: Range<Int>) -> Evidence.Why? {
-        guard let blame, !blame.exempt else { return nil }
-        return broken(blame, observed)
-    }
-
-    /// The exemption that leaves a failed settle's key unblamed.
-    public func exemption(_ observed: Range<Int>) -> Evidence.Why? {
-        guard let blame, strike(observed) == nil else { return nil }
-        return blame.exemptions.first { exemption in
-            exemption.all ? broken(blame, observed) != nil
-                : exemption.offTarget && landing?.matches(observed) == false || exemption.unmoved.contains(observed)
-        }?.reason
-    }
-
-    /// Why a failed settle after a write missed, when its selected text is not the reason.
-    public func miss(selection observed: Range<Int>?, length observedLength: Int?) -> Evidence.Why {
-        if landing != nil && observed == nil || length != nil && observedLength == nil { return .unanswered }
-        if let length, observedLength != length { return .length }
-        if let landing, let observed, !landing.matches(observed) { return .moved }
-        if let longest, let observed, observed.count > longest { return .tooLong }
-        return .edge
-    }
-
-    public var checkedKey: Capability? {
-        blame.flatMap { $0.exempt ? nil : $0.capability }
-    }
-
-    private func broken(_ blame: Blame, _ observed: Range<Int>) -> Evidence.Why? {
-        if blame.unmoved.contains(observed) { return .unmoved }
-        if blame.leavesCaret && !observed.isEmpty { return .leftSelection }
-        if let longest, observed.count > longest { return .tooLong }
-        if blame.offTarget && landing?.matches(observed) == false { return .offTarget }
-        return nil
     }
 }
 

@@ -41,11 +41,8 @@ public struct Evidence: Equatable, Sendable {
         case leftSelection = "left-selection"
         case tooLong = "too-long"
         case offTarget = "off-target"
-        /// One Chromium paragraph can be several `AXValue` lines (a mention chip).
         case paragraphLines = "paragraph-lines"
-        /// `AXValue` can leave an empty paragraph out, so a key from one can seem to do nothing.
         case emptyParagraph = "empty-paragraph"
-        /// Raw reads in web content cannot tell a key that did nothing (LIN-1564).
         case webContent = "web-content"
         case plainIsTextContent = "plain=textContent"
         case plainIsValue = "plain=value"
