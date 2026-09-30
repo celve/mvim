@@ -33,7 +33,7 @@ public struct Sim {
     /// The same lie about `AXSelectedTextRange` — what a `writeSelection` demotion leaves.
     public var swallowsSelect = false
 
-    /// Settle and repair reads get no `AXSelectedTextRange`, one cause of the recorder's `answered=0`; the snapshot's still does.
+    /// Settle and repair reads get no `AXSelectedTextRange`; the snapshot's read still answers.
     public var unreadableSelection = false
 
     /// Makes the field a Chromium contenteditable: `AXSelectedTextRange` starts at `reads` of the selection's
@@ -46,7 +46,7 @@ public struct Sim {
     /// Off, discovery fails and the snapshot keeps `AXValue`'s lines.
     public var findsEmptyParagraphs = true
 
-    /// In a Chromium mode, the field ends in a text-less leaf, an inline icon only the marker text holds, as a U+FFFC.
+    /// In Chromium modes, the field ends in an inline icon: a U+FFFC only the marker text has.
     public var endsInTextlessLeaf = false
 
     public var readSelection: Range<Int> {
@@ -120,7 +120,7 @@ public struct Sim {
     /// The last snapshot's, to convert the drawn cursor at unbind.
     private var fieldBreaks: ParagraphBreaks?
 
-    /// The Controller's empty-paragraph memo, handed back to the next snapshot.
+    /// The last discovery, kept as the Controller keeps it.
     private var foundEmptyParagraphs: EmptyParagraphs.Memo?
 
     public init(
@@ -511,7 +511,7 @@ public extension Sim {
 }
 
 extension Sim {
-    /// The fake field's reads, which the learner observes before the snapshot is built from them.
+    /// The fake field's reads, which the learner observes here.
     mutating func read() -> (reads: FieldSnapshot.Reads, observed: Learning.Observation) {
         let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
             ?? (readModel, .start)
@@ -549,7 +549,7 @@ extension Sim {
         return (reads, observed)
     }
 
-    /// The fake field's answer to a read the snapshot asks for, as the runtime's is over AX.
+    /// Answers a step's read from the fake field, as `Snapshotter` does over AX.
     func take(_ need: FieldSnapshot.Need, into reads: inout FieldSnapshot.Reads, memo: inout EmptyParagraphs.Memo?) {
         switch need {
         case .side(let end):

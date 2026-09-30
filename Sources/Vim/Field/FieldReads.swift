@@ -58,13 +58,13 @@ public extension FieldReads {
 }
 
 public extension MarkerReads {
-    /// Whether aligning `value` takes the marker text, a read of its own: only a line in `value` gives it breaks.
+    /// Whether aligning needs the marker text, which only a line in `value` makes worth reading.
     static func takesText(_ value: String?) -> Bool {
         guard let value, !value.utf16.contains(0xFFFC) else { return false }
         return value.contains("\n")
     }
 
-    /// `text` is the raw marker text where `takesText` took it, handed back for putting empty paragraphs back.
+    /// `text` is the raw marker text where `takesText` read it, returned for the restore.
     static func aligning(
         value: String?, range: Range<Int>, text: String?, sides: [ParagraphBreaks.End: ParagraphBreaks.Side?]
     ) -> FieldSnapshot.Step<(reads: MarkerReads, text: String?)> {
