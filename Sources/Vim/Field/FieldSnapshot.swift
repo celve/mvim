@@ -83,7 +83,7 @@ public struct FieldSnapshot: Equatable, Sendable {
 
 public extension FieldSnapshot {
     /// One snapshot's reads, which the runtime takes over AX and the Sim from its fake field.
-    struct Reads {
+    struct Reads: Equatable, Sendable {
         /// As the learner observed them.
         public var field: FieldReads
         /// `AXNumberOfCharacters`.
@@ -91,37 +91,50 @@ public extension FieldSnapshot {
         public var webContent: Bool
         /// The child count, which the empty paragraphs found are kept against.
         public var blocks: Int?
-        public var marked: MarkerSelection?
+        /// The marker selection in plain marker offsets; nil unless the markers were read.
+        public var marked: Range<Int>?
+        /// The raw marker text `field.markers` aligned with; nil where `AXValue` breaks no line.
+        public var markerText: String?
+        /// Taken only when a step asks for it, as `sides` are, where a failed read is a nil side.
+        public var inEmptyParagraph: Bool?
+        public var sides: [ParagraphBreaks.End: ParagraphBreaks.Side?]
 
-        public init(field: FieldReads, length: Int?, webContent: Bool, blocks: Int?, marked: MarkerSelection?) {
+        public init(
+            field: FieldReads, length: Int? = nil, webContent: Bool = false, blocks: Int? = nil, marked: Range<Int>? = nil,
+            markerText: String? = nil, inEmptyParagraph: Bool? = nil, sides: [ParagraphBreaks.End: ParagraphBreaks.Side?] = [:]
+        ) {
             self.field = field
             self.length = length
             self.webContent = webContent
             self.blocks = blocks
             self.marked = marked
+            self.markerText = markerText
+            self.inEmptyParagraph = inEmptyParagraph
+            self.sides = sides
         }
     }
 
-    /// What putting empty paragraphs back needs of the marker selection, read only when the snapshot gets that far.
-    struct MarkerSelection {
-        /// In plain marker offsets.
-        public var range: Range<Int>
-        /// The raw marker text `field.markers` aligned with; nil where `AXValue` breaks no line.
-        public var text: String?
-        public var side: (ParagraphBreaks.End) -> ParagraphBreaks.Side?
-        public var inEmptyParagraph: () -> Bool
-        /// Discovery over the raw marker text: the plain offsets of the empty paragraphs' `<br>`s, nil if it failed.
-        public var emptyParagraphs: (String) -> [Int]?
+    /// A read with round trips of its own, which the caller takes only when a step asks for it.
+    enum Need: Equatable, Sendable {
+        case side(ParagraphBreaks.End)
+        case emptyParagraph
+        /// Discovery over the raw marker text, handed back as the memo for `value`.
+        case emptyParagraphs(value: String, markers: String)
+    }
 
-        public init(
-            range: Range<Int>, text: String?, side: @escaping (ParagraphBreaks.End) -> ParagraphBreaks.Side?,
-            inEmptyParagraph: @escaping () -> Bool, emptyParagraphs: @escaping (String) -> [Int]?
-        ) {
-            self.range = range
-            self.text = text
-            self.side = side
-            self.inEmptyParagraph = inEmptyParagraph
-            self.emptyParagraphs = emptyParagraphs
+    /// A step's result, or the read it needs first.
+    enum Step<Value> {
+        case done(Value)
+        case needs(Need)
+
+        /// Takes each read the step asks for until it is done.
+        public static func run(taking take: (Need) -> Void, _ step: () -> Step) -> Value {
+            while true {
+                switch step() {
+                case .done(let value): return value
+                case .needs(let need): take(need)
+                }
+            }
         }
     }
 
@@ -129,11 +142,12 @@ public extension FieldSnapshot {
     static func build(
         _ reads: Reads, capabilities: CapabilityProfile, answer: OffsetsAnswer, anchor: Int?, cursor: Range<Int>?,
         memo known: EmptyParagraphs.Memo?
-    ) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?) {
+    ) -> Step<(snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?)> {
         var field = reads.field
         // Only the snapshot reads the empty paragraph, which costs four more round trips.
-        if answer == .textContent, let marked = reads.marked, field.markers?.breaks != nil {
-            field.markers?.emptyParagraph = marked.inEmptyParagraph()
+        if answer == .textContent, reads.marked != nil, field.markers?.breaks != nil {
+            guard let inEmptyParagraph = reads.inEmptyParagraph else { return .needs(.emptyParagraph) }
+            field.markers?.emptyParagraph = inEmptyParagraph
         }
         var interpreted = field.interpreted(under: answer)
         if !capabilities.has(.readCaret) {
@@ -147,23 +161,31 @@ public extension FieldSnapshot {
         var holdsEmptyParagraphs = false
         var memo: EmptyParagraphs.Memo?
         // After the learner, which judges the reads as the field gave them.
-        if answer == .textContent, let value = text, let aligned = breaks, let marked = reads.marked, let raw = marked.text,
+        if answer == .textContent, let value = text, let aligned = breaks, let marked = reads.marked, let raw = reads.markerText,
            case let plainMarkers = FieldReads.withoutAttachments(raw), plainMarkers.utf16.contains(10) {
-            memo = known.flatMap { $0.holds(value: value, markers: raw, blocks: reads.blocks) ? $0 : nil }
-                ?? EmptyParagraphs.Memo(value: value, markers: raw, blocks: reads.blocks, found: marked.emptyParagraphs(raw))
-            if let found = memo?.found,
-               let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found),
-               let resolved = restored.breaks.valueRange(marked.range, side: marked.side),
-               resolved.upperBound <= restored.text.utf16.count {
-                text = restored.text
-                breaks = restored.breaks
-                selection = resolved
-                gap = restored.gap
-                holdsEmptyParagraphs = !found.isEmpty
-                let model = TextModel(restored.text)
-                // A caret on an empty line is in a paragraph the model already holds.
-                let onEmptyLine = resolved.isEmpty && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
-                emptyParagraph = emptyParagraph && !onEmptyLine
+            guard let known, known.holds(value: value, markers: raw, blocks: reads.blocks) else {
+                return .needs(.emptyParagraphs(value: value, markers: raw))
+            }
+            memo = known
+            if let found = known.found,
+               let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found) {
+                switch valueRange(marked, in: restored.breaks, sides: reads.sides) {
+                case .needs(let need):
+                    return .needs(need)
+                case .done(let resolved?) where resolved.upperBound <= restored.text.utf16.count:
+                    text = restored.text
+                    breaks = restored.breaks
+                    selection = resolved
+                    gap = restored.gap
+                    holdsEmptyParagraphs = !found.isEmpty
+                    let model = TextModel(restored.text)
+                    // A caret on an empty line is in a paragraph the model already holds.
+                    let onEmptyLine = resolved.isEmpty
+                        && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
+                    emptyParagraph = emptyParagraph && !onEmptyLine
+                case .done:
+                    break
+                }
             }
         }
         // The drawn cursor counts only while it still IS the selection; otherwise the selection is the user's.
@@ -182,6 +204,21 @@ public extension FieldSnapshot {
             valueGap: gap,
             holdsEmptyParagraphs: holdsEmptyParagraphs
         )
-        return (snapshot, memo)
+        return .done((snapshot, memo))
+    }
+
+    /// `breaks.valueRange` over the sides read so far, or the side it needs next.
+    static func valueRange(
+        _ field: Range<Int>, in breaks: ParagraphBreaks, sides: [ParagraphBreaks.End: ParagraphBreaks.Side?]
+    ) -> Step<Range<Int>?> {
+        var missing: ParagraphBreaks.End?
+        let range = breaks.valueRange(field) { end in
+            guard let side = sides[end] else {
+                missing = missing ?? end
+                return nil
+            }
+            return side
+        }
+        return missing.map { .needs(.side($0)) } ?? .done(range)
     }
 }

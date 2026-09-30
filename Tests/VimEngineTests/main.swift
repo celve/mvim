@@ -3688,22 +3688,35 @@ precondition(blankModel.breaks.valueRange(43..<43) { _ in .end } == 44..<44)
 precondition(blankModel.breaks.valueRange(44..<44) { _ in .start(skipping: 0) } == 46..<46)
 precondition(EmptyParagraphs.chromium(blankParagraphs) == (blankValue, blankMarkers, [43]))
 
-var discoveries = 0
-let blankReads = FieldSnapshot.Reads(
-    field: FieldReads(text: blankValue, plain: 43..<43, markers: MarkerReads(
-        breaks: blankAligned, value: blankAligned.valueRange(43..<43) { _ in .start(skipping: 0) }
-    )),
-    length: blankValue.utf16.count, webContent: true, blocks: blankParagraphs.count,
-    marked: FieldSnapshot.MarkerSelection(range: 43..<43, text: blankMarkers, side: { _ in .start(skipping: 0) },
-                                          inEmptyParagraph: { true }, emptyParagraphs: { _ in discoveries += 1; return [43] })
-)
-let blankBuilt = FieldSnapshot.build(blankReads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: nil)
+var blankNeeds: [FieldSnapshot.Need] = []
+func blankBuild(memo known: EmptyParagraphs.Memo?) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?) {
+    var reads = FieldSnapshot.Reads(
+        field: FieldReads(text: blankValue, plain: 43..<43, markers: MarkerReads(
+            breaks: blankAligned, value: blankAligned.valueRange(43..<43) { _ in .start(skipping: 0) }
+        )),
+        length: blankValue.utf16.count, webContent: true, blocks: blankParagraphs.count, marked: 43..<43, markerText: blankMarkers
+    )
+    var memo = known
+    return FieldSnapshot.Step.run(taking: { need in
+        blankNeeds.append(need)
+        switch need {
+        case .side(let end): reads.sides.updateValue(.start(skipping: 0), forKey: end)
+        case .emptyParagraph: reads.inEmptyParagraph = true
+        case .emptyParagraphs(let value, let markers):
+            memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: reads.blocks, found: [43])
+        }
+    }) {
+        FieldSnapshot.build(reads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo)
+    }
+}
+let blankBuilt = blankBuild(memo: nil)
+precondition(blankNeeds == [.emptyParagraph, .emptyParagraphs(value: blankValue, markers: blankMarkers), .side(.lower), .side(.upper)])
 precondition(blankBuilt.snapshot.text == blankModel.text && blankBuilt.snapshot.selection == 45..<45 && blankBuilt.snapshot.valueGap == 1)
 precondition(blankBuilt.snapshot.holdsEmptyParagraphs && !blankBuilt.snapshot.caretInEmptyParagraph, "its own line holds the caret")
-let blankRebuilt = FieldSnapshot.build(blankReads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil,
-                                       memo: blankBuilt.memo)
-precondition(blankRebuilt.snapshot == blankBuilt.snapshot && blankRebuilt.memo == blankBuilt.memo && discoveries == 1,
-             "a memo that holds spares discovery")
+blankNeeds = []
+let blankRebuilt = blankBuild(memo: blankBuilt.memo)
+precondition(blankRebuilt.snapshot == blankBuilt.snapshot && blankRebuilt.memo == blankBuilt.memo)
+precondition(blankNeeds == [.emptyParagraph, .side(.lower), .side(.upper)], "a memo that holds spares discovery")
 
 // Each placement Chrome 153 was measured in, round-tripped through every caret.
 for paragraphs in [["L", "", "N"], ["L", "", "", "N"], ["L", "", "", "", "N"], ["", "L"], ["", "", "L"], ["L", ""], ["L", "", ""],
@@ -3878,6 +3891,18 @@ precondition(scanned([FakeNode("AXList", "AXContentList", 0, 3, [item])], "\u{20
              "an empty list item's line is its marker's")
 precondition(scanned((0..<300).map { paragraph($0, $0 + 1) }, String(repeating: "x", count: 299) + "\n") == nil,
              "a field past the budget keeps AXValue's lines")
+
+for mode in chromiumModes where mode.name != "reads" {
+    for leaf in [false, true] {
+        var host = Sim(text: "ab\ncd\nef", caret: 3, profile: keyProfile)
+        mode.apply(&host)
+        host.readModel = .textContent
+        host.emulatesKeys = true
+        host.endsInTextlessLeaf = leaf
+        host.type("J")
+        precondition(host.text == (leaf ? "ab\ncd\nef" : "ab\ncd ef") && host.bells == (leaf ? 1 : 0), "\(mode.name) leaf=\(leaf)")
+    }
+}
 
 // A trailing blank line nets no gap, but emptying the line beside it still changes what AXValue shows.
 var trailingBlank = blankSim(["a", ""], caret: 0, profile: writeKeys)

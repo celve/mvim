@@ -58,24 +58,32 @@ public extension FieldReads {
 }
 
 public extension MarkerReads {
-    /// `text` reads the marker text, only where `value` breaks a line, and comes back raw for putting empty paragraphs back.
+    /// Whether aligning `value` takes the marker text, a read of its own: only a line in `value` gives it breaks.
+    static func takesText(_ value: String?) -> Bool {
+        guard let value, !value.utf16.contains(0xFFFC) else { return false }
+        return value.contains("\n")
+    }
+
+    /// `text` is the raw marker text where `takesText` took it, handed back for putting empty paragraphs back.
     static func aligning(
-        value: String?, range: Range<Int>, side: (ParagraphBreaks.End) -> ParagraphBreaks.Side?, text: () -> String?
-    ) -> (reads: MarkerReads, text: String?) {
+        value: String?, range: Range<Int>, text: String?, sides: [ParagraphBreaks.End: ParagraphBreaks.Side?]
+    ) -> FieldSnapshot.Step<(reads: MarkerReads, text: String?)> {
         // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
-        guard let value, !value.utf16.contains(0xFFFC) else { return (MarkerReads(breaks: nil, value: nil), nil) }
+        guard let value, !value.utf16.contains(0xFFFC) else { return .done((MarkerReads(breaks: nil, value: nil), nil)) }
         var breaks = ParagraphBreaks()
-        var textlessLeaves = false
         var raw: String?
-        if value.contains("\n") {
-            guard let markers = text(),
-                  let aligned = ParagraphBreaks(value: value, fieldText: FieldReads.withoutAttachments(markers)) else {
-                return (MarkerReads(breaks: nil, value: nil), nil)
+        if takesText(value) {
+            guard let text, let aligned = ParagraphBreaks(value: value, fieldText: FieldReads.withoutAttachments(text)) else {
+                return .done((MarkerReads(breaks: nil, value: nil), nil))
             }
             breaks = aligned
-            textlessLeaves = markers.utf16.contains(0xFFFC)
-            raw = markers
+            raw = text
         }
-        return (MarkerReads(breaks: breaks, value: breaks.valueRange(range, side: side), textlessLeaves: textlessLeaves), raw)
+        switch FieldSnapshot.valueRange(range, in: breaks, sides: sides) {
+        case .needs(let need):
+            return .needs(need)
+        case .done(let resolved):
+            return .done((MarkerReads(breaks: breaks, value: resolved, textlessLeaves: raw?.utf16.contains(0xFFFC) ?? false), raw))
+        }
     }
 }

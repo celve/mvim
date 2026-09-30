@@ -134,29 +134,39 @@ public enum Snapshotter {
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
         let marked = readsMarkers || sampled ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
-        let markers = marked.map { marked in
-            let side = sides(of: marked)
-            let aligned = MarkerReads.aligning(value: reads.string(0), range: marked.range, side: side) { AX.markerText(of: element) }
-            return (reads: aligned.reads, selection: FieldSnapshot.MarkerSelection(
-                range: marked.range, text: aligned.text, side: side, inEmptyParagraph: { marked.inEmptyParagraph },
-                emptyParagraphs: { EmptyParagraphDiscovery.found(in: element, markers: $0, budget: EmptyParagraphs.readBudget)?.found }
-            ))
+        let side = marked.map { sides(of: $0) }
+        var snapshotReads = FieldSnapshot.Reads(
+            field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
+            length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
+        )
+        var memo = known
+        func take(_ need: FieldSnapshot.Need) {
+            switch need {
+            case .side(let end):
+                snapshotReads.sides.updateValue(side?(end), forKey: end)
+            case .emptyParagraph:
+                snapshotReads.inEmptyParagraph = marked?.inEmptyParagraph ?? false
+            case .emptyParagraphs(let value, let markers):
+                let found = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)?.found
+                memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
+            }
         }
-        let fieldReads = FieldReads(
-            text: reads.string(0),
-            plain: plain,
-            selectedText: reads.string(4),
-            markers: markers?.reads
-        )
-        let observed = Learning.observe(fieldReads, before: current, source: source, newEngine: model.newEngine)
-        let built = FieldSnapshot.build(
-            FieldSnapshot.Reads(
-                field: fieldReads, length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: markers?.selection
-            ),
-            capabilities: capabilities, answer: observed.after, anchor: anchor, cursor: cursor, memo: known
-        )
+        if let marked {
+            let text = MarkerReads.takesText(reads.string(0)) ? AX.markerText(of: element) : nil
+            let aligned = FieldSnapshot.Step.run(taking: take) {
+                MarkerReads.aligning(value: reads.string(0), range: marked.range, text: text, sides: snapshotReads.sides)
+            }
+            snapshotReads.field.markers = aligned.reads
+            snapshotReads.markerText = aligned.text
+        }
+        let observed = Learning.observe(snapshotReads.field, before: current, source: source, newEngine: model.newEngine)
+        let built = FieldSnapshot.Step.run(taking: take) {
+            FieldSnapshot.build(
+                snapshotReads, capabilities: capabilities, answer: observed.after, anchor: anchor, cursor: cursor, memo: memo
+            )
+        }
         return Reading(
-            snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: fieldReads,
+            snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: snapshotReads.field,
             emptyParagraphs: built.memo
         )
     }
