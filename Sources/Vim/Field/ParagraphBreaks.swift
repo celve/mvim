@@ -15,6 +15,8 @@ public struct ParagraphBreaks: Equatable, Sendable {
         public enum Kind: Equatable, Sendable {
             /// A list marker or a text-less block, which the caret passes.
             case structure
+            /// Chromium's own list marker, which starts its item's line and reads as a boundary a side skips past.
+            case prefix
             /// The rest of an atom's text, such as a chip's label, whose first unit stands for it in the model.
             case atom
             /// A `<br>` ending a paragraph after a chip: a caret after the chip reads past it, a selection stops before it.
@@ -26,6 +28,11 @@ public struct ParagraphBreaks: Equatable, Sendable {
             self.text = text
             self.kind = kind
         }
+
+        /// A marker or a text-less block, which an edit moves with its line.
+        public var isStructure: Bool { kind == .structure || kind == .prefix }
+
+        public var isMarker: Bool { isStructure && !text.isEmpty }
     }
 
     public init(offsets: [Int] = [], hidden: [Hidden] = []) {
@@ -140,6 +147,10 @@ public extension ParagraphBreaks {
         guard self.fieldOffset(low) == fieldOffset else { return low...low }
         var upper = low
         while self.fieldOffset(upper + 1) == fieldOffset { upper += 1 }
+        if let run = hidden.first(where: { $0.at == upper + 1 && $0.kind == .prefix }),
+           self.fieldOffset(upper + 1) - run.text.utf16.count == fieldOffset {
+            upper += 1
+        }
         return low...upper
     }
 
@@ -150,7 +161,9 @@ public extension ParagraphBreaks {
             guard candidates.count > 1 || candidates.lowerBound == 0 else { return candidates.lowerBound }
             switch side(end) {
             case .end?: return candidates.lowerBound
-            case .start(let skipping)?: return candidates.upperBound + skipping
+            case .start(let skipping)?:
+                let folded = hidden.contains { $0.at == candidates.upperBound && $0.kind == .prefix }
+                return candidates.upperBound + (folded ? 0 : skipping)
             case nil: return nil
             }
         }
@@ -197,14 +210,14 @@ public extension ParagraphBreaks {
         let chips = Set(hidden.filter { $0.kind == .atom && covered($0, by: range) }.map(\.at))
         for run in hidden {
             if covered(run, by: range) || run.kind == .trailingBreak && chips.contains(run.at) {
-                if run.kind == .structure, !run.text.isEmpty { marker = run }
+                if run.isMarker { marker = run }
             } else if run.at < range.lowerBound || run.at == range.lowerBound && run.kind != .trailingBreak {
                 kept.append(run)
             } else {
                 moved.append(Hidden(at: run.at + delta, text: run.text, kind: run.kind))
             }
         }
-        if keepingCovered, let marker { kept.append(Hidden(at: range.lowerBound, text: marker.text)) }
+        if keepingCovered, let marker { kept.append(Hidden(at: range.lowerBound, text: marker.text, kind: marker.kind)) }
         return ParagraphBreaks(offsets: result, hidden: kept + moved)
     }
 

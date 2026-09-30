@@ -666,11 +666,14 @@ public extension Sim {
         public var leaves: Int
         /// The leaves are a to-do's checkbox, which a write at its line's start lands beside by where the caret was.
         public var checkbox: Bool
+        /// The marker starts its item's line, as Chromium draws its own lists' markers.
+        public var inline: Bool
 
-        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false) {
+        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false, inline: Bool = false) {
             self.marker = marker
             self.leaves = leaves
             self.checkbox = checkbox
+            self.inline = inline
         }
 
         /// `lines` once `range` of `text` is `replacement`: the first keeps its own, but a deleted plain line the next's.
@@ -756,10 +759,13 @@ struct ChromiumParagraphs {
         for (index, paragraph) in paragraphs.enumerated() {
             let line = lines.indices.contains(index) ? lines[index] : Sim.ListLine()
             let units = Array(paragraph.utf16)
+            let prefix = line.inline ? Array((line.marker ?? "").utf16) : []
             if let marker = line.marker {
                 markers.append(plain)
-                block(Array(marker.utf16))
-                raw += marker
+                if !line.inline {
+                    block(Array(marker.utf16))
+                    raw += marker
+                }
                 plain += marker.utf16.count
             }
             for _ in 0..<line.leaves {
@@ -767,7 +773,9 @@ struct ChromiumParagraphs {
                 raw += "\u{FFFC}"
             }
             guard !units.isEmpty else {
-                found.append(plain)
+                // Chromium keeps the line of its own list's empty item, which holds the marker.
+                if prefix.isEmpty { found.append(plain) } else { block(prefix) }
+                raw += String(decoding: prefix, as: UTF16.self)
                 block([10], br: true)
                 raw += "\n"
                 plain += 1
@@ -813,7 +821,8 @@ struct ChromiumParagraphs {
                 }
             }
             flush()
-            block(parts[0])
+            block(prefix + parts[0])
+            raw += String(decoding: prefix, as: UTF16.self)
             for part in parts.dropFirst() { value += "\n" + String(decoding: part, as: UTF16.self) }
             raw += String(decoding: partsRaw, as: UTF16.self)
             if units.last == Self.chip {
@@ -873,9 +882,11 @@ struct ChromiumParagraphs {
         if last > 0, units[last - 1] == 10, caret > last, prefix(last).checkbox, field(last - 1) == field(last) {
             return last - 1
         }
-        guard last < units.count, units[last] == 10, caret <= last else { return last }
-        let marker = prefix(last + 1).marker?.utf16.count ?? 0
-        return marker > 0 && offset >= field(last + 1) - marker ? last + 1 : last
+        guard last < units.count, units[last] == 10 else { return last }
+        let next = prefix(last + 1)
+        let marker = next.marker?.utf16.count ?? 0
+        // Chromium's own list lands a write in its marker after it, whichever way the caret came.
+        return marker > 0 && offset >= field(last + 1) - marker && (caret <= last || next.inline) ? last + 1 : last
     }
 
     /// Offsets of the chips, which keys cross in one step.

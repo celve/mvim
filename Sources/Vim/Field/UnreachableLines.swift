@@ -80,13 +80,17 @@ public enum UnreachableLines {
     /// The most AX reads one discovery may spend; a larger field keeps its markers and chips as lines.
     public static let readBudget = 1024
 
-    /// Lines shaped like a list marker, and lines that start as Linear's mention chips do.
+    /// Lines shaped like a list marker or starting with one and a space, and lines that start as Linear's mention chips do.
     public static func candidates(text: String, breaks: ParagraphBreaks) -> Candidates {
         var markers: [Range<Int>] = []
         var chips: [Range<Int>] = []
         for line in lines(of: text) {
             let start = breaks.fieldOffset(line.start)
-            if isMarkerShaped(line.units) { markers.append(start..<(start + line.units.count)) }
+            if isMarkerShaped(line.units) {
+                markers.append(start..<(start + line.units.count))
+            } else if let count = prefixLength(line.units) {
+                markers.append(start..<(start + count))
+            }
             if line.units.starts(with: [0x2060, 0x00A0]) { chips.append(start..<(start + line.units.count)) }
         }
         return Candidates(markers: markers, chips: chips)
@@ -136,6 +140,15 @@ public enum UnreachableLines {
                 dropped.formUnion(line.start..<(terminated ? end + 1 : end))
                 runs.append((terminated ? end + 1 : end, String(decoding: line.units, as: UTF16.self), .structure))
                 keepsTerminator = !terminated
+            } else if markers.contains(start), let count = prefixLength(line.units) {
+                dropped.formUnion(line.start..<(line.start + count))
+                runs.append((line.start + count, String(decoding: line.units[..<count], as: UTF16.self), .prefix))
+                textSinceBreak = count < line.units.count
+                // The `<br>` of an empty item ending the field leaves an empty last line no caret reaches.
+                if count == line.units.count, end + 1 == units.count, breaks.fieldOffset(end) + 1 == plain {
+                    dropped.insert(end)
+                    keepsTerminator = false
+                }
             } else if let chip = chips[start], chip.range.count <= line.units.count, chip.range.count > 1 {
                 let labelEnd = line.start + chip.range.count
                 dropped.formUnion((line.start + 1)..<labelEnd)
@@ -188,6 +201,11 @@ public enum UnreachableLines {
         if units.count == 1 { return "•◦▪▫‣⁃■□●○–-*".utf16.contains(units[0]) }
         guard (2...5).contains(units.count), let last = units.last, last == 0x2E || last == 0x29 else { return false }
         return String(decoding: units.dropLast(), as: UTF16.self).allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
+
+    /// The length of a marker and the space after it that start a line, as Chromium draws its own list's markers.
+    static func prefixLength(_ units: [UInt16]) -> Int? {
+        (2...6).first { $0 <= units.count && units[$0 - 1] == 0x20 && isMarkerShaped(Array(units[..<($0 - 1)])) }
     }
 
     private static func lines(of text: String) -> [(start: Int, units: [UInt16])] {

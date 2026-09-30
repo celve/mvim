@@ -3690,7 +3690,7 @@ precondition(EmptyParagraphs.chromium(blankParagraphs) == (blankValue, blankMark
 
 var blankNeeds: [FieldSnapshot.Need] = []
 func blankBuild(
-    memo known: EmptyParagraphs.Memo?
+    memo known: EmptyParagraphs.Memo?, unreachable knownUnreachable: UnreachableLines.Memo? = nil
 ) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?) {
     var reads = FieldSnapshot.Reads(
         field: FieldReads(text: blankValue, plain: 43..<43, markers: MarkerReads(
@@ -3699,6 +3699,7 @@ func blankBuild(
         length: blankValue.utf16.count, webContent: true, blocks: blankParagraphs.count, marked: 43..<43, markerText: blankMarkers
     )
     var memo = known
+    var unreachable = knownUnreachable
     return FieldSnapshot.Step.run(taking: { need in
         blankNeeds.append(need)
         switch need {
@@ -3706,18 +3707,24 @@ func blankBuild(
         case .emptyParagraph: reads.inEmptyParagraph = true
         case .emptyParagraphs(let value, let markers):
             memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: reads.blocks, found: [43])
-        case .unreachable: preconditionFailure("no line is shaped like a marker or a chip")
+        case .unreachable(let value, let markers, _):
+            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: reads.blocks, found: nil)
         }
     }) {
-        FieldSnapshot.build(reads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo)
+        FieldSnapshot.build(reads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
+                            unreachable: unreachable)
     }
 }
 let blankBuilt = blankBuild(memo: nil)
-precondition(blankNeeds == [.emptyParagraph, .emptyParagraphs(value: blankValue, markers: blankMarkers), .side(.lower), .side(.upper)])
+precondition(blankNeeds == [
+    .emptyParagraph, .emptyParagraphs(value: blankValue, markers: blankMarkers), .side(.lower), .side(.upper),
+    .unreachable(value: blankValue, markers: blankMarkers,
+                 candidates: UnreachableLines.candidates(text: blankModel.text, breaks: blankModel.breaks)),
+])
 precondition(blankBuilt.snapshot.text == blankModel.text && blankBuilt.snapshot.selection == 45..<45 && blankBuilt.snapshot.valueGap == 1)
 precondition(blankBuilt.snapshot.holdsEmptyParagraphs && !blankBuilt.snapshot.caretInEmptyParagraph, "its own line holds the caret")
 blankNeeds = []
-let blankRebuilt = blankBuild(memo: blankBuilt.memo)
+let blankRebuilt = blankBuild(memo: blankBuilt.memo, unreachable: blankBuilt.unreachable)
 precondition(blankRebuilt.snapshot == blankBuilt.snapshot && blankRebuilt.memo == blankBuilt.memo)
 precondition(blankNeeds == [.emptyParagraph, .side(.lower), .side(.upper)], "a memo that holds spares discovery")
 
@@ -3944,7 +3951,7 @@ func fakeTree(_ spec: String) -> [FakeNode] {
     let roles: [Character: (String, String?)] = [
         "L": ("AXList", "AXContentList"), "G": ("AXGroup", nil), "T": ("AXStaticText", nil), "H": ("AXHeading", nil),
         "E": ("AXGroup", "AXEmptyGroup"), "A": ("AXGroup", "AXApplicationGroup"), "K": ("AXLink", nil),
-        "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil),
+        "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil), "M": ("AXListMarker", nil),
     ]
     var nodes: [[Int]: (role: (String, String?), start: Int, end: Int)] = [:]
     for token in spec.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
@@ -4186,6 +4193,50 @@ precondition(dia7Model.breaks.fieldText(dia7Model.text, at: 0..<dia7Model.text.u
 precondition(roundTrips(dia7Model))
 precondition(dia7Model.breaks.atoms == [41, 43, 66, 68, 70, 72])
 
+// Chromium's own lists start each item's line with its marker.
+let dia8Value = [
+    "Native list probe opening paragraph.", "\u{2022} First bullet item", "\u{2022} Second bullet item",
+    "\u{25E6} Nested circle item", "\u{2022} ", "\u{2022} After empty", "Middle paragraph between the lists.",
+    "9. Nine", "10. Ten is longer", "i. Roman one", "ii. Roman two", "Closing paragraph.",
+].joined(separator: "\n")
+let dia8Raw = "Native list probe opening paragraph.\u{2022} First bullet item\u{2022} Second bullet item"
+    + "\u{25E6} Nested circle item\u{2022} \n\u{2022} After emptyMiddle paragraph between the lists.9. "
+    + "Nine10. Ten is longeri. Roman oneii. Roman twoClosing paragraph."
+let dia8Tree = fakeTree("""
+0/G/0/36 0.0/T/0/36 1/L/36/111 1.0/G/36/55 1.0.0/M/36/38 1.0.1/T/38/55 1.1/G/55/95 1.1.0/M/55/57 1.1.1/T/57/75
+1.1.2/L/75/95 1.1.2.0/G/75/95 1.1.2.0.0/M/75/77 1.1.2.0.1/T/77/95 1.2/G/95/98 1.2.0/M/95/97 1.3/G/98/111
+1.3.0/M/98/100 1.3.1/T/100/111 2/G/111/146 2.0/T/111/146 3/L/146/170 3.0/G/146/153 3.0.0/M/146/149
+3.0.1/T/149/153 3.1/G/153/170 3.1.0/M/153/157 3.1.1/T/157/170 4/L/170/195 4.0/G/170/182 4.0.0/M/170/173
+4.0.1/T/173/182 4.1/G/182/195 4.1.0/M/182/186 4.1.1/T/186/195 5/G/195/213 5.0/T/195/213
+""")
+let dia8Plain = MarkerText.plain(dia8Raw)
+let dia8Candidates = UnreachableLines.candidates(text: dia8Value, breaks: ParagraphBreaks(value: dia8Value, fieldText: dia8Plain)!)
+precondition(dia8Candidates.markers == [36..<38, 55..<57, 75..<77, 95..<97, 98..<100, 146..<149, 153..<157, 170..<173, 182..<186])
+precondition(unreachableScanned(dia8Tree, dia8Candidates)?.markers == dia8Candidates.markers.map(\.lowerBound))
+let dia8Model = folded(dia8Value, dia8Raw, dia8Tree)
+precondition(dia8Model.text == [
+    "Native list probe opening paragraph.", "First bullet item", "Second bullet item", "Nested circle item", "",
+    "After empty", "Middle paragraph between the lists.", "Nine", "Ten is longer", "Roman one", "Roman two",
+    "Closing paragraph.",
+].joined(separator: "\n"))
+precondition(dia8Model.breaks.fieldText(dia8Model.text, at: 0..<dia8Model.text.utf16.count) == dia8Plain)
+precondition(roundTrips(dia8Model))
+precondition([(36, 2, 37), (55, 2, 55), (95, 2, 93), (98, 2, 94), (146, 3, 142), (153, 4, 147)].allSatisfy { field, skip, model in
+    dia8Model.breaks.valueRange(field..<field) { _ in .start(skipping: skip) } == model..<model
+}, "a caret read at a marker's start and past it is at its item's start")
+precondition(dia8Model.breaks.valueRange(36..<36) { _ in .end } == 36..<36 && dia8Model.breaks.valueRange(95..<95) { _ in .end } == 92..<92)
+let dia9Value = "Third list probe top paragraph.\n\u{2022} One\n\u{2022} \nBetween.\n1. Only\n2. \n3. \n"
+let dia9Raw = "Third list probe top paragraph.\u{2022} One\u{2022} \nBetween.1. Only2. \n3. \n"
+let dia9Tree = fakeTree("""
+0/G/0/31 0.0/T/0/31 1/L/31/39 1.0/G/31/36 1.0.0/M/31/33 1.0.1/T/33/36 1.1/G/36/39 1.1.0/M/36/38 2/G/39/47 2.0/T/39/47
+3/L/47/62 3.0/G/47/54 3.0.0/M/47/50 3.0.1/T/50/54 3.1/G/54/58 3.1.0/M/54/57 3.2/G/58/62 3.2.0/M/58/61
+""")
+let dia9Model = folded(dia9Value, dia9Raw, dia9Tree)
+precondition(dia9Model.text == "Third list probe top paragraph.\nOne\n\nBetween.\nOnly\n\n", "an empty last item's <br> is no line")
+precondition(dia9Model.breaks.fieldOffset(dia9Model.text.utf16.count) == 61 && roundTrips(dia9Model))
+precondition(unreachableScanned([FakeNode("AXList", "AXContentList", 0, 7, [paragraph(0, 7)])],
+                                UnreachableLines.Candidates(markers: [0..<2], chips: []))?.markers == [])
+
 let noUnreachable = UnreachableLines.Found(markers: [], chips: [])
 let dia1Unfound = UnreachableLines.fold(text: dia1Value, breaks: dia1Aligned, raw: dia1Raw, found: noUnreachable)
 precondition(dia1Unfound.text.contains("\n1.\nNumbered one") && !dia1Unfound.text.contains("To-do open\n\n"),
@@ -4345,6 +4396,32 @@ let firstChip = chipStart.chromium.chips[0].range.lowerBound
 chipStart.perform([.setSelection(firstChip..<firstChip), .press(.right, count: 1)])
 precondition(chipStart.readSelection == firstChip..<firstChip, "the Sim's caret written at a chip's start stops the next arrow")
 
+let nativeDoc: [(String, String?)] = [
+    ("Top paragraph", nil), ("First bullet", "\u{2022} "), ("Second bullet", "\u{2022} "), ("Nested one", "\u{25E6} "),
+    ("", "\u{2022} "), ("After empty", "\u{2022} "), ("Middle paragraph", nil), ("Nine", "9. "), ("Ten longer", "10. "),
+    ("Last paragraph.", nil),
+]
+for profile in [keyProfile, writeKeys] {
+    let down = String(repeating: "j", count: nativeDoc.count)
+    for keys in [down + String(repeating: "k", count: nativeDoc.count), "3j2k4j3j3k", "5ljjjjjjjjkkkk", "$jjjjjjjjkkkkk",
+                 "G" + String(repeating: "k", count: nativeDoc.count - 1), "jjjjjjj0jj^k0", "jwwwwwwwwwbbbbbbb", "jjjdd", "jjjjdd",
+                 "jjjjjdd", "jjjjjjjdd", "jlx"] {
+        var native = Sim(text: nativeDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
+        native.emptyParagraphs = true
+        native.listLines = nativeDoc.map { Sim.ListLine(marker: $0.1, inline: true) }
+        native.emulatesKeys = true
+        native.readModel = .textContent
+        var plain = Sim(text: native.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            native.type(String(key))
+            plain.type(String(key))
+            precondition(native.caret == plain.caret && native.text == plain.text, "\(keys) at \(key)")
+        }
+        precondition(native.settleFailures == 0 && native.bells == 0, keys)
+    }
+}
+
 var linearLogged = linearSim(keyProfile, findsUnreachable: false)
 linearLogged.type("j")
 precondition(linearLogged.settleFailures == 1 && linearLogged.caret == 14, "without discovery, LIN-1645's j into an item")
@@ -4365,5 +4442,9 @@ for paragraphs in [["L", "", "N"], ["", "L"], ["L", ""], [""], ["a", "", "bc", "
 }
 precondition(ChromiumParagraphs(text: "a\nb", lines: [Sim.ListLine(), Sim.ListLine(marker: "1.", leaves: 1)]).shown
              == ("a\n1.\n\nb", "a1.\u{FFFC}b", []))
+let bullet = Sim.ListLine(marker: "\u{2022} ", inline: true)
+precondition(ChromiumParagraphs(text: "a\nb\n\nc", lines: [Sim.ListLine(), bullet, bullet, bullet]).shown
+             == ("a\n\u{2022} b\n\u{2022} \n\u{2022} c", "a\u{2022} b\u{2022} \n\u{2022} c", []),
+             "Chromium's own list keeps each marker on its item's line")
 
 print("Vim engine tests passed")

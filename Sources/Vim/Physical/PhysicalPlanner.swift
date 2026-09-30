@@ -304,12 +304,10 @@ private extension PhysicalPlanner {
             }
             if let current = breaks {
                 // Deleting a plain line into a list item leaves the item; otherwise the first line keeps its own.
-                let ownRuns = current.hidden.filter { $0.at == range.lowerBound && $0.kind == .structure }
+                let ownRuns = current.hidden.filter { $0.at == range.lowerBound && $0.isStructure }
                 let plainLine = replacement.isEmpty && ownRuns.isEmpty && before?.lineStart(of: range.lowerBound) == range.lowerBound
                 let ownMarker = ownRuns.contains { !$0.text.isEmpty }
-                let coversMarker = current.hidden.contains {
-                    range.lowerBound < $0.at && $0.at <= range.upperBound && $0.kind == .structure && !$0.text.isEmpty
-                }
+                let coversMarker = current.hidden.contains { range.lowerBound < $0.at && $0.at <= range.upperBound && $0.isMarker }
                 breaks = current.replacing(range, with: replacement, keepingCovered: plainLine)
                 // A typed `\n` may have made a paragraph or a line break.
                 if replacement.contains("\n") { unknown.formUnion([.selection, .edge]) }

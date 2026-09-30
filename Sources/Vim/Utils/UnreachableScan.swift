@@ -72,9 +72,17 @@ public struct UnreachableScan<Node> {
                 guard chipEnd > candidate.lowerBound + 1, chipEnd <= candidate.upperBound else { return .neither }
                 return .chip(hit.start..<chipEnd, paragraph: parent.start..<paragraphEnd)
             }
-            if inList, hit.start == candidate.lowerBound, read.children.count > 1 {
-                guard let end = end(of: read.children[0], at: here + [0]) else { return nil }
-                if end == candidate.upperBound { return .marker }
+            if inList, hit.start == candidate.lowerBound, let first = read.children.first {
+                var marked = read.children.count > 1
+                // An empty item of Chromium's own list holds its marker alone.
+                if !marked {
+                    guard let child = self.read(first, at: here + [0]) else { return nil }
+                    marked = child.role == "AXListMarker"
+                }
+                if marked {
+                    guard let end = end(of: first, at: here + [0]) else { return nil }
+                    if end == candidate.upperBound { return .marker }
+                }
             }
             if read.role == "AXStaticText" || read.children.isEmpty { return .neither }
             inList = read.role == "AXList"
