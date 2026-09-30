@@ -136,7 +136,7 @@ public enum Snapshotter {
         let reads = AX.attributes(names, of: element)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
-        let marked = readsMarkers || sampled ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        let marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
         let side = marked.map { sides(of: $0) }
         var snapshotReads = FieldSnapshot.Reads(
             field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
@@ -179,6 +179,27 @@ public enum Snapshotter {
             snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: snapshotReads.field,
             emptyParagraphs: built.memo, unreachable: built.unreachable
         )
+    }
+
+    /// The marker selection, with a caret Chromium reads at a paragraph's end moved to the caret Linear draws there.
+    static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> AX.MarkedSelection? {
+        guard let marked = AX.markedSelection(of: element, selected: selected) else { return nil }
+        return drawnCaret(misreadAs: marked, in: element) ?? marked
+    }
+
+    /// Keys leave the caret outside a code span's start with its marker on the paragraph at its length (LIN-1683).
+    private static func drawnCaret(misreadAs marked: AX.MarkedSelection, in element: AXUIElement) -> AX.MarkedSelection? {
+        guard marked.isCollapsed, let paragraph = marked.node(upper: false), let count = AX.childCount(of: paragraph),
+              (2...256).contains(count), AX.role(of: paragraph) == kAXGroupRole, marked.side(upper: false) == .end,
+              let children = AX.children(of: paragraph) else { return nil }
+        let reads = children.map { AX.attributes([kAXSubroleAttribute, kAXChildrenAttribute], of: $0) }
+        let subroles = reads.map { $0.string(0) }
+        let caret = children.indices.first { index in
+            DrawnCaret.isEmptyGroup(subrole: subroles[index], children: reads[index].elements(1)?.count ?? 0)
+                && DrawnCaret.isCaret(parent: nil, previous: index > 0 ? subroles[index - 1] : nil,
+                                      next: index + 1 < children.count ? subroles[index + 1] : nil)
+        }
+        return caret.flatMap { AX.markedSelection(at: children[$0], in: element) }
     }
 
     /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.

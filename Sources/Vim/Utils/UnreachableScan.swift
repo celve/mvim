@@ -24,6 +24,7 @@ public struct UnreachableScan<Node> {
     public mutating func run(blocks roots: [Node], candidates: UnreachableLines.Candidates) -> UnreachableLines.Found? {
         var markers: [Int] = []
         var chips: [UnreachableLines.Chip] = []
+        var carets: [UnreachableLines.Caret] = []
         for candidate in candidates.markers {
             guard let hit = descend(to: candidate, in: roots) else { return nil }
             if case .marker = hit { markers.append(candidate.lowerBound) }
@@ -32,7 +33,11 @@ public struct UnreachableScan<Node> {
             guard let hit = descend(to: candidate, in: roots) else { return nil }
             if case .chip(let range, let paragraph) = hit { chips.append(UnreachableLines.Chip(range: range, paragraph: paragraph)) }
         }
-        return UnreachableLines.Found(markers: markers, chips: chips)
+        for candidate in candidates.carets {
+            guard let hit = caret(at: candidate, in: roots, path: [], ancestors: []) else { return nil }
+            if let found = hit { carets.append(found) }
+        }
+        return UnreachableLines.Found(markers: markers, chips: chips, carets: carets)
     }
 
     private enum Hit {
@@ -91,6 +96,66 @@ public struct UnreachableScan<Node> {
             path = here
         }
         return nil
+    }
+
+    /// An ancestor of a drawn caret: where it starts, and its subrole, nearest last.
+    private struct Ancestor {
+        let start: Int
+        let subrole: String?
+        let inline: Bool
+    }
+
+    /// The drawn caret among the nodes holding `p` at either end; `.some(nil)` where there is none, nil on a failed read.
+    private mutating func caret(
+        at p: Int, in siblings: [Node], path: [Int], ancestors: [Ancestor]
+    ) -> UnreachableLines.Caret?? {
+        guard ancestors.count < 16 else { return nil }
+        var low = 0
+        var high = siblings.count - 1
+        var last: Int?
+        while low <= high {
+            let middle = (low + high) / 2
+            guard let start = start(of: siblings[middle], at: path + [middle]) else { return nil }
+            if start <= p {
+                last = middle
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        guard let last else { return .some(nil) }
+        // Siblings are in text order, so those ending at or after `p` run back from the last starting at or before it.
+        var first = last
+        while first > 0 {
+            guard let end = end(of: siblings[first - 1], at: path + [first - 1]) else { return nil }
+            guard end >= p else { break }
+            first -= 1
+        }
+        for index in first...last {
+            let here = path + [index]
+            guard let read = read(siblings[index], at: here) else { return nil }
+            if DrawnCaret.isEmptyGroup(subrole: read.subrole, children: read.children.count) {
+                guard let start = start(of: siblings[index], at: here) else { return nil }
+                guard start == p else { continue }
+                var neighbours: [String?] = [nil, nil]
+                for (slot, neighbour) in [index - 1, index + 1].enumerated() where siblings.indices.contains(neighbour) {
+                    guard let beside = self.read(siblings[neighbour], at: path + [neighbour]) else { return nil }
+                    neighbours[slot] = beside.subrole
+                }
+                guard DrawnCaret.isCaret(parent: ancestors.last?.subrole, previous: neighbours[0], next: neighbours[1]) else {
+                    continue
+                }
+                let paragraph = ancestors.last { !$0.inline }
+                return .some(UnreachableLines.Caret(offset: p, startsParagraph: paragraph?.start == p))
+            }
+            guard read.role != "AXStaticText", !read.children.isEmpty else { continue }
+            guard let start = start(of: siblings[index], at: here) else { return nil }
+            let ancestor = Ancestor(start: start, subrole: read.subrole,
+                                    inline: DrawnCaret.isInline(role: read.role, subrole: read.subrole))
+            guard let found = caret(at: p, in: read.children, path: here, ancestors: ancestors + [ancestor]) else { return nil }
+            if found != nil { return found }
+        }
+        return .some(nil)
     }
 
     private mutating func start(of node: Node, at path: [Int]) -> Int? {

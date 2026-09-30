@@ -6,6 +6,8 @@ public enum UnreachableLines {
         public let breaks: ParagraphBreaks
         /// How many `AXValue` units the fold took out, which settles still count.
         public let folded: Int
+        /// The plain offset of the `<br>` after a caret drawn at a paragraph's end, which `breaks` count as gone.
+        public var drawnBreak: Int?
     }
 
     /// An inline atom, such as a mention chip, in plain offsets: a caret crosses it in one step.
@@ -37,23 +39,40 @@ public enum UnreachableLines {
     public struct Candidates: Equatable, Sendable {
         public let markers: [Range<Int>]
         public let chips: [Range<Int>]
+        /// Plain offsets of empty lines after a generated break that hold one text-less leaf, as a drawn caret does.
+        public let carets: [Int]
 
-        public init(markers: [Range<Int>], chips: [Range<Int>]) {
+        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = []) {
             self.markers = markers
             self.chips = chips
+            self.carets = carets
         }
 
-        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty }
+        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty }
     }
 
-    /// What discovery confirmed: the plain starts of list markers, and the chips.
+    /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
+    public struct Caret: Equatable, Sendable {
+        public let offset: Int
+        /// The break before its line is then its paragraph's own.
+        public let startsParagraph: Bool
+
+        public init(offset: Int, startsParagraph: Bool) {
+            self.offset = offset
+            self.startsParagraph = startsParagraph
+        }
+    }
+
+    /// What discovery confirmed: the plain starts of list markers, the chips, and a drawn caret.
     public struct Found: Equatable, Sendable {
         public let markers: [Int]
         public let chips: [Chip]
+        public let carets: [Caret]
 
-        public init(markers: [Int], chips: [Chip]) {
+        public init(markers: [Int], chips: [Chip], carets: [Caret] = []) {
             self.markers = markers
             self.chips = chips
+            self.carets = carets
         }
     }
 
@@ -80,10 +99,14 @@ public enum UnreachableLines {
     /// The most AX reads one discovery may spend; a larger field keeps its markers and chips as lines.
     public static let readBudget = 1024
 
-    /// Lines shaped like a list marker or starting with one and a space, and lines that start as Linear's mention chips do.
-    public static func candidates(text: String, breaks: ParagraphBreaks) -> Candidates {
+    /// Lines shaped like a marker or starting with one and a space, lines starting as Linear's chips do, and drawn carets'.
+    public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil) -> Candidates {
+        let leaves = raw.map(leafCounts) ?? [:]
+        let generated = Set(breaks.offsets)
+        let length = text.utf16.count
         var markers: [Range<Int>] = []
         var chips: [Range<Int>] = []
+        var carets: [Int] = []
         for line in lines(of: text) {
             let start = breaks.fieldOffset(line.start)
             if isMarkerShaped(line.units) {
@@ -92,24 +115,36 @@ public enum UnreachableLines {
                 markers.append(start..<(start + count))
             }
             if line.units.starts(with: [0x2060, 0x00A0]) { chips.append(start..<(start + line.units.count)) }
+            if line.units.isEmpty, line.start > 0, generated.contains(line.start - 1), line.start < length, leaves[start] == 1 {
+                carets.append(start)
+            }
         }
-        return Candidates(markers: markers, chips: chips)
+        return Candidates(markers: markers, chips: chips, carets: carets)
     }
 
-    /// `raw` is the marker text, whose U+FFFCs place the leaves.
-    public static func fold(text: String, breaks: ParagraphBreaks, raw: String, found: Found) -> Model {
-        let generated = Set(breaks.offsets)
+    /// How many U+FFFCs the marker text has at each plain offset: one per text-less leaf.
+    static func leafCounts(_ raw: String) -> [Int: Int] {
         var leaves: [Int: Int] = [:]
         var plain = 0
         for unit in raw.utf16 {
             if unit == 0xFFFC { leaves[plain, default: 0] += 1 } else { plain += 1 }
         }
+        return leaves
+    }
+
+    /// `raw` is the marker text, whose U+FFFCs place the leaves.
+    public static func fold(text: String, breaks: ParagraphBreaks, raw: String, found: Found) -> Model {
+        let generated = Set(breaks.offsets)
+        var leaves = leafCounts(raw)
+        let plain = raw.utf16.count - leaves.values.reduce(0, +)
         let markers = Set(found.markers)
+        let carets = Dictionary(found.carets.map { ($0.offset, $0) }) { first, _ in first }
         let chips = Dictionary(found.chips.map { ($0.range.lowerBound, $0) }) { first, _ in first }
         let plainUnits = Array(FieldReads.withoutAttachments(raw).utf16)
         let endings = Set(found.chips.filter { $0.endsParagraph(in: plainUnits) }.map(\.range.upperBound))
         var dropped = Set<Int>()
         var converted = Set<Int>()
+        var drawnBreak: Int?
         var runs: [(before: Int, text: String, kind: ParagraphBreaks.Hidden.Kind)] = []
         let units = Array(text.utf16)
         // The last break the model keeps, and whether text it keeps came after it.
@@ -122,7 +157,19 @@ public enum UnreachableLines {
             var keepsTerminator = end < units.count
             // The `<br>` after a chip that ends its paragraph stays the line's end, which a caret reads past.
             let trailing = end < units.count && !generated.contains(end) && endings.contains(breaks.fieldOffset(end))
-            if line.units.isEmpty, endings.contains(start), end < units.count, !generated.contains(end),
+            if line.units.isEmpty, let caret = carets[start], line.start > 0, generated.contains(line.start - 1),
+               end < units.count, let count = leaves[start], count > 0 {
+                // A drawn caret's breaks go, and the `<br>` after one ending its paragraph goes with the caret.
+                leaves[start] = count - 1
+                if !terminated || !caret.startsParagraph { dropped.insert(line.start - 1) }
+                if terminated {
+                    dropped.insert(end)
+                    keepsTerminator = false
+                } else {
+                    converted.insert(end)
+                    drawnBreak = start
+                }
+            } else if line.units.isEmpty, endings.contains(start), end < units.count, !generated.contains(end),
                let count = leaves[start], count > 0, let previous = lastBreak, previous == line.start - 1,
                generated.contains(previous) {
                 // The image Linear adds while the caret is after the chip joins the chip's line.
@@ -192,7 +239,7 @@ public enum UnreachableLines {
         let offsets = (breaks.offsets + converted).sorted().filter { !dropped.contains($0) }.map { $0 - shift[$0] }
         return Model(
             text: String(decoding: kept, as: UTF16.self), breaks: ParagraphBreaks(offsets: offsets, hidden: hidden),
-            folded: dropped.count
+            folded: dropped.count, drawnBreak: drawnBreak
         )
     }
 

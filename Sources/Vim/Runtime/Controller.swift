@@ -506,7 +506,7 @@ public final class Controller {
     /// In field offsets, through the markers for a text-content field, where a selection of one paragraph break is
     /// empty in offsets but no caret.
     private func selection(of element: AXUIElement, paragraphs: Bool) -> (range: Range<Int>, caret: Bool)? {
-        if paragraphs, let marked = AX.markedSelection(of: element) { return (marked.range, marked.isCollapsed) }
+        if paragraphs, let marked = Snapshotter.markedSelection(of: element) { return (marked.range, marked.isCollapsed) }
         return AX.selectedRange(of: element).map { ($0.location..<($0.location + $0.length), $0.length == 0) }
     }
 

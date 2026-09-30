@@ -301,6 +301,11 @@ public enum AX {
             case between
         }
 
+        /// The node an end's marker sits on; nil when the read fails.
+        public func node(upper isUpper: Bool) -> AXUIElement? {
+            AX.node(at: isUpper ? upper : lower, in: element)
+        }
+
         /// Where an end sits in its marker's node; nil when a read fails.
         public func side(upper isUpper: Bool) -> NodeSide? {
             let marker = isUpper ? upper : lower
@@ -349,6 +354,13 @@ public enum AX {
             lower: forward ? first : second,
             upper: forward ? second : first
         )
+    }
+
+    /// A caret at `node`'s start, in the field's text-content offsets.
+    public static func markedSelection(at node: AXUIElement, in element: AXUIElement) -> MarkedSelection? {
+        guard let marker = textStart(of: node, in: element), let field = fieldMarkers(of: element),
+              let offset = offset(of: marker, from: field.start, in: element) else { return nil }
+        return MarkedSelection(range: offset..<offset, element: element, lower: marker, upper: marker)
     }
 
     /// The field's start marker, from which `markerLength(from:to:end:in:)` measures.

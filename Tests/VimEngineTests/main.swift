@@ -1382,6 +1382,7 @@ precondition(paragraphPlanning("j", text: threeParagraphs, caret: 0, profile: no
     .commit(.setCursor(nil)),
 ])
 precondition(paragraphPlanning("l", text: threeParagraphs, caret: 9, profile: readProfile).plan.steps == [
+    .press(.selectRight, count: 1),
     .press(.right, count: 1),
     .settle(Expectation(selection: 8..<8, length: 11)),
     .commit(.setCursor(nil)),
@@ -1401,6 +1402,7 @@ precondition(lastWordA.plan.steps == [
 ])
 precondition(lastWordA.operand == 5..<7, "the operand is compared with the field's own read")
 precondition(paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: readProfile).plan.steps == [
+    .press(.selectLeft, count: 1),
     .press(.left, count: 1),
     .press(.selectRight, count: 2),
     .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd)),
@@ -2921,7 +2923,7 @@ precondition(webAbove[(pasted + 2)...].allSatisfy {
 })
 let rowKeys = adding([.nativeMotions], to: removing([.lineStartKey], from: keyProfile))
 let rowAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: rowKeys, breaks: ParagraphBreaks(offsets: [2])).steps
-precondition(chords(PhysicalPlan(steps: rowAbove)) == [.left, .up])
+precondition(chords(PhysicalPlan(steps: rowAbove)) == [.selectLeft, .left, .up])
 precondition(rowAbove[rowAbove.firstIndex(of: .press(.up, count: 1))! + 1] == .settle(Expectation(landing: nil)),
              "↑ past a pasted newline settles as blind as ⌃A does")
 for (keys, text) in [("oZ", "ab\nZ\ncd"), ("OZ", "Z\nab\ncd")] {
@@ -3952,6 +3954,7 @@ func fakeTree(_ spec: String) -> [FakeNode] {
         "L": ("AXList", "AXContentList"), "G": ("AXGroup", nil), "T": ("AXStaticText", nil), "H": ("AXHeading", nil),
         "E": ("AXGroup", "AXEmptyGroup"), "A": ("AXGroup", "AXApplicationGroup"), "K": ("AXLink", nil),
         "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil), "M": ("AXListMarker", nil),
+        "D": ("AXGroup", "AXCodeStyleGroup"), "S": ("AXGroup", "AXStrongStyleGroup"), "F": ("AXGroup", "AXEmphasisStyleGroup"),
     ]
     var nodes: [[Int]: (role: (String, String?), start: Int, end: Int)] = [:]
     for token in spec.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
@@ -3977,7 +3980,7 @@ func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLi
     let plain = MarkerText.plain(raw)
     let aligned = ParagraphBreaks(value: value, fieldText: plain)!
     let restored = EmptyParagraphs.restore(value: value, fieldText: plain, aligned: aligned, found: scanned(tree, plain)!)!
-    let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks)
+    let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks, raw: raw)
     return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw,
                                  found: unreachableScanned(tree, candidates)!)
 }
@@ -4446,5 +4449,223 @@ let bullet = Sim.ListLine(marker: "\u{2022} ", inline: true)
 precondition(ChromiumParagraphs(text: "a\nb\n\nc", lines: [Sim.ListLine(), bullet, bullet, bullet]).shown
              == ("a\n\u{2022} b\n\u{2022} \n\u{2022} c", "a\u{2022} b\u{2022} \n\u{2022} c", []),
              "Chromium's own list keeps each marker on its item's line")
+
+// MARK: - Drawn carets beside code spans (LIN-1683)
+
+// Dia 1.49.1 on linear.app, probed by softlash/LIN-1683 scripts/code-probe: the text, then each caret Linear drew.
+let codeValue = [
+    "Plain opening paragraph with a few words to move around in.",
+    "Marks: a bold word then an italic word then code span then a link text and it is done.",
+    "lead starts this paragraph with code and goes on.",
+    "This paragraph ends with code tail",
+    "Two spans one and two share a line here.",
+    "Adjacent boldcode marks and x one letter.",
+    "Last plain paragraph is here.",
+].joined(separator: "\n")
+let codeRaw = "Plain opening paragraph with a few words to move around in.Marks: a bold word then an italic word then code span then a link text and it is done.lead starts this paragraph with code and goes on.This paragraph ends with code tailTwo spans one and two share a line here.Adjacent boldcode marks and x one letter.Last plain paragraph is here."
+let codeTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145 2/G/145/194
+2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228 4/G/228/268
+4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268 5/G/268/309
+5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let midStartOutsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/E/103/103 1.6/D/103/112 1.6.0/T/103/112 1.7/T/112/120 1.8/K/120/129 1.8.0/T/120/129 1.9/T/129/145
+2/G/145/194 2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228
+4/G/228/268 4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268
+5/G/268/309 5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let midStartInsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/E/103/103 1.5.1/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145
+2/G/145/194 2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228
+4/G/228/268 4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268
+5/G/268/309 5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let midEndInsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.5.1/E/112/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145
+2/G/145/194 2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228
+4/G/228/268 4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268
+5/G/268/309 5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let midEndOutsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/E/112/112 1.7/T/112/120 1.8/K/120/129 1.8.0/T/120/129 1.9/T/129/145
+2/G/145/194 2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228
+4/G/228/268 4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268
+5/G/268/309 5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let leadStartTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145 2/G/145/194
+2.0/E/145/145 2.1/D/145/149 2.1.0/T/145/149 2.2/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228
+4/G/228/268 4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268
+5/G/268/309 5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296 5.4/D/296/297
+5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
+let tailEndOutsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145 2/G/145/194
+2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/229 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228 3.2/E/228/228
+4/G/229/269 4.0/T/229/239 4.1/D/239/242 4.1.0/T/239/242 4.2/T/242/247 4.3/D/247/250 4.3.0/T/247/250 4.4/T/250/269
+5/G/269/310 5.0/T/269/278 5.1/S/278/282 5.1.0/T/278/282 5.2/D/282/286 5.2.0/T/282/286 5.3/T/286/297 5.4/D/297/298
+5.4.0/T/297/298 5.5/T/298/310 6/G/310/339 6.0/T/310/339
+""")
+let tailEndInsideTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145 2/G/145/194
+2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/229 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228 3.1.1/E/228/228
+4/G/229/269 4.0/T/229/239 4.1/D/239/242 4.1.0/T/239/242 4.2/T/242/247 4.3/D/247/250 4.3.0/T/247/250 4.4/T/250/269
+5/G/269/310 5.0/T/269/278 5.1/S/278/282 5.1.0/T/278/282 5.2/D/282/286 5.2.0/T/282/286 5.3/T/286/297 5.4/D/297/298
+5.4.0/T/297/298 5.5/T/298/310 6/G/310/339 6.0/T/310/339
+""")
+
+func inserting(_ text: String, _ addition: String, at offset: Int) -> String {
+    var units = Array(text.utf16)
+    units.insert(contentsOf: addition.utf16, at: offset)
+    return String(decoding: units, as: UTF16.self)
+}
+// Each measured state is the text with what the drawn caret added, then the caret's plain offset and model offset.
+let midValue = (start: inserting(codeValue, "\n\n", at: 104), end: inserting(codeValue, "\n\n", at: 113))
+let midRaw = (start: inserting(codeRaw, "\u{FFFC}", at: 103), end: inserting(codeRaw, "\u{FFFC}", at: 112))
+let tailValue = inserting(codeValue, "\n", at: 232)
+let tailRaw = inserting(codeRaw, "\u{FFFC}\n", at: 228)
+let codeStates: [(name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int, starts: Bool)] = [
+    ("outside a start", midValue.start, midRaw.start, midStartOutsideTree, 103, 104, false),
+    ("inside a start", midValue.start, midRaw.start, midStartInsideTree, 103, 104, false),
+    ("inside an end", midValue.end, midRaw.end, midEndInsideTree, 112, 113, false),
+    ("outside an end", midValue.end, midRaw.end, midEndOutsideTree, 112, 113, false),
+    ("a paragraph's start", inserting(codeValue, "\n", at: 147), inserting(codeRaw, "\u{FFFC}", at: 145), leadStartTree, 145, 147, true),
+    ("outside a paragraph's end", tailValue, tailRaw, tailEndOutsideTree, 228, 231, false),
+    ("inside a paragraph's end", tailValue, tailRaw, tailEndInsideTree, 228, 231, false),
+]
+let noCaret = UnreachableLines.Found(markers: [], chips: [])
+precondition(folded(codeValue, codeRaw, codeTree).text == codeValue, "code spans alone are no lines")
+for state in codeStates {
+    let plain = MarkerText.plain(state.raw)
+    let aligned = ParagraphBreaks(value: state.value, fieldText: plain)!
+    let candidates = UnreachableLines.candidates(text: state.value, breaks: aligned, raw: state.raw)
+    precondition(candidates.carets == [state.caret], state.name)
+    precondition(unreachableScanned(state.tree, candidates)?.carets == [.init(offset: state.caret, startsParagraph: state.starts)],
+                 state.name)
+    precondition(scanned(state.tree, plain) == [], "\(state.name): the <br> after a drawn caret is no empty paragraph")
+    let model = folded(state.value, state.raw, state.tree)
+    precondition(model.text == codeValue, "\(state.name): the model is the text without the drawn caret")
+    let withoutBreak = model.drawnBreak.map { String(plain.prefix($0)) + String(plain.dropFirst($0 + 1)) } ?? plain
+    precondition(model.breaks.fieldText(model.text, at: 0..<model.text.utf16.count) == withoutBreak && roundTrips(model), state.name)
+    precondition(model.breaks.fieldOffset(state.model) == state.caret, state.name)
+    let unfolded = UnreachableLines.fold(text: state.value, breaks: aligned, raw: state.raw, found: noCaret).text
+    precondition(state.starts || unfolded != codeValue, "\(state.name): undiscovered, the drawn caret's line stays")
+}
+let tailModel = folded(tailValue, tailRaw, tailEndOutsideTree)
+precondition(tailModel.drawnBreak == 228 && tailModel.breaks.fieldOffset(232) == 228,
+             "offsets past the <br> after a caret drawn at a paragraph's end are the field's once the caret leaves")
+precondition(unreachableScanned([FakeNode("AXGroup", nil, 0, 4, [text(0, 2), FakeNode("AXGroup", "AXEmptyGroup", 2, 2), text(2, 4)])],
+                                UnreachableLines.Candidates(markers: [], chips: [], carets: [2]))?.carets == [],
+             "an empty group away from code is no drawn caret")
+precondition(unreachableScanned(midStartOutsideTree, UnreachableLines.Candidates(markers: [], chips: [], carets: [103]), budget: 8)
+             == nil, "past its budget")
+precondition(DrawnCaret.isCaret(parent: "AXCodeStyleGroup", previous: nil, next: nil)
+             && DrawnCaret.isCaret(parent: nil, previous: nil, next: "AXCodeStyleGroup")
+             && !DrawnCaret.isCaret(parent: "AXStrongStyleGroup", previous: "AXApplicationGroup", next: nil))
+precondition(DrawnCaret.isInline(role: "AXLink", subrole: nil) && DrawnCaret.isInline(role: "AXGroup", subrole: "AXStrongStyleGroup")
+             && !DrawnCaret.isInline(role: "AXGroup", subrole: nil))
+
+func codeBuild(_ state: (name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int, starts: Bool),
+               side: ParagraphBreaks.Side) -> FieldSnapshot {
+    let plain = MarkerText.plain(state.raw)
+    let aligned = ParagraphBreaks(value: state.value, fieldText: plain)!
+    var reads = FieldSnapshot.Reads(
+        field: FieldReads(text: state.value, plain: state.caret..<state.caret, markers: MarkerReads(
+            breaks: aligned, value: aligned.valueRange(state.caret..<state.caret) { _ in side }
+        )),
+        length: state.value.utf16.count, webContent: true, blocks: 7, marked: state.caret..<state.caret, markerText: state.raw
+    )
+    var memo: EmptyParagraphs.Memo?
+    var unreachable: UnreachableLines.Memo?
+    return FieldSnapshot.Step.run(taking: { need in
+        switch need {
+        case .side(let end): reads.sides.updateValue(side, forKey: end)
+        case .emptyParagraph: reads.inEmptyParagraph = true
+        case .emptyParagraphs(let value, let raw):
+            memo = EmptyParagraphs.Memo(value: value, markers: raw, blocks: reads.blocks, found: scanned(state.tree, plain))
+        case .unreachable(let value, let raw, let candidates):
+            unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: reads.blocks,
+                                                found: unreachableScanned(state.tree, candidates))
+        }
+    }) {
+        FieldSnapshot.build(reads, capabilities: keyProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
+                            unreachable: unreachable)
+    }.snapshot
+}
+var lingering = codeStates[5]
+lingering.caret = 229
+precondition(codeBuild(lingering, side: .end).selection == 232..<232, "a read past the <br> is the next line's start")
+for state in codeStates {
+    let snapshot = codeBuild(state, side: state.starts ? .start(skipping: 0) : .end)
+    precondition(snapshot.text == codeValue && snapshot.selection == state.model..<state.model, state.name)
+    precondition(snapshot.holdsDrawnCaret && !snapshot.caretInEmptyParagraph && snapshot.foldedLength > 0, state.name)
+    let x = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("x"), state: .initial), snapshot: snapshot)
+    precondition(!x.steps.contains(.bell) && settleTraces(x).allSatisfy { $0.contains("len=nil") },
+                 "\(state.name): its lines leave with the caret, so no length is checked")
+}
+
+let tailSnapshot = codeBuild(codeStates[5], side: .end)
+let tailWrite = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("j"), state: .initial), snapshot: FieldSnapshot(
+    capabilities: writeKeys, text: tailSnapshot.text, selection: tailSnapshot.selection, webContent: true,
+    breaks: tailSnapshot.breaks, foldedLength: tailSnapshot.foldedLength, holdsDrawnCaret: true, drawnBreak: tailSnapshot.drawnBreak
+))
+precondition(tailWrite.steps.first == .setSelection(263..<263) && settleTraces(tailWrite).first == "sel=262..262 len=nil",
+             "a write while the caret is drawn meets the <br>, which is gone once it lands")
+
+// A Sim of Linear's editor with code spans moves and edits as Vim does, in both lanes.
+let codeDoc = ["Marks then code span then a link.", "lead starts here", "ends with tail", "x is one letter", "last line"]
+func codeSim(_ profile: CapabilityProfile, caret: Int = 0) -> Sim {
+    var host = Sim(text: codeDoc.joined(separator: "\n"), caret: caret, profile: profile)
+    host.emptyParagraphs = true
+    host.listLines = codeDoc.map { _ in Sim.ListLine() }
+    host.codeSpans = [11..<20, 34..<38, 61..<65, 66..<67]
+    host.emulatesKeys = true
+    host.readModel = .textContent
+    return host
+}
+precondition(ChromiumParagraphs(text: "ab cd e\nf", lines: [Sim.ListLine(), Sim.ListLine()], caret: 3, drawn: 3).shown
+             == ("ab \n\ncd e\nf", "ab \u{FFFC}cd ef", []), "a caret drawn mid-paragraph is a line of its own")
+precondition(ChromiumParagraphs(text: "ab\ncd\nef", lines: [Sim.ListLine(), Sim.ListLine(), Sim.ListLine()], caret: 5, drawn: 5)
+             .shown == ("ab\ncd\n\nef", "abcd\u{FFFC}\nef", []), "and at a paragraph's end, one with a <br> after it")
+var toggling = codeSim(writeKeys)
+toggling.perform([.setSelection(11..<11), .press(.right, count: 1)])
+precondition(toggling.readSelection == 11..<11, "a caret written at a code span's start is outside it, and → steps in")
+toggling.perform([.press(.right, count: 1), .press(.left, count: 1), .press(.left, count: 1)])
+precondition(toggling.readSelection == 11..<11, "then ← steps out")
+toggling.perform([.press(.selectRight, count: 1), .press(.right, count: 1)])
+precondition(toggling.readSelection == 12..<12, "shifted keys cross the edge")
+for profile in [keyProfile, writeKeys] {
+    let down = String(repeating: "j", count: codeDoc.count)
+    for keys in ["lllllllllllllllllllllllllllllll" + String(repeating: "h", count: 31), down + String(repeating: "k", count: codeDoc.count),
+                 "wwwwwwwwwwwwwwwwbbbbbbbbbbbbbbbb", "eeeeeeeeeeee", "5l3lj2lkj$jjk0jjj^", "fsfcfpfk", "jlhjjlh",
+                 "jjj$hhlxlx", "wwxwwdwjx", "wwwcwX", "jA", "jjdd", "jwD", "wwwwD", "jjjwD"] {
+        var code = codeSim(profile)
+        var plain = Sim(text: code.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            code.type(String(key))
+            plain.type(String(key))
+            precondition(code.caret == plain.caret && code.text == plain.text, "\(keys) at \(key)")
+        }
+        code.feed("<Esc>")
+        plain.feed("<Esc>")
+        precondition(code.caret == plain.caret && code.text == plain.text, "\(keys) then Esc")
+        precondition(code.settleFailures == 0 && code.bells == 0 && code.unsupportedSteps == 0, "\(keys): \(code.settleFailures)")
+    }
+}
 
 print("Vim engine tests passed")

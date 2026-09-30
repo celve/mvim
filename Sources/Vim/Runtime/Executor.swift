@@ -315,7 +315,7 @@ public final class Executor {
                 return outcome(true)
             }
             // Only the markers place a caret between elements or tell a boundary's sides apart.
-            if paragraphs, selectionSlot != nil, let marked = AX.markedSelection(of: element) {
+            if paragraphs, selectionSlot != nil, let marked = Snapshotter.markedSelection(of: element) {
                 selection = marked.range
                 let side = expectation.edge == nil ? nil : Snapshotter.paragraphSide(of: marked, upper: true)
                 if expectation.converged(selection: selection, length: length, selectedText: text, side: side) {
