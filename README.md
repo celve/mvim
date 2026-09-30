@@ -43,14 +43,29 @@ permissions carry over while the same Apple Development identity signs it. To un
 System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and delete
 `~/Library/Application Support/mvim`.
 
-mvim's identifier was `com.loom.mvim` until it became `io.github.celve.mvim`, and to macOS the two are
-different apps: nothing carries the permissions, the settings or the login item across. If
-`defaults read /Applications/mvim.app/Contents/Info CFBundleIdentifier` prints `com.loom.mvim`,
-switch **Start at Login** off, quit mvim and remove it from Accessibility and Input Monitoring before
-updating. Then run `defaults export com.loom.mvim - | defaults import io.github.celve.mvim -`, copy
-the new app and grant both permissions as in steps 3 and 4. The beliefs file carries over as it is.
-If you run Vibe, update it at the same time: the tag on synthesized events changed too
-([Synthesized events](#synthesized-events)).
+**Updating across the identifier change.** mvim's identifier was `com.loom.mvim` until it became
+`io.github.celve.mvim`, and to macOS the two are different apps: the permissions, the settings and
+the login item stay with the old one. If this prints `com.loom.mvim`, update this way once:
+
+```sh
+defaults read /Applications/mvim.app/Contents/Info CFBundleIdentifier
+```
+
+1. Switch **Start at Login** off, and wait until its checkmark clears: it switches in the background.
+2. Quit mvim, and Vibe too if you run it (step 6 says why).
+3. Remove mvim from Accessibility and Input Monitoring in System Settings → Privacy & Security.
+4. Carry the settings over:
+
+   ```sh
+   defaults export com.loom.mvim - | defaults import io.github.celve.mvim -
+   ```
+
+5. Update as above, open mvim and grant both permissions as on a first install. The beliefs file
+   carries over as it is, and **Start at Login** can go back on.
+6. If you run Vibe, rebuild it from a checkout whose `SynthTag.magic` is `0x4345_4C56`, as mvim's now
+   is ([Synthesized events](#synthesized-events)), before opening it again. An mvim and a Vibe with
+   different tags each take the other's typing for yours, so Normal mode would run a dictated
+   transcript as commands.
 
 ## Using it
 
