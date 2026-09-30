@@ -4220,11 +4220,16 @@ precondition(settleTraces(PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("j
     breaks: ParagraphBreaks(offsets: [7], hidden: [.init(at: 0, text: "\u{2022}")]), foldedLength: 2, holdsChips: true
 ))) == ["sel=8..8 len=nil edge=end", "sel=8..8 len=nil edge=start"], "beside a chip AXValue gains a line as the caret gets there")
 let todoBelow = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("k"), state: .initial), snapshot: FieldSnapshot(
-    capabilities: writeKeys, text: "ab\ncd\nef", selection: 6..<6, webContent: true,
-    breaks: ParagraphBreaks(offsets: [2, 5], hidden: [.init(at: 3, text: "")]), foldedLength: 2
+    capabilities: writeKeys, text: "ab\nc\nef", selection: 5..<5, webContent: true,
+    breaks: ParagraphBreaks(offsets: [2, 4], hidden: [.init(at: 3, text: "")]), foldedLength: 2
 ))
 precondition(todoBelow.steps.prefix(2) == [.setSelection(1..<1), .setSelection(2..<2)],
              "a to-do's start is written from above, where a write from below would land on the line above's end")
+let longTodoBelow = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("k"), state: .initial), snapshot: FieldSnapshot(
+    capabilities: writeKeys, text: "ab\ncdx\nef", selection: 7..<7, webContent: true,
+    breaks: ParagraphBreaks(offsets: [2, 6], hidden: [.init(at: 3, text: "")]), foldedLength: 2
+))
+precondition(longTodoBelow.steps.prefix(2) == [.setSelection(3..<3), .press(.left, count: 1)], "or from inside the line")
 let chipDoc: [(String, String?, Int, Bool)] = [
     ("Top", nil, 0, false), ("\u{2060}\u{00A0}LIN-1645 Why j/k beeps", "\u{2022}", 0, true), ("Bullet", "\u{2022}", 0, false),
     ("\u{2060}\u{00A0}LIN-1641 with an icon", "\u{2022}", 1, true), ("Chores", nil, 2, false), ("Last", nil, 0, false),

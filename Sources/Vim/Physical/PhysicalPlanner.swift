@@ -349,8 +349,13 @@ private extension PhysicalPlanner {
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         let field = context.field(range)
         // A to-do's start shares its offset with the line above's end, and a write there from below lands on that end.
-        if range.isEmpty, context.afterCheckbox(range.lowerBound), field.lowerBound > 0 {
-            return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+        if range.isEmpty, context.afterCheckbox(range.lowerBound), field.lowerBound > 0, let model = context.model {
+            let inside = model.advance(range.lowerBound, byGraphemes: 1)
+            guard inside < model.lineEnd(of: range.lowerBound) else {
+                return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+            }
+            let next = context.field(inside..<inside)
+            return [.setSelection(next), .press(.left, count: 1)]
         }
         if !range.isEmpty, context.writesPast(range.lowerBound), let model = context.model {
             let next = context.field(range.lowerBound + 1..<range.lowerBound + 1).lowerBound
