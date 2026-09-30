@@ -1,5 +1,5 @@
 /// Tells which marker-shaped lines of a Chromium field are list markers: a list item's first child, where the item has
-/// more. A paragraph that only reads `1.` is not one. Pure over its reads, so `make test` drives it with a fake tree (LIN-1652).
+/// more, so a paragraph that only reads `1.` is not one. Pure over its reads, so `make test` drives it (LIN-1652).
 public struct ListMarkerScan<Node> {
     /// Nil when a read fails for any reason but the attribute's absence. One read.
     private let block: (Node) -> EmptyBlockScan<Node>.Block?
@@ -11,6 +11,7 @@ public struct ListMarkerScan<Node> {
     /// Reads by tree path, so candidates in one list share them.
     private var blocks: [[Int]: EmptyBlockScan<Node>.Block] = [:]
     private var starts: [[Int]: Int] = [:]
+    private var ends: [[Int]: Int] = [:]
 
     public init(
         budget: Int, block: @escaping (Node) -> EmptyBlockScan<Node>.Block?, offset: @escaping (Node, _ end: Bool) -> Int?
@@ -20,14 +21,15 @@ public struct ListMarkerScan<Node> {
         self.offset = offset
     }
 
-    /// Plain starts of the candidates that are list markers; nil on any failed read or past the budget.
-    public mutating func run(blocks roots: [Node], candidates: [Range<Int>]) -> [Int]? {
+    /// Plain starts of the candidates that are list markers, and the ends of the lists found on the way; nil on any failed
+    /// read or past the budget.
+    public mutating func run(blocks roots: [Node], candidates: [Range<Int>]) -> (markers: [Int], listEnds: [Int])? {
         var found: [Int] = []
         for candidate in candidates {
             guard let marker = isMarker(candidate, in: roots) else { return nil }
             if marker { found.append(candidate.lowerBound) }
         }
-        return found
+        return (found, Set(ends.values).sorted())
     }
 
     /// Descends through the children holding the candidate's start, found by binary search on their starts.
@@ -58,6 +60,10 @@ public struct ListMarkerScan<Node> {
             }
             if read.role == "AXStaticText" || read.children.isEmpty { return false }
             inList = read.role == "AXList"
+            if inList, ends[here] == nil {
+                guard spend(2), let end = offset(siblings[hit.index], true) else { return nil }
+                ends[here] = end
+            }
             siblings = read.children
             path = here
         }

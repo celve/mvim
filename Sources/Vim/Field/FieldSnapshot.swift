@@ -35,6 +35,9 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// How many `AXValue` units `text` leaves out for lines no caret reaches (LIN-1652).
     public let foldedLength: Int
 
+    /// Folded text with a mention chip, beside which Linear gives the caret an `AXValue` line of its own, when it gets to it.
+    public let holdsChips: Bool
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -48,7 +51,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         textlessLeaves: Bool = false,
         valueGap: Int = 0,
         holdsEmptyParagraphs: Bool = false,
-        foldedLength: Int = 0
+        foldedLength: Int = 0,
+        holdsChips: Bool = false
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -63,6 +67,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.valueGap = valueGap
         self.holdsEmptyParagraphs = holdsEmptyParagraphs
         self.foldedLength = foldedLength
+        self.holdsChips = holdsChips
     }
 
     public var caret: Int? {
@@ -148,12 +153,14 @@ public extension FieldSnapshot {
         var gap = 0
         var holdsEmptyParagraphs = false
         var memo: EmptyParagraphs.Memo?
+        var emptyBreaks: Set<Int>? = []
         if answer == .textContent, let value = text, let aligned = breaks, let marked = reads.marked, let raw = reads.markerText,
            case let plainMarkers = FieldReads.withoutAttachments(raw), plainMarkers.utf16.contains(10) {
             guard let known, known.holds(value: value, markers: raw, blocks: reads.blocks) else {
                 return .needs(.emptyParagraphs(value: value, markers: raw))
             }
             memo = known
+            emptyBreaks = known.found.map(Set.init)
             if let found = known.found,
                let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found) {
                 switch valueRange(marked, in: restored.breaks, sides: reads.sides) {
@@ -173,6 +180,7 @@ public extension FieldSnapshot {
             }
         }
         var foldedLength = 0
+        var holdsChips = false
         var markerMemo: UnreachableLines.Memo?
         if answer == .textContent, capabilities.has(.readCaret), let value = field.text, let model = text, let current = breaks,
            let marked = reads.marked, let raw = reads.markerText {
@@ -183,8 +191,13 @@ public extension FieldSnapshot {
                 }
                 markerMemo = knownMarkers
             }
-            let folded = UnreachableLines.fold(text: model, breaks: current, raw: raw, markers: Set(markerMemo?.found ?? []))
-            if folded.folded > 0 {
+            let trailing = markerMemo?.found.flatMap { found in
+                emptyBreaks.map { UnreachableLines.trailingBreaks(in: FieldReads.withoutAttachments(raw), found: found, empty: $0) }
+            } ?? []
+            let folded = UnreachableLines.fold(
+                text: model, breaks: current, raw: raw, markers: Set(markerMemo?.found?.markers ?? []), trailing: trailing
+            )
+            if !folded.breaks.hidden.isEmpty {
                 switch valueRange(marked, in: folded.breaks, sides: reads.sides) {
                 case .needs(let need):
                     return .needs(need)
@@ -193,6 +206,7 @@ public extension FieldSnapshot {
                     breaks = folded.breaks
                     selection = resolved
                     foldedLength = folded.folded
+                    holdsChips = folded.text.contains("\u{2060}\u{00A0}")
                     emptyParagraph = emptyParagraph && !onEmptyLine(resolved, in: folded.text)
                 case .done:
                     break
@@ -213,7 +227,8 @@ public extension FieldSnapshot {
             textlessLeaves: interpreted.textlessLeaves,
             valueGap: gap,
             holdsEmptyParagraphs: holdsEmptyParagraphs,
-            foldedLength: foldedLength
+            foldedLength: foldedLength,
+            holdsChips: holdsChips
         )
         return .done((snapshot, memo, markerMemo))
     }

@@ -494,7 +494,12 @@ the text the field selected. A list item's marker (`•`, `1.`) is a line of its
 them, so mvim leaves them out of its lines. It tells a marker from a paragraph that only reads `1.`
 in the accessibility tree, once per text; where it cannot, past about sixty list items or when a
 read fails, markers stay lines and `j` or `k` into a list item beeps. Edits across list items run
-without checking the length, since a list renumbers and items gain or lose their markers.
+without checking the length, since a list renumbers and items gain or lose their markers. An item
+that ends in a mention chip ends in a `<br>` Linear adds after it, which the caret reads as already
+past, so mvim counts it as the line's end. Beside a chip Linear also gives the caret an `AXValue`
+line of its own for as long as it stays there, so in such a document the settles do not check the
+length. A column in a chip's text is not a caret position at all, since the caret crosses a chip in
+one step: `j` or `k` with a column that lands inside one beeps.
 
 A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
 item in every type it holds, puts the text up for one ⌘V (marked `org.nspasteboard.TransientType`,

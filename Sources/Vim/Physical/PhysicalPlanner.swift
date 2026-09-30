@@ -176,6 +176,7 @@ private extension PhysicalPlanner {
             textlessLeaves = snapshot.textlessLeaves
             valueGap = snapshot.valueGap - snapshot.foldedLength
             reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
+            if snapshot.holdsChips { unknown.insert(.length) }
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -204,6 +205,12 @@ private extension PhysicalPlanner {
             guard edge(offset) != .paragraphEnd else { return true }
             guard let breaks, breaks.offsets.contains(offset) else { return false }
             return breaks.hidden.contains { $0.at == offset + 1 && !$0.text.isEmpty }
+        }
+
+        /// A line's start just past a folded line with no text, such as a to-do's checkbox.
+        func afterCheckbox(_ offset: Int) -> Bool {
+            guard let breaks, edge(offset) == .paragraphStart else { return false }
+            return breaks.hidden.contains { $0.at == offset && $0.text.isEmpty }
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -341,6 +348,10 @@ private extension PhysicalPlanner {
     /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by ← from its start.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         let field = context.field(range)
+        // A to-do's start shares its offset with the line above's end, and a write there from below lands on that end.
+        if range.isEmpty, context.afterCheckbox(range.lowerBound), field.lowerBound > 0 {
+            return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+        }
         if !range.isEmpty, context.writesPast(range.lowerBound), let model = context.model {
             let next = context.field(range.lowerBound + 1..<range.lowerBound + 1).lowerBound
             return [

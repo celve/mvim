@@ -582,7 +582,9 @@ extension Sim {
             let found = findsEmptyParagraphs ? chromium.shown.found : nil
             memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
         case .listMarkers(let value, let markers, let candidates):
-            let found = findsListMarkers ? candidates.map(\.lowerBound).filter(Set(chromium.listMarkers).contains) : nil
+            let found = findsListMarkers ? UnreachableLines.Found(
+                markers: candidates.map(\.lowerBound).filter(Set(chromium.listMarkers).contains), listEnds: chromium.listEnds
+            ) : nil
             listMarkers = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
     }
@@ -593,7 +595,9 @@ extension Sim {
     /// The child count: a block per paragraph.
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
 
-    var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text, lines: listLines) }
+    var chromium: ChromiumParagraphs {
+        ChromiumParagraphs(text: text, lines: listLines, caret: selection.isEmpty ? selection.lowerBound : nil)
+    }
 
     /// The upper end's paragraph side from the Sim's own text, in every Chromium mode.
     var upperSide: ParagraphBreaks.Side? {
@@ -640,14 +644,20 @@ public extension Sim {
     struct ListLine: Equatable, Sendable {
         public var marker: String?
         public var leaves: Int
+        /// The line ends in a chip, which Linear follows with a `<br>`.
+        public var trailingBreak: Bool
+        /// The leaves are a to-do's checkbox, which a write at its line's start lands beside by where the caret was.
+        public var checkbox: Bool
 
-        public init(marker: String? = nil, leaves: Int = 0) {
+        public init(marker: String? = nil, leaves: Int = 0, trailingBreak: Bool = false, checkbox: Bool = false) {
             self.marker = marker
             self.leaves = leaves
+            self.trailingBreak = trailingBreak
+            self.checkbox = checkbox
         }
 
-        /// `lines` once `range` of `text` is `replacement`, as Linear keeps them: the first line keeps its own, a deleted
-        /// plain line leaves the next line's, and a line the edit makes has none.
+        /// `lines` once `range` of `text` is `replacement`, as Linear keeps them: the first line keeps its marker and leaves,
+        /// a deleted plain line leaves the next line's, and a line the edit makes has none.
         static func carried(
             _ lines: [ListLine], in text: String, replacing range: Range<Int>, with replacement: String
         ) -> [ListLine] {
@@ -659,6 +669,8 @@ public extension Sim {
             let wholeLines = replacement.isEmpty && !range.isEmpty && units[range.upperBound - 1] == 10
                 && (range.lowerBound == 0 || units[range.lowerBound - 1] == 10)
             if wholeLines, head == ListLine() { head = lines[last] }
+            // The joined line ends as the last one did.
+            head.trailingBreak = lines[last].trailingBreak
             let made = replacement.utf16.filter { $0 == 10 }.count
             return Array(lines[..<first]) + [head] + Array(repeating: ListLine(), count: made) + Array(lines[(last + 1)...])
         }
@@ -694,10 +706,12 @@ struct ChromiumParagraphs {
     /// `AXValue`, the raw marker text and each empty paragraph's `<br>` offset.
     let shown: (value: String, markers: String, found: [Int])
     let plainMarkers: String
-    /// Plain starts of the list markers.
+    /// Plain starts of the list markers, and where each run of lines with one ends.
     let listMarkers: [Int]
+    let listEnds: [Int]
 
-    init(text: String, lines: [Sim.ListLine]? = nil) {
+    /// `caret` after a chip that ends its line brings Linear's separator image, an `AXValue` line of its own.
+    init(text: String, lines: [Sim.ListLine]? = nil, caret: Int? = nil) {
         self.text = text
         paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         self.lines = lines
@@ -705,13 +719,16 @@ struct ChromiumParagraphs {
             shown = EmptyParagraphs.chromium(paragraphs)
             plainMarkers = shown.markers
             listMarkers = []
+            listEnds = []
             return
         }
         var value = ""
         var raw = ""
         var found: [Int] = []
         var markers: [Int] = []
+        var ends: [Int] = []
         var plain = 0
+        var start = 0
         var afterBreak = false
         // Chromium breaks the line before each block but the first, a `<br>` alone, or one after a `<br>`.
         func block(_ text: String, br: Bool = false) {
@@ -739,10 +756,25 @@ struct ChromiumParagraphs {
             }
             raw += paragraph.isEmpty ? "\n" : paragraph
             plain += max(paragraph.utf16.count, 1)
+            start += paragraph.utf16.count
+            if line.trailingBreak, !paragraph.isEmpty {
+                if caret == start {
+                    block("")
+                    raw += "\u{FFFC}"
+                }
+                value += "\n"
+                raw += "\n"
+                plain += 1
+                afterBreak = true
+            }
+            start += 1
+            let next = lines.indices.contains(index + 1) ? lines[index + 1] : Sim.ListLine()
+            if line.marker != nil, next.marker == nil { ends.append(plain) }
         }
         shown = (value, raw, found)
         plainMarkers = FieldReads.withoutAttachments(raw)
         listMarkers = markers
+        listEnds = ends
     }
 
     /// The marker offset of each true offset: paragraphs run together, an empty one standing as its `<br>`.
@@ -750,11 +782,15 @@ struct ChromiumParagraphs {
         var start = 0
         var marker = 0
         for (index, paragraph) in paragraphs.enumerated() {
-            marker += lines.flatMap { $0.indices.contains(index) ? $0[index].marker?.utf16.count : nil } ?? 0
+            let line = lines.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? Sim.ListLine()
+            marker += line.marker?.utf16.count ?? 0
             let length = paragraph.utf16.count
-            if offset <= start + length { return marker + offset - start }
+            // A caret after a chip that ends its line reads past the `<br>` Linear follows it with.
+            let trailing = line.trailingBreak && length > 0 ? 1 : 0
+            if offset < start + length || offset == start + length && trailing == 0 { return marker + offset - start }
+            if offset == start + length { return marker + length + trailing }
             start += length + 1
-            marker += max(length, 1)
+            marker += max(length, 1) + trailing
         }
         return marker
     }
@@ -764,13 +800,21 @@ struct ChromiumParagraphs {
         return min(a, b)..<max(a, b)
     }
 
-    /// Where a write of marker offset `offset` lands: the last caret that reads it, or in a list marker, `caret`'s side of it.
+    /// Where a write of marker offset `offset` lands: the last caret that reads it, or at a list marker or a checkbox,
+    /// the side of it `caret` comes from.
     func landing(_ offset: Int, from caret: Int) -> Int {
         let last = (0...text.utf16.count).last { field($0) <= offset } ?? 0
         let units = Array(text.utf16)
-        guard last < units.count, units[last] == 10, caret <= last, let lines else { return last }
-        let line = units[..<(last + 1)].filter { $0 == 10 }.count
-        let marker = lines.indices.contains(line) ? lines[line].marker?.utf16.count ?? 0 : 0
+        guard let lines else { return last }
+        func prefix(_ start: Int) -> Sim.ListLine {
+            let line = units[..<start].filter { $0 == 10 }.count
+            return lines.indices.contains(line) ? lines[line] : Sim.ListLine()
+        }
+        if last > 0, units[last - 1] == 10, caret > last, prefix(last).checkbox, field(last - 1) == field(last) {
+            return last - 1
+        }
+        guard last < units.count, units[last] == 10, caret <= last else { return last }
+        let marker = prefix(last + 1).marker?.utf16.count ?? 0
         return marker > 0 && offset >= field(last + 1) - marker ? last + 1 : last
     }
 

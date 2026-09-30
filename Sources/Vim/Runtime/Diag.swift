@@ -195,7 +195,7 @@ enum Diag {
     }
 
     static func listMarkers(_ epoch: UInt64, _ seq: UInt64, _ memo: UnreachableLines.Memo) {
-        let found = memo.found.map { "found=\($0.count)" } ?? "failed"
+        let found = memo.found.map { "found=\($0.markers.count)" } ?? "failed"
         gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) list-markers \(found, privacy: .public)")
     }
 

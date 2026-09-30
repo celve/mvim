@@ -3944,11 +3944,13 @@ func fakeTree(_ spec: String) -> [FakeNode] {
     }
     return (0...).prefix { nodes[[$0]] != nil }.map { build([$0]) }
 }
-func listScanned(_ blocks: [FakeNode], _ candidates: [Range<Int>], budget: Int = UnreachableLines.readBudget) -> [Int]? {
+func listScanned(
+    _ blocks: [FakeNode], _ candidates: [Range<Int>], budget: Int = UnreachableLines.readBudget
+) -> UnreachableLines.Found? {
     var scan = ListMarkerScan<FakeNode>(budget: budget, block: { node in
         node.fails ? nil : EmptyBlockScan.Block(role: node.role, subrole: node.subrole, children: node.children)
     }, offset: { node, end in end ? node.end : node.start })
-    return scan.run(blocks: blocks, candidates: candidates)
+    return scan.run(blocks: blocks, candidates: candidates).map { UnreachableLines.Found(markers: $0.markers, listEnds: $0.listEnds) }
 }
 /// The fold of a probed field, after #24's restore, with the markers the tree confirms.
 func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLines.Model {
@@ -3958,7 +3960,9 @@ func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLi
     let restored = EmptyParagraphs.restore(value: value, fieldText: plain, aligned: aligned, found: found)!
     let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks)
     let markers = listScanned(tree, candidates)!
-    return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw, markers: Set(markers))
+    let trailing = UnreachableLines.trailingBreaks(in: plain, found: markers, empty: Set(found))
+    return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw, markers: Set(markers.markers),
+                                 trailing: trailing)
 }
 /// Every caret reads back as itself through the field offset and side Chromium gives it.
 func roundTrips(_ model: UnreachableLines.Model) -> Bool {
@@ -4049,8 +4053,9 @@ let dia1Plain = MarkerText.plain(dia1Raw)
 let dia1Aligned = ParagraphBreaks(value: dia1Value, fieldText: dia1Plain)!
 let dia1Candidates = UnreachableLines.candidates(text: dia1Value, breaks: dia1Aligned)
 precondition(dia1Candidates.map(\.lowerBound) == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 353, 394, 395, 407, 420])
-precondition(listScanned(dia1Tree, dia1Candidates) == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 395, 407, 420],
+precondition(listScanned(dia1Tree, dia1Candidates)?.markers == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 395, 407, 420],
              "the paragraphs that only read 1. and • are no list's")
+precondition(listScanned(dia1Tree, dia1Candidates)?.listEnds == [122, 138, 229, 322, 436])
 let dia1Lines = [
     "Top paragraph of the LIN-1652 disposable list probe.", "Numbered one", "Numbered two", "Nested numbered one",
     "Nested numbered two", "Numbered three", "Middle paragraph after the numbered list.", "Bullet one", "Nested bullet one",
@@ -4087,7 +4092,7 @@ precondition(UnreachableLines.fold(text: "ab\ncd", breaks: ParagraphBreaks(offse
 let todoOne = FakeNode("AXList", "AXContentList", 0, 2, [FakeNode("AXGroup", nil, 0, 2, [
     FakeNode("AXGroup", nil, 0, 0, [FakeNode("AXCheckBox", nil, 0, 0)]), paragraph(0, 2),
 ])])
-precondition(listScanned([todoOne], [0..<2]) == [], "a to-do reading 1. has a checkbox where a marker would be")
+precondition(listScanned([todoOne], [0..<2])?.markers == [], "a to-do reading 1. has a checkbox where a marker would be")
 dia1Tree[1].children[0].fails = true
 precondition(listScanned(dia1Tree, dia1Candidates) == nil, "a failed read fails the scan")
 dia1Tree[1].children[0].fails = false
@@ -4168,7 +4173,7 @@ let linearDoc: [(String, String?, Int)] = [
 func linearSim(_ profile: CapabilityProfile, findsMarkers: Bool = true) -> Sim {
     var host = Sim(text: linearDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
     host.emptyParagraphs = true
-    host.listLines = linearDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2) }
+    host.listLines = linearDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.0 != "Chores" && $0.2 == 2) }
     host.findsListMarkers = findsMarkers
     host.emulatesKeys = true
     host.readModel = .textContent
@@ -4188,6 +4193,59 @@ for profile in [keyProfile, writeKeys] {
         precondition(linear.settleFailures == 0 && linear.bells == 0, keys)
     }
 }
+// A chip ending an item: Linear follows it with a <br> the caret reads past, and while the caret is there, a separator.
+let chipFound = UnreachableLines.Found(markers: [1, 11], listEnds: [13])
+for (value, raw) in [("a\n\u{2022}\nChip one\n\u{2022}\nb", "a\u{2022}Chip one\n\u{2022}b"),
+                     ("a\n\u{2022}\nChip one\n\n\u{2022}\nb", "a\u{2022}Chip one\u{FFFC}\n\u{2022}b")] {
+    let aligned = ParagraphBreaks(value: value, fieldText: MarkerText.plain(raw))!
+    let trailing = UnreachableLines.trailingBreaks(in: MarkerText.plain(raw), found: chipFound, empty: [])
+    precondition(trailing == [10])
+    let model = UnreachableLines.fold(text: value, breaks: aligned, raw: raw, markers: [1, 11], trailing: trailing)
+    precondition(model.text == "a\nChip one\nb" && model.folded == value.utf16.count - 12, "the separator's line joins the chip's")
+    precondition(model.breaks.fieldOffset(10) == 11 && model.breaks.fieldOffset(11) == 12, "the chip's end reads past its <br>")
+    precondition(roundTrips(model))
+}
+precondition(UnreachableLines.trailingBreaks(in: "a\u{2022}Chip one\n\u{2022}b", found: chipFound, empty: [10]) == [],
+             "an empty paragraph's <br> is its own line")
+let separated = FakeNode("AXGroup", nil, 2, 11, [FakeNode("AXGroup", "AXApplicationGroup", 2, 10, [text(2, 10)]),
+                                                 FakeNode("AXGroup", "AXEmptyGroup", 10, 10)])
+precondition(scanned([paragraph(0, 1), FakeNode("AXList", "AXContentList", 1, 11, [FakeNode("AXGroup", nil, 1, 11, [
+    FakeNode("AXGroup", nil, 1, 2, [text(1, 2)]), separated,
+])])], "a\u{2022}Chip one\n") == [], "the separator after a chip is no empty paragraph")
+let chipLast = UnreachableLines.fold(text: "a\n\u{2022}\nChip\n", breaks: ParagraphBreaks(offsets: [1, 3]),
+                                     raw: "a\u{2022}Chip\n", markers: [1], trailing: [6])
+precondition(chipLast.text == "a\nChip" && chipLast.breaks.fieldOffset(6) == 7, "a <br> ending the field leaves no line")
+precondition(settleTraces(PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("j"), state: .initial), snapshot: FieldSnapshot(
+    capabilities: keyProfile, text: "\u{2060}\u{00A0}LIN-1\nb", selection: 0..<0, webContent: true,
+    breaks: ParagraphBreaks(offsets: [7], hidden: [.init(at: 0, text: "\u{2022}")]), foldedLength: 2, holdsChips: true
+))) == ["sel=8..8 len=nil edge=end", "sel=8..8 len=nil edge=start"], "beside a chip AXValue gains a line as the caret gets there")
+let todoBelow = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("k"), state: .initial), snapshot: FieldSnapshot(
+    capabilities: writeKeys, text: "ab\ncd\nef", selection: 6..<6, webContent: true,
+    breaks: ParagraphBreaks(offsets: [2, 5], hidden: [.init(at: 3, text: "")]), foldedLength: 2
+))
+precondition(todoBelow.steps.prefix(2) == [.setSelection(1..<1), .setSelection(2..<2)],
+             "a to-do's start is written from above, where a write from below would land on the line above's end")
+let chipDoc: [(String, String?, Int, Bool)] = [
+    ("Top", nil, 0, false), ("\u{2060}\u{00A0}LIN-1645 Why j/k beeps", "\u{2022}", 0, true), ("Bullet", "\u{2022}", 0, false),
+    ("\u{2060}\u{00A0}LIN-1641 with an icon", "\u{2022}", 1, true), ("Chores", nil, 2, false), ("Last", nil, 0, false),
+]
+for profile in [keyProfile, writeKeys] {
+    for keys in ["jjjjjkkkkk", "j$jkk", "3j$kkk", "4ljjjjkkkk", "jjj$jjkkk"] {
+        var chips = Sim(text: chipDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
+        chips.emptyParagraphs = true
+        chips.listLines = chipDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, trailingBreak: $0.3) }
+        chips.emulatesKeys = true
+        chips.readModel = .textContent
+        var plain = Sim(text: chips.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            chips.type(String(key))
+            plain.type(String(key))
+        }
+        precondition(chips.caret == plain.caret && chips.settleFailures == 0, "through chips: \(keys)")
+    }
+}
+
 var linearLogged = linearSim(keyProfile, findsMarkers: false)
 linearLogged.type("j")
 precondition(linearLogged.settleFailures == 1 && linearLogged.caret == 14, "without discovery, LIN-1645's j into an item")
