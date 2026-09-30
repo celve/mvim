@@ -376,8 +376,8 @@ public final class Controller {
         guard executed else {
             if planned.abortedAtTextCheck(evidence.abortedAt) {
                 // Other text than the plan meant was selected, so the mode it asked for goes too.
-                if let read = selection(of: binding.element, paragraphs: paragraphs), !read.caret,
-                   let collapse = PhysicalPlanner.collapse(read.range, misread: true, profile: binding.capabilities) {
+                if let read = selection(of: binding.element, paragraphs: paragraphs), !read.caret {
+                    let collapse = PhysicalPlanner.collapse(read.range, misread: true, profile: binding.capabilities)
                     executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
                 }
                 if state.field.mode.isInserting {
@@ -487,7 +487,7 @@ public final class Controller {
         guard !read.caret else { return true }
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, read.range == operand { return true }
-        guard let collapse = PhysicalPlanner.collapse(read.range, profile: binding.capabilities) else { return false }
+        let collapse = PhysicalPlanner.collapse(read.range, profile: binding.capabilities)
         executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
         // The write that stranded this may be the one that lies, so confirm.
         return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false

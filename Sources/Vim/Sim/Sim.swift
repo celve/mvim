@@ -248,9 +248,8 @@ private extension Sim {
         guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
             if planned.abortedAtTextCheck(abortedAt) {
-                if !unreadableSelection, !readSelection.isEmpty,
-                   let collapse = PhysicalPlanner.collapse(readSelection, misread: true, profile: profile) {
-                    executeAside(collapse)
+                if !unreadableSelection, !readSelection.isEmpty {
+                    executeAside(PhysicalPlanner.collapse(readSelection, misread: true, profile: profile))
                 }
                 if state.field.mode.isInserting {
                     state = VimReducer.reduce(state, .setMode(before.nonVisual))
@@ -278,8 +277,7 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        guard let collapse = PhysicalPlanner.collapse(readSelection, profile: profile) else { return false }
-        executeAside(collapse)
+        executeAside(PhysicalPlanner.collapse(readSelection, profile: profile))
         return readSelection.isEmpty
     }
 

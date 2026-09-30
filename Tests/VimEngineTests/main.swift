@@ -1096,6 +1096,13 @@ strandedIgnored.ignoredChords = [.left]
 strandedIgnored.type("ciw")
 precondition(strandedIgnored.state.field.mode == .normal && strandedIgnored.selection == 0..<15)
 precondition(strandedIgnored.settleFailures == 2, "the repair's own settle fails where the field ignores ←")
+var strandedPlain = Sim(text: prose, caret: 4, profile: readProfile)
+strandedPlain.reboundChords = [.selectRight: .selectAll]
+strandedPlain.type("x")
+precondition(strandedPlain.selection == 0..<0 && strandedPlain.settleFailures == 1)
+strandedPlain.reboundChords = [:]
+strandedPlain.type("iX")
+precondition(strandedPlain.text == "X" + prose, "i types beside a stranded selection, not over it")
 // Mid-word in a joined run a span rings; from a word's end it is proven.
 precondition(physical("dw", text: "foo,bar", caret: 1, profile: nativeRead).steps == [.bell])
 precondition(physical("db", text: "foo,bar", caret: 6, profile: nativeRead).steps == [.bell])
@@ -1274,9 +1281,11 @@ precondition(PhysicalPlanner.plan(
 ])
 
 precondition(PhysicalPlanner.collapse(4..<9, profile: axProfile) == PhysicalPlan(.setSelection(4..<4)))
-precondition(PhysicalPlanner.collapse(4..<9, profile: nativeRead)
-             == PhysicalPlan(.press(.left, count: 1), .settle(Expectation(selection: 4..<4))))
-precondition(PhysicalPlanner.collapse(4..<9, profile: readProfile) == nil)
+for profile in [nativeRead, readProfile] {
+    precondition(PhysicalPlanner.collapse(4..<9, profile: profile)
+                 == PhysicalPlan(.press(.left, count: 1), .settle(Expectation(selection: 4..<4))))
+}
+precondition(PhysicalPlanner.collapse(4..<9, profile: blindProfile) == PhysicalPlan(.press(.left, count: 1)))
 for profile in [axProfile, nativeRead, readProfile, blindProfile] {
     precondition(PhysicalPlanner.collapse(4..<9, misread: true, profile: profile) == PhysicalPlan(.press(.left, count: 1)))
 }
@@ -2232,7 +2241,8 @@ for keys in ["x", "3x", "X", "dw", "de", "diw", "D", "C", "s", "S", "cc", "dd", 
     misread.reads = omitsBreaks
     misread.type(keys)
     precondition(misread.text == paragraphs && misread.settleFailures == 1, "\(keys) must ring, not edit, in paragraph 2")
-    precondition(!misread.state.field.mode.isInserting, keys)
+    precondition(misread.selection.isEmpty, "\(keys) leaves no selection to type over")
+    precondition(checkedText(misread.abortedStep) == nil || !misread.state.field.mode.isInserting, keys)
 }
 
 // Rule 2: a caret at an element boundary reads as its paragraph's start, in read offsets (as measured).

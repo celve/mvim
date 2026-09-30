@@ -98,12 +98,10 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left, as read in field offsets, to its start; nil where no lane may.
-    static func collapse(_ selection: Range<Int>, misread: Bool = false, profile: CapabilityProfile) -> PhysicalPlan? {
+    /// Collapses a selection an aborted run left, as read in field offsets, to its start.
+    static func collapse(_ selection: Range<Int>, misread: Bool = false, profile: CapabilityProfile) -> PhysicalPlan {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
-        // Lane B's ← came with the native motions opt-in (LIN-1560).
-        guard profile.has(.writeSelection) || profile.has(.nativeMotions) else { return nil }
         let start = selection.lowerBound
         let context = Context(snapshot: FieldSnapshot(capabilities: profile, selection: start..<start))
         return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
