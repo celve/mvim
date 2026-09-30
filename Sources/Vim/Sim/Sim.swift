@@ -49,11 +49,14 @@ public struct Sim {
     /// In Chromium modes, the field ends in an inline icon: a U+FFFC only the marker text has.
     public var endsInTextlessLeaf = false
 
-    /// With `emptyParagraphs`, Linear's lists: what each line of `text` draws before its text as blocks no caret reaches.
+    /// With `emptyParagraphs`, Linear's editor: blocks each line draws before its text, and each U+2060 a chip.
     public var listLines: [ListLine]?
 
-    /// Off, list-marker discovery fails and markers stay lines.
-    public var findsListMarkers = true
+    /// Off, discovery of list markers and chips fails, and they stay lines.
+    public var findsUnreachable = true
+
+    /// A caret written at a chip's start, where Linear's next arrow does nothing.
+    private var atChipStart = false
 
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
@@ -128,7 +131,7 @@ public struct Sim {
 
     /// The last discoveries, kept as the Controller keeps them.
     private var foundEmptyParagraphs: EmptyParagraphs.Memo?
-    private var foundListMarkers: UnreachableLines.Memo?
+    private var foundUnreachable: UnreachableLines.Memo?
 
     public init(
         text: String,
@@ -207,7 +210,7 @@ public struct Sim {
         }
         if transition != .sameElement {
             foundEmptyParagraphs = nil
-            foundListMarkers = nil
+            foundUnreachable = nil
         }
         if let text {
             self.text = text
@@ -234,15 +237,15 @@ private extension Sim {
         }
         var (reads, observed) = read()
         var memo = foundEmptyParagraphs
-        var listMarkers = foundListMarkers
-        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, listMarkers: &listMarkers) }) {
+        var unreachable = foundUnreachable
+        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
             FieldSnapshot.build(
                 reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
-                listMarkers: listMarkers
+                unreachable: unreachable
             )
         }
         foundEmptyParagraphs = built.memo
-        foundListMarkers = built.listMarkers
+        foundUnreachable = built.unreachable
         let snapshot = built.snapshot
         fieldBreaks = snapshot.breaks
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
@@ -372,7 +375,14 @@ private extension Sim {
             case .setSelection(let range):
                 guard !swallowsSelect else { break }
                 let model = TextModel(text)
-                selection = model.clamp(landing(range.lowerBound))..<model.clamp(landing(range.upperBound))
+                var lower = model.clamp(landing(range.lowerBound))
+                var upper = model.clamp(landing(range.upperBound))
+                // Written at a chip's start, a selection's end moves past the chip, and a caret stops the next arrow.
+                let atoms = chromium.atoms
+                if !range.isEmpty, atoms.contains(lower) { lower += 1 }
+                if !range.isEmpty, atoms.contains(upper) { upper += 1 }
+                selection = min(lower, upper)..<max(lower, upper)
+                atChipStart = selection.isEmpty && atoms.contains(lower)
                 backward = false
 
             case .replaceSelection(let replacement):
@@ -449,11 +459,17 @@ private extension Sim {
     /// One key as `KeyModel` has Cocoa's bindings do it, which is how LIN-1533 measured Chromium's arrows; false for
     /// a key the model does not know.
     mutating func press(_ chord: Chord) -> Bool {
+        if atChipStart, [Key.arrowLeft, .arrowRight].contains(chord.key), !chord.modifiers.contains(.option) {
+            atChipStart = false
+            return true
+        }
+        atChipStart = false
         var keys = KeyModel(
             text: text,
             anchor: backward ? selection.upperBound : selection.lowerBound,
             focus: backward ? selection.lowerBound : selection.upperBound,
-            wrap: wrapWidth
+            wrap: wrapWidth,
+            atoms: chromium.atoms
         )
         guard keys.press(chord) else { return false }
         if keys.text != text {
@@ -543,8 +559,8 @@ extension Sim {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
             var memo: EmptyParagraphs.Memo?
-            var listMarkers: UnreachableLines.Memo?
-            let aligned = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, listMarkers: &listMarkers) }) {
+            var unreachable: UnreachableLines.Memo?
+            let aligned = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
                 MarkerReads.aligning(value: value, range: plain, text: text, sides: reads.sides)
             }
             reads.field = FieldReads(text: value, plain: plain, selectedText: readSelectedText, markers: aligned.reads)
@@ -571,7 +587,7 @@ extension Sim {
     /// Answers a step's read from the fake field, as `Snapshotter` does over AX.
     func take(
         _ need: FieldSnapshot.Need, into reads: inout FieldSnapshot.Reads, memo: inout EmptyParagraphs.Memo?,
-        listMarkers: inout UnreachableLines.Memo?
+        unreachable: inout UnreachableLines.Memo?
     ) {
         switch need {
         case .side(let end):
@@ -581,11 +597,15 @@ extension Sim {
         case .emptyParagraphs(let value, let markers):
             let found = findsEmptyParagraphs ? chromium.shown.found : nil
             memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
-        case .listMarkers(let value, let markers, let candidates):
-            let found = findsListMarkers ? UnreachableLines.Found(
-                markers: candidates.map(\.lowerBound).filter(Set(chromium.listMarkers).contains), listEnds: chromium.listEnds
+        case .unreachable(let value, let markers, let candidates):
+            let shown = chromium
+            let found = findsUnreachable ? UnreachableLines.Found(
+                markers: candidates.markers.map(\.lowerBound).filter(Set(shown.listMarkers).contains),
+                chips: shown.chips.filter { chip in
+                    candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
+                }
             ) : nil
-            listMarkers = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
+            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
     }
 
@@ -644,20 +664,16 @@ public extension Sim {
     struct ListLine: Equatable, Sendable {
         public var marker: String?
         public var leaves: Int
-        /// The line ends in a chip, which Linear follows with a `<br>`.
-        public var trailingBreak: Bool
         /// The leaves are a to-do's checkbox, which a write at its line's start lands beside by where the caret was.
         public var checkbox: Bool
 
-        public init(marker: String? = nil, leaves: Int = 0, trailingBreak: Bool = false, checkbox: Bool = false) {
+        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false) {
             self.marker = marker
             self.leaves = leaves
-            self.trailingBreak = trailingBreak
             self.checkbox = checkbox
         }
 
-        /// `lines` once `range` of `text` is `replacement`, as Linear keeps them: the first line keeps its marker and leaves,
-        /// a deleted plain line leaves the next line's, and a line the edit makes has none.
+        /// `lines` once `range` of `text` is `replacement`: the first keeps its own, but a deleted plain line the next's.
         static func carried(
             _ lines: [ListLine], in text: String, replacing range: Range<Int>, with replacement: String
         ) -> [ListLine] {
@@ -669,8 +685,6 @@ public extension Sim {
             let wholeLines = replacement.isEmpty && !range.isEmpty && units[range.upperBound - 1] == 10
                 && (range.lowerBound == 0 || units[range.lowerBound - 1] == 10)
             if wholeLines, head == ListLine() { head = lines[last] }
-            // The joined line ends as the last one did.
-            head.trailingBreak = lines[last].trailingBreak
             let made = replacement.utf16.filter { $0 == 10 }.count
             return Array(lines[..<first]) + [head] + Array(repeating: ListLine(), count: made) + Array(lines[(last + 1)...])
         }
@@ -698,19 +712,22 @@ public extension EmptyParagraphs {
     }
 }
 
-/// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612), with Linear's list lines.
+/// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612); with `lines`, as Linear does.
 struct ChromiumParagraphs {
+    static let chip: UInt16 = 0x2060
+    static let label = Array("\u{2060}\u{00A0}LIN-1 chip".utf16)
+
     let text: String
     let paragraphs: [String]
     let lines: [Sim.ListLine]?
     /// `AXValue`, the raw marker text and each empty paragraph's `<br>` offset.
     let shown: (value: String, markers: String, found: [Int])
     let plainMarkers: String
-    /// Plain starts of the list markers, and where each run of lines with one ends.
+    /// Plain starts of the list markers, and the chips.
     let listMarkers: [Int]
-    let listEnds: [Int]
+    let chips: [UnreachableLines.Chip]
 
-    /// `caret` after a chip that ends its line brings Linear's separator image, an `AXValue` line of its own.
+    /// `caret` beside a chip that starts or ends its paragraph brings the image Linear puts there, a line of its own.
     init(text: String, lines: [Sim.ListLine]? = nil, caret: Int? = nil) {
         self.text = text
         paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -719,91 +736,134 @@ struct ChromiumParagraphs {
             shown = EmptyParagraphs.chromium(paragraphs)
             plainMarkers = shown.markers
             listMarkers = []
-            listEnds = []
+            chips = []
             return
         }
         var value = ""
         var raw = ""
         var found: [Int] = []
         var markers: [Int] = []
-        var ends: [Int] = []
+        var chips: [UnreachableLines.Chip] = []
         var plain = 0
         var start = 0
         var afterBreak = false
         // Chromium breaks the line before each block but the first, a `<br>` alone, or one after a `<br>`.
-        func block(_ text: String, br: Bool = false) {
+        func block(_ text: [UInt16], br: Bool = false) {
             if !value.isEmpty || !raw.isEmpty, !br, !afterBreak { value += "\n" }
-            value += text
+            value += String(decoding: text, as: UTF16.self)
             afterBreak = br || (text.isEmpty && afterBreak)
         }
         for (index, paragraph) in paragraphs.enumerated() {
             let line = lines.indices.contains(index) ? lines[index] : Sim.ListLine()
+            let units = Array(paragraph.utf16)
             if let marker = line.marker {
                 markers.append(plain)
-                block(marker)
+                block(Array(marker.utf16))
                 raw += marker
                 plain += marker.utf16.count
             }
             for _ in 0..<line.leaves {
-                block("")
+                block([])
                 raw += "\u{FFFC}"
             }
-            if paragraph.isEmpty {
+            guard !units.isEmpty else {
                 found.append(plain)
-                block("\n", br: true)
-            } else {
-                block(paragraph)
+                block([10], br: true)
+                raw += "\n"
+                plain += 1
+                start += 1
+                continue
             }
-            raw += paragraph.isEmpty ? "\n" : paragraph
-            plain += max(paragraph.utf16.count, 1)
-            start += paragraph.utf16.count
-            if line.trailingBreak, !paragraph.isEmpty {
-                if caret == start {
-                    block("")
-                    raw += "\u{FFFC}"
+            // Each chip is a line of its own, which spaces after it join, and one ending the paragraph is followed by a `<br>`.
+            var parts: [[UInt16]] = []
+            var pending: [UInt16] = []
+            func flush() {
+                guard !pending.isEmpty else { return }
+                if parts.last == Self.label, pending.allSatisfy({ $0 == 0x20 }) {
+                    parts[parts.count - 1] += pending
+                } else {
+                    parts.append(pending)
                 }
+                pending = []
+            }
+            var partsRaw: [UInt16] = []
+            var paragraphChips: [Range<Int>] = []
+            let paragraphStart = plain
+            // Measured, there is none before a chip right after another chip's `<br>`.
+            let followsBreak = afterBreak
+            for (offset, unit) in units.enumerated() {
+                guard unit == Self.chip else {
+                    pending.append(unit)
+                    partsRaw.append(unit)
+                    plain += 1
+                    continue
+                }
+                flush()
+                if offset == 0, caret == start, !followsBreak {
+                    parts.append([])
+                    partsRaw.append(0xFFFC)
+                }
+                parts.append(Self.label)
+                partsRaw += Self.label
+                paragraphChips.append(plain..<(plain + Self.label.count))
+                plain += Self.label.count
+                if offset == units.count - 1, caret == start + units.count {
+                    parts.append([])
+                    partsRaw.append(0xFFFC)
+                }
+            }
+            flush()
+            block(parts[0])
+            for part in parts.dropFirst() { value += "\n" + String(decoding: part, as: UTF16.self) }
+            raw += String(decoding: partsRaw, as: UTF16.self)
+            if units.last == Self.chip {
                 value += "\n"
                 raw += "\n"
                 plain += 1
                 afterBreak = true
+            } else if parts.count > 1 {
+                afterBreak = false
             }
-            start += 1
-            let next = lines.indices.contains(index + 1) ? lines[index + 1] : Sim.ListLine()
-            if line.marker != nil, next.marker == nil { ends.append(plain) }
+            chips += paragraphChips.map { UnreachableLines.Chip(range: $0, paragraph: paragraphStart..<plain) }
+            start += units.count + 1
         }
         shown = (value, raw, found)
         plainMarkers = FieldReads.withoutAttachments(raw)
         listMarkers = markers
-        listEnds = ends
+        self.chips = chips
     }
 
-    /// The marker offset of each true offset: paragraphs run together, an empty one standing as its `<br>`.
-    func field(_ offset: Int) -> Int {
+    /// The plain offset of each Sim offset; a caret after a chip ending its paragraph reads past the `<br>` after it.
+    func field(_ offset: Int, caret: Bool = true) -> Int {
         var start = 0
-        var marker = 0
+        var plain = 0
         for (index, paragraph) in paragraphs.enumerated() {
             let line = lines.flatMap { $0.indices.contains(index) ? $0[index] : nil } ?? Sim.ListLine()
-            marker += line.marker?.utf16.count ?? 0
-            let length = paragraph.utf16.count
-            // A caret after a chip that ends its line reads past the `<br>` Linear follows it with.
-            let trailing = line.trailingBreak && length > 0 ? 1 : 0
-            if offset < start + length || offset == start + length && trailing == 0 { return marker + offset - start }
-            if offset == start + length { return marker + length + trailing }
-            start += length + 1
-            marker += max(length, 1) + trailing
+            plain += line.marker?.utf16.count ?? 0
+            let units = Array(paragraph.utf16)
+            let chips = lines == nil ? 0 : units.filter { $0 == Self.chip }.count
+            let trailing = lines != nil && units.last == Self.chip ? 1 : 0
+            if offset <= start + units.count {
+                let local = offset - start
+                let before = lines == nil ? 0 : units[..<local].filter { $0 == Self.chip }.count
+                let past = caret && local == units.count ? trailing : 0
+                return plain + local + before * (Self.label.count - 1) + past
+            }
+            plain += max(units.count + chips * (Self.label.count - 1), 1) + trailing
+            start += units.count + 1
         }
-        return marker
+        return plain
     }
 
     func field(_ range: Range<Int>) -> Range<Int> {
-        let (a, b) = (field(range.lowerBound), field(range.upperBound))
+        guard !range.isEmpty else { return field(range.lowerBound)..<field(range.lowerBound) }
+        let (a, b) = (field(range.lowerBound, caret: false), field(range.upperBound, caret: false))
         return min(a, b)..<max(a, b)
     }
 
-    /// Where a write of marker offset `offset` lands: the last caret that reads it, or at a list marker or a checkbox,
-    /// the side of it `caret` comes from.
+    /// Where a write lands: the last caret before `offset`, or at a marker or checkbox, the side `caret` comes from.
     func landing(_ offset: Int, from caret: Int) -> Int {
-        let last = (0...text.utf16.count).last { field($0) <= offset } ?? 0
+        let last = (0...text.utf16.count).last { field($0, caret: false) <= offset } ?? 0
         let units = Array(text.utf16)
         guard let lines else { return last }
         func prefix(_ start: Int) -> Sim.ListLine {
@@ -816,6 +876,12 @@ struct ChromiumParagraphs {
         guard last < units.count, units[last] == 10, caret <= last else { return last }
         let marker = prefix(last + 1).marker?.utf16.count ?? 0
         return marker > 0 && offset >= field(last + 1) - marker ? last + 1 : last
+    }
+
+    /// Offsets of the chips, which keys cross in one step.
+    var atoms: Set<Int> {
+        guard lines != nil else { return [] }
+        return Set(text.utf16.enumerated().filter { $0.element == Self.chip }.map(\.offset))
     }
 
     /// `Snapshotter.paragraphSide`: a paragraph's start, empty or not, reads as the start.

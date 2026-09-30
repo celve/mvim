@@ -84,7 +84,7 @@ public struct EmptyBlockScan<Node> {
                 guard hit.start == b else { return .text(end: b + 1) }
                 guard hit.index > 0 else { return .line }
                 guard spend(1), let previous = block(siblings[hit.index - 1]) else { return nil }
-                // After a chip it is inline: the separator Linear puts there while the caret is after the chip (LIN-1652).
+                // After a chip it is the image Linear puts there while the caret is beside it (LIN-1652).
                 if previous.subrole == "AXApplicationGroup" { return .text(end: b + 1) }
                 return previous.role == "AXListMarker" ? .item : .line
             }

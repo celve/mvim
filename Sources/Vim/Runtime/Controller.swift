@@ -56,8 +56,8 @@ public final class Controller {
     /// The bound field's empty paragraphs, found again when its text changes.
     private var emptyParagraphs: EmptyParagraphs.Memo?
 
-    /// Its list markers, found again the same way.
-    private var listMarkers: UnreachableLines.Memo?
+    /// Its list markers and chips, found again the same way.
+    private var unreachable: UnreachableLines.Memo?
 
     /// Per-rung evidence this process, stored with the read model.
     private var tallies: [String: Tally] = [:]
@@ -282,7 +282,7 @@ public final class Controller {
         if transition != .sameElement {
             sampling = OffsetsSampling()
             emptyParagraphs = nil
-            listMarkers = nil
+            unreachable = nil
         }
         binding = new
         Diag.bind(tracker.epoch, transition, new)
@@ -337,16 +337,16 @@ public final class Controller {
             model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
             sampling: sampling,
             known: emptyParagraphs,
-            knownMarkers: listMarkers
+            knownUnreachable: unreachable
         )
         if reading.emptyParagraphs != emptyParagraphs, let memo = reading.emptyParagraphs {
             Diag.emptyParagraphs(tracker.epoch, commandSeq, memo)
         }
         emptyParagraphs = reading.emptyParagraphs
-        if reading.listMarkers != listMarkers, let memo = reading.listMarkers {
-            Diag.listMarkers(tracker.epoch, commandSeq, memo)
+        if reading.unreachable != unreachable, let memo = reading.unreachable {
+            Diag.unreachable(tracker.epoch, commandSeq, memo)
         }
-        listMarkers = reading.listMarkers
+        unreachable = reading.unreachable
         if reading.sampled {
             sampling.sampled(markers: reading.markers, evidence: reading.observed.evidence, text: reading.reads.text,
                              plain: reading.reads.plain)

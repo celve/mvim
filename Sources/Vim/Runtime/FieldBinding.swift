@@ -103,8 +103,8 @@ public enum Snapshotter {
         public let reads: FieldReads
         /// This text's empty-paragraph discovery, to hand back next time; nil where none applies.
         public let emptyParagraphs: EmptyParagraphs.Memo?
-        /// This text's list-marker discovery, the same way.
-        public let listMarkers: UnreachableLines.Memo?
+        /// This text's list-marker and chip discovery, the same way.
+        public let unreachable: UnreachableLines.Memo?
     }
 
     public static func snapshot(
@@ -116,7 +116,7 @@ public enum Snapshotter {
         model: ReadModel = ReadModel(answer: .value),
         sampling: OffsetsSampling = OffsetsSampling(),
         known: EmptyParagraphs.Memo? = nil,
-        knownMarkers: UnreachableLines.Memo? = nil
+        knownUnreachable: UnreachableLines.Memo? = nil
     ) -> Reading {
         let blocks = AX.childCount(of: element)
         let (current, source) = model.reading(chromium: chromium, children: blocks.map { $0 > 0 } ?? true)
@@ -143,7 +143,7 @@ public enum Snapshotter {
             length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
         )
         var memo = known
-        var markerMemo = knownMarkers
+        var unreachable = knownUnreachable
         func take(_ need: FieldSnapshot.Need) {
             switch need {
             case .side(let end):
@@ -153,11 +153,11 @@ public enum Snapshotter {
             case .emptyParagraphs(let value, let markers):
                 let found = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)?.found
                 memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
-            case .listMarkers(let value, let markers, let candidates):
-                let found = ListMarkerDiscovery.found(
+            case .unreachable(let value, let markers, let candidates):
+                let found = UnreachableDiscovery.found(
                     in: element, markers: markers, candidates: candidates, budget: UnreachableLines.readBudget
                 )?.found
-                markerMemo = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
+                unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
             }
         }
         if let marked {
@@ -172,12 +172,12 @@ public enum Snapshotter {
         let built = FieldSnapshot.Step.run(taking: take) {
             FieldSnapshot.build(
                 snapshotReads, capabilities: capabilities, answer: observed.after, anchor: anchor, cursor: cursor, memo: memo,
-                listMarkers: markerMemo
+                unreachable: unreachable
             )
         }
         return Reading(
             snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: snapshotReads.field,
-            emptyParagraphs: built.memo, listMarkers: built.listMarkers
+            emptyParagraphs: built.memo, unreachable: built.unreachable
         )
     }
 

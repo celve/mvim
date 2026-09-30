@@ -13,18 +13,16 @@ enum EmptyParagraphDiscovery {
     }
 }
 
-/// `ListMarkerScan` over a Chromium field's accessibility tree, for `UnreachableLines.fold` (LIN-1652).
-enum ListMarkerDiscovery {
-    /// Which candidates are list markers and where their lists end; nil on a failed read or past `budget` reads.
+/// `UnreachableScan` over a Chromium field's accessibility tree, for `UnreachableLines.fold` (LIN-1652).
+enum UnreachableDiscovery {
+    /// Nil on a failed read or past `budget` reads.
     static func found(
-        in element: AXUIElement, markers: String, candidates: [Range<Int>], budget: Int
+        in element: AXUIElement, markers: String, candidates: UnreachableLines.Candidates, budget: Int
     ) -> (found: UnreachableLines.Found, reads: Int)? {
-        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], listEnds: []), 0) }
+        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), 0) }
         guard let tree = FieldTree(element, markers: markers) else { return nil }
-        var scan = ListMarkerScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, candidates: candidates).map {
-            (UnreachableLines.Found(markers: $0.markers, listEnds: $0.listEnds), scan.reads + 2)
-        }
+        var scan = UnreachableScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
+        return scan.run(blocks: tree.blocks, candidates: candidates).map { ($0, scan.reads + 2) }
     }
 }
 

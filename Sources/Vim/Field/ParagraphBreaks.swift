@@ -3,17 +3,28 @@ public struct ParagraphBreaks: Equatable, Sendable {
     /// Ascending `AXValue` offsets of the generated `\n`s.
     public let offsets: [Int]
 
-    /// Field text the model folds out, as no caret reaches it (LIN-1652); ascending, one run per offset.
+    /// Field text the model folds out, as no caret reaches it (LIN-1652); ascending.
     public let hidden: [Hidden]
 
     /// Stands before the model character at `at`; an empty run marks a folded line that held no field text.
     public struct Hidden: Equatable, Sendable {
         public let at: Int
         public let text: String
+        public let kind: Kind
 
-        public init(at: Int, text: String) {
+        public enum Kind: Equatable, Sendable {
+            /// A list marker or a text-less block, which the caret passes.
+            case structure
+            /// The rest of an atom's text, such as a chip's label, whose first unit stands for it in the model.
+            case atom
+            /// A `<br>` ending a paragraph after a chip: a caret after the chip reads past it, a selection stops before it.
+            case trailingBreak
+        }
+
+        public init(at: Int, text: String, kind: Kind = .structure) {
             self.at = at
             self.text = text
+            self.kind = kind
         }
     }
 
@@ -71,7 +82,33 @@ public extension ParagraphBreaks {
     }
 
     func fieldRange(_ range: Range<Int>) -> Range<Int> {
-        fieldOffset(range.lowerBound)..<fieldOffset(range.upperBound)
+        guard !range.isEmpty else { return fieldOffset(range.lowerBound)..<fieldOffset(range.upperBound) }
+        func end(_ offset: Int) -> Int { fieldOffset(offset) - (endsBeforeBreak(offset) ? 1 : 0) }
+        return end(range.lowerBound)..<end(range.upperBound)
+    }
+
+    /// A trailing `<br>` at `offset`, which a caret there reads past and a selection's end there stops before.
+    func endsBeforeBreak(_ offset: Int) -> Bool {
+        hidden.contains { $0.at == offset && $0.kind == .trailingBreak }
+    }
+
+    /// The model character at `offset` stands for an atom, such as a chip, which keys cross in one step.
+    func isAtom(_ offset: Int) -> Bool {
+        hidden.contains { $0.at == offset + 1 && $0.kind == .atom }
+    }
+
+    /// Model offsets of the atoms.
+    var atoms: Set<Int> {
+        Set(hidden.filter { $0.kind == .atom }.map { $0.at - 1 })
+    }
+
+    /// `text` at `range` with each atom's whole text, as a register keeps it.
+    func withAtoms(_ text: String, at range: Range<Int>) -> String {
+        let runs = hidden.filter { $0.kind == .atom && range.lowerBound < $0.at && $0.at <= range.upperBound }
+        guard !runs.isEmpty else { return text }
+        var units = Array(text.utf16)
+        for run in runs.reversed() { units.insert(contentsOf: run.text.utf16, at: run.at - range.lowerBound) }
+        return String(decoding: units, as: UTF16.self)
     }
 
     /// The `AXValue` offsets a field offset names: two at a paragraph boundary.
@@ -126,7 +163,7 @@ public extension ParagraphBreaks {
     /// `text` at `range` without its breaks and with its hidden runs, as `AXSelectedText` reads it.
     func fieldText(_ text: String, at range: Range<Int>) -> String {
         let inside = Set(offsets.filter { range.contains($0) }.map { $0 - range.lowerBound })
-        let runs = hidden.filter { range.lowerBound < $0.at && $0.at <= range.upperBound && !$0.text.isEmpty }
+        let runs = hidden.filter { covered($0, by: range) && !$0.text.isEmpty }
         guard !inside.isEmpty || !runs.isEmpty else { return text }
         var units: [UInt16] = []
         var next = runs.makeIterator()
@@ -145,8 +182,7 @@ public extension ParagraphBreaks {
         return String(decoding: units, as: UTF16.self)
     }
 
-    /// The breaks after an edit, counting each typed `\n` as a new paragraph; `keepingCovered` moves the last list marker it
-    /// covers to its start (LIN-1652).
+    /// The breaks after an edit, a typed `\n` a new paragraph; `keepingCovered` moves the last marker it covers to its start.
     func replacing(_ range: Range<Int>, with replacement: String, keepingCovered: Bool = false) -> ParagraphBreaks {
         let delta = replacement.utf16.count - range.count
         var result = offsets.filter { $0 < range.lowerBound }
@@ -154,15 +190,36 @@ public extension ParagraphBreaks {
             result.append(range.lowerBound + index)
         }
         result += offsets.filter { $0 >= range.upperBound }.map { $0 + delta }
-        var kept = hidden.filter { $0.at <= range.lowerBound }
-        let covered = hidden.filter { range.lowerBound < $0.at && $0.at <= range.upperBound && !$0.text.isEmpty }
-        if keepingCovered, let marker = covered.last { kept.append(Hidden(at: range.lowerBound, text: marker.text)) }
-        kept += hidden.filter { $0.at > range.upperBound }.map { Hidden(at: $0.at + delta, text: $0.text) }
-        return ParagraphBreaks(offsets: result, hidden: kept)
+        var kept: [Hidden] = []
+        var moved: [Hidden] = []
+        var marker: Hidden?
+        // A chip's `<br>` goes with the chip.
+        let chips = Set(hidden.filter { $0.kind == .atom && covered($0, by: range) }.map(\.at))
+        for run in hidden {
+            if covered(run, by: range) || run.kind == .trailingBreak && chips.contains(run.at) {
+                if run.kind == .structure, !run.text.isEmpty { marker = run }
+            } else if run.at < range.lowerBound || run.at == range.lowerBound && run.kind != .trailingBreak {
+                kept.append(run)
+            } else {
+                moved.append(Hidden(at: run.at + delta, text: run.text, kind: run.kind))
+            }
+        }
+        if keepingCovered, let marker { kept.append(Hidden(at: range.lowerBound, text: marker.text)) }
+        return ParagraphBreaks(offsets: result, hidden: kept + moved)
     }
 
     /// Whether an edit of `range` takes a hidden run with it.
     func covers(_ range: Range<Int>) -> Bool {
-        hidden.contains { range.lowerBound < $0.at && $0.at <= range.upperBound }
+        hidden.contains { covered($0, by: range) }
+    }
+
+    /// A trailing `<br>` goes with the model's `\n` at its offset; other runs with the character before theirs.
+    private func covered(_ run: Hidden, by range: Range<Int>) -> Bool {
+        run.kind == .trailingBreak ? range.contains(run.at) : range.lowerBound < run.at && run.at <= range.upperBound
+    }
+
+    /// Whether `range` holds an atom, which typed text cannot rebuild.
+    func coversAtom(_ range: Range<Int>) -> Bool {
+        hidden.contains { $0.kind == .atom && range.lowerBound < $0.at && $0.at <= range.upperBound }
     }
 }

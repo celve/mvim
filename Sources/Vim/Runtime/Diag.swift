@@ -194,9 +194,9 @@ enum Diag {
         gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) empty-paragraphs \(found, privacy: .public)")
     }
 
-    static func listMarkers(_ epoch: UInt64, _ seq: UInt64, _ memo: UnreachableLines.Memo) {
-        let found = memo.found.map { "found=\($0.markers.count)" } ?? "failed"
-        gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) list-markers \(found, privacy: .public)")
+    static func unreachable(_ epoch: UInt64, _ seq: UInt64, _ memo: UnreachableLines.Memo) {
+        let found = memo.found.map { "markers=\($0.markers.count) chips=\($0.chips.count)" } ?? "failed"
+        gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) unreachable \(found, privacy: .public)")
     }
 
     /// A completed command verify-before-run threw away; one form eats its final key.

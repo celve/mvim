@@ -3691,7 +3691,7 @@ precondition(EmptyParagraphs.chromium(blankParagraphs) == (blankValue, blankMark
 var blankNeeds: [FieldSnapshot.Need] = []
 func blankBuild(
     memo known: EmptyParagraphs.Memo?
-) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, listMarkers: UnreachableLines.Memo?) {
+) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?) {
     var reads = FieldSnapshot.Reads(
         field: FieldReads(text: blankValue, plain: 43..<43, markers: MarkerReads(
             breaks: blankAligned, value: blankAligned.valueRange(43..<43) { _ in .start(skipping: 0) }
@@ -3706,7 +3706,7 @@ func blankBuild(
         case .emptyParagraph: reads.inEmptyParagraph = true
         case .emptyParagraphs(let value, let markers):
             memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: reads.blocks, found: [43])
-        case .listMarkers: preconditionFailure("no line is shaped like a marker")
+        case .unreachable: preconditionFailure("no line is shaped like a marker or a chip")
         }
     }) {
         FieldSnapshot.build(reads, capabilities: readProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo)
@@ -3925,6 +3925,20 @@ precondition(hiddenMarker.replacing(0..<3, with: "") == ParagraphBreaks(offsets:
 precondition(hiddenMarker.replacing(0..<3, with: "", keepingCovered: true) == ParagraphBreaks(hidden: [.init(at: 0, text: "1.")]))
 precondition(hiddenMarker.covers(1..<3) && !hiddenMarker.covers(3..<5))
 
+// "T[abc]" then "Next": the chip is one model character, and the <br> after it is the model's newline.
+let chipBreaks = ParagraphBreaks(offsets: [2], hidden: [
+    .init(at: 2, text: "bc", kind: .atom), .init(at: 2, text: "\n", kind: .trailingBreak),
+])
+precondition((0...7).map(chipBreaks.fieldOffset) == [0, 1, 5, 5, 6, 7, 8, 9])
+precondition(chipBreaks.fieldRange(1..<2) == 1..<4 && chipBreaks.fieldRange(1..<3) == 1..<5 && chipBreaks.fieldRange(2..<3) == 4..<5,
+             "a caret after the chip reads past its <br>, a selection's end stops before it")
+precondition(chipBreaks.fieldText("a", at: 1..<2) == "abc" && chipBreaks.fieldText("a\n", at: 1..<3) == "abc\n")
+precondition(chipBreaks.valueRange(5..<5) { _ in .end } == 2..<2 && chipBreaks.valueRange(5..<5) { _ in .start(skipping: 0) } == 3..<3)
+precondition(chipBreaks.valueRange(1..<4) { _ in nil } == 1..<2)
+precondition(chipBreaks.isAtom(1) && !chipBreaks.isAtom(0) && chipBreaks.atoms == [1])
+precondition(chipBreaks.withAtoms("Ta\nN", at: 0..<4) == "Tabc\nN" && chipBreaks.coversAtom(0..<2) && !chipBreaks.coversAtom(2..<4))
+precondition(chipBreaks.replacing(1..<2, with: "") == ParagraphBreaks(offsets: [1]), "deleting the chip takes its <br>")
+
 /// `path/role/start/end` per node, roles abbreviated, as softlash/LIN-1652 scripts/list-probe prints a tree.
 func fakeTree(_ spec: String) -> [FakeNode] {
     let roles: [Character: (String, String?)] = [
@@ -3944,27 +3958,22 @@ func fakeTree(_ spec: String) -> [FakeNode] {
     }
     return (0...).prefix { nodes[[$0]] != nil }.map { build([$0]) }
 }
-func listScanned(
-    _ blocks: [FakeNode], _ candidates: [Range<Int>], budget: Int = UnreachableLines.readBudget
+func unreachableScanned(
+    _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget
 ) -> UnreachableLines.Found? {
-    var scan = ListMarkerScan<FakeNode>(budget: budget, block: { node in
+    var scan = UnreachableScan<FakeNode>(budget: budget, block: { node in
         node.fails ? nil : EmptyBlockScan.Block(role: node.role, subrole: node.subrole, children: node.children)
     }, offset: { node, end in end ? node.end : node.start })
-    return scan.run(blocks: blocks, candidates: candidates).map { UnreachableLines.Found(markers: $0.markers, listEnds: $0.listEnds) }
+    return scan.run(blocks: blocks, candidates: candidates)
 }
-/// The fold of a probed field, after #24's restore, with the markers the tree confirms.
 func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLines.Model {
     let plain = MarkerText.plain(raw)
     let aligned = ParagraphBreaks(value: value, fieldText: plain)!
-    let found = scanned(tree, plain)!
-    let restored = EmptyParagraphs.restore(value: value, fieldText: plain, aligned: aligned, found: found)!
+    let restored = EmptyParagraphs.restore(value: value, fieldText: plain, aligned: aligned, found: scanned(tree, plain)!)!
     let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks)
-    let markers = listScanned(tree, candidates)!
-    let trailing = UnreachableLines.trailingBreaks(in: plain, found: markers, empty: Set(found))
-    return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw, markers: Set(markers.markers),
-                                 trailing: trailing)
+    return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw,
+                                 found: unreachableScanned(tree, candidates)!)
 }
-/// Every caret reads back as itself through the field offset and side Chromium gives it.
 func roundTrips(_ model: UnreachableLines.Model) -> Bool {
     let units = Array(model.text.utf16)
     return (0...units.count).allSatisfy { caret in
@@ -4052,16 +4061,17 @@ let dia2Tree = fakeTree("""
 let dia1Plain = MarkerText.plain(dia1Raw)
 let dia1Aligned = ParagraphBreaks(value: dia1Value, fieldText: dia1Plain)!
 let dia1Candidates = UnreachableLines.candidates(text: dia1Value, breaks: dia1Aligned)
-precondition(dia1Candidates.map(\.lowerBound) == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 353, 394, 395, 407, 420])
-precondition(listScanned(dia1Tree, dia1Candidates)?.markers == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 395, 407, 420],
+precondition(dia1Candidates.markers.map(\.lowerBound) == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 353, 394, 395, 407, 420])
+precondition(dia1Candidates.chips == [252..<310])
+let dia1Found = unreachableScanned(dia1Tree, dia1Candidates)!
+precondition(dia1Found.markers == [52, 66, 80, 101, 122, 179, 190, 208, 229, 311, 395, 407, 420],
              "the paragraphs that only read 1. and • are no list's")
-precondition(listScanned(dia1Tree, dia1Candidates)?.listEnds == [122, 138, 229, 322, 436])
+precondition(dia1Found.chips == [UnreachableLines.Chip(range: 252..<310, paragraph: 230..<311)])
 let dia1Lines = [
     "Top paragraph of the LIN-1652 disposable list probe.", "Numbered one", "Numbered two", "Nested numbered one",
     "Nested numbered two", "Numbered three", "Middle paragraph after the numbered list.", "Bullet one", "Nested bullet one",
-    "Double nested bullet", "Bullet with a mention ", "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)",
-    "Bullet two", "Heading two", "To-do open", "To-do done", "1.", "Paragraph after a literal one-dot line.", "\u{2022}",
-    "Ninth item", "Tenth item", "Eleventh item", "Last paragraph.",
+    "Double nested bullet", "Bullet with a mention \u{2060}", "Bullet two", "Heading two", "To-do open", "To-do done", "1.",
+    "Paragraph after a literal one-dot line.", "\u{2022}", "Ninth item", "Tenth item", "Eleventh item", "Last paragraph.",
 ]
 let dia1Model = folded(dia1Value, dia1Raw, dia1Tree)
 precondition(dia1Model.text == dia1Lines.joined(separator: "\n"), "the lines a caret reaches, as Linear shows them")
@@ -4075,33 +4085,137 @@ let dia2Model = folded(dia2Value, dia2Raw, dia2Tree)
 precondition(dia2Model.text == [
     "Second probe of LIN-1652 list shapes.", "Bullet before empty", "", "Bullet after empty", "One", "", "Three",
     "To-do before empty", "", "To-do after empty", "Line one of a soft break", "\u{200B}line two of a soft break",
-    "Para one of a loose item", "Para two of a loose item", "Before ",
-    "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)", " after the chip",
-    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim", "",
+    "Para one of a loose item", "Para two of a loose item", "Before \u{2060} after the chip", "\u{2060}", "",
     "Quoted paragraph", "Quoted bullet", "Heading between", "Closing paragraph.",
-].joined(separator: "\n"), "an empty item keeps its line, and a quote's list folds too")
+].joined(separator: "\n"), "an empty item keeps its line, a chip with an icon is one character, and a quote's list folds too")
 precondition(dia2Model.breaks.fieldText(dia2Model.text, at: 0..<dia2Model.text.utf16.count) == dia2Plain)
 precondition(roundTrips(dia2Model))
 
-let noMarkers = UnreachableLines.fold(text: dia1Value, breaks: dia1Aligned, raw: dia1Raw, markers: [])
-precondition(noMarkers.text.contains("\n1.\nNumbered one") && !noMarkers.text.contains("To-do open\n\n"),
+// Chips inside, ending, starting and alone in paragraphs and items.
+let dia6Value = [
+    "Chip probe opening paragraph.", "Before ",
+    "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)", " after the chip.",
+    "Text then a chip ",
+    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)", " chip then text.",
+    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    "\u{2022}", "Item before ", "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)",
+    " and after", "\u{2022}", "Plain item", "\u{2022}",
+    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    " chip first item", "Closing paragraph of the chip probe."
+].joined(separator: "\n")
+let dia6Raw = "Chip probe opening paragraph.Before \u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macboo"
+    + "k14 logs) after the chip.Text then a chip \u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots wit"
+    + "h one pure builder shared by the runtime and the Sim\n\u{2060}\u{00A0}LIN-1645 Why j/k always beeps"
+    + " in Linear (macbook14 logs) chip then text.\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots wi"
+    + "th one pure builder shared by the runtime and the Sim\n\u{2022}Item before \u{2060}\u{00A0}LIN-1645"
+    + " Why j/k always beeps in Linear (macbook14 logs) and after\u{2022}Plain item\u{2022}\u{2060}\u{00A0}"
+    + "LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim chip "
+    + "first itemClosing paragraph of the chip probe."
+let dia6Tree = fakeTree("""
+0/G/0/29 0.0/T/0/29 1/G/29/110 1.0/T/29/36 1.1/A/36/94 1.1.0/K/36/94 1.1.0.0/T/36/37 1.1.0.1/T/37/38
+1.1.0.2/T/38/46 1.1.0.3/T/46/47 1.1.0.4/T/47/94 1.2/T/94/110 2/G/110/223 2.0/T/110/127 2.1/A/127/222
+2.1.0/K/127/222 2.1.0.0/T/127/128 2.1.0.1/T/128/129 2.1.0.2/T/129/137 2.1.0.3/T/137/138 2.1.0.4/T/138/222
+3/G/223/297 3.0/A/223/281 3.0.0/K/223/281 3.0.0.0/T/223/224 3.0.0.1/T/224/225 3.0.0.2/T/225/233
+3.0.0.3/T/233/234 3.0.0.4/T/234/281 3.1/T/281/297 4/G/297/393 4.0/A/297/392 4.0.0/K/297/392 4.0.0.0/T/297/298
+4.0.0.1/T/298/299 4.0.0.2/T/299/307 4.0.0.3/T/307/308 4.0.0.4/T/308/392 5/L/393/597 5.0/G/393/474
+5.0.0/G/393/394 5.0.0.0/T/393/394 5.0.1/G/394/474 5.0.1.0/T/394/406 5.0.1.1/A/406/464 5.0.1.1.0/K/406/464
+5.0.1.1.0.0/T/406/407 5.0.1.1.0.1/T/407/408 5.0.1.1.0.2/T/408/416 5.0.1.1.0.3/T/416/417 5.0.1.1.0.4/T/417/464
+5.0.1.2/T/464/474 5.1/G/474/485 5.1.0/G/474/475 5.1.0.0/T/474/475 5.1.1/G/475/485 5.1.1.0/T/475/485
+5.2/G/485/597 5.2.0/G/485/486 5.2.0.0/T/485/486 5.2.1/G/486/597 5.2.1.0/A/486/581 5.2.1.0.0/K/486/581
+5.2.1.0.0.0/T/486/487 5.2.1.0.0.1/T/487/488 5.2.1.0.0.2/T/488/496 5.2.1.0.0.3/T/496/497 5.2.1.0.0.4/T/497/581
+5.2.1.1/T/581/597 6/G/597/633 6.0/T/597/633
+""")
+let dia6Plain = MarkerText.plain(dia6Raw)
+let dia6Candidates = UnreachableLines.candidates(text: dia6Value, breaks: ParagraphBreaks(value: dia6Value, fieldText: dia6Plain)!)
+precondition(dia6Candidates.chips.map(\.lowerBound) == [36, 127, 223, 297, 406, 486])
+let dia6Found = unreachableScanned(dia6Tree, dia6Candidates)!
+precondition(dia6Found.markers == [393, 474, 485])
+precondition(dia6Found.chips.map(\.paragraph) == [29..<110, 110..<223, 223..<297, 297..<393, 394..<474, 486..<597])
+let dia6Model = folded(dia6Value, dia6Raw, dia6Tree)
+precondition(dia6Model.text == [
+    "Chip probe opening paragraph.", "Before \u{2060} after the chip.", "Text then a chip \u{2060}", "\u{2060} chip then text.",
+    "\u{2060}", "Item before \u{2060} and after", "Plain item", "\u{2060} chip first item", "Closing paragraph of the chip probe.",
+].joined(separator: "\n"))
+precondition(dia6Model.breaks.fieldText(dia6Model.text, at: 0..<dia6Model.text.utf16.count) == dia6Plain)
+precondition(roundTrips(dia6Model))
+precondition(dia6Model.breaks.atoms == [37, 72, 74, 92, 106, 129])
+
+// A space after a chip shares the chip's line.
+let dia7Value = [
+    "Space probe opening paragraph.", "Two chips ",
+    "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs) ",
+    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    " end.", "Chip then space ", "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)",
+    "\u{2022}", "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    "\u{2022}", "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs) ",
+    "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim",
+    "\u{2022}", "Plain item", "Closing paragraph of the space probe.",
+].joined(separator: "\n")
+let dia7Raw = "Space probe opening paragraph.Two chips \u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear "
+    + "(macbook14 logs) \u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder sha"
+    + "red by the runtime and the Sim end.Chip then space \u{2060}\u{00A0}LIN-1645 Why j/k always beeps"
+    + " in Linear (macbook14 logs)\n\u{2022}\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with "
+    + "one pure builder shared by the runtime and the Sim\n\u{2022}\u{2060}\u{00A0}LIN-1645 Why j/k alw"
+    + "ays beeps in Linear (macbook14 logs) \u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with "
+    + "one pure builder shared by the runtime and the Sim\n\u{2022}Plain itemClosing paragraph of the s"
+    + "pace probe."
+let dia7Tree = fakeTree("""
+0/G/0/30 0.0/T/0/30 1/G/30/199 1.0/T/30/40 1.1/A/40/98 1.1.0/K/40/98 1.1.0.0/T/40/41 1.1.0.1/T/41/42
+1.1.0.2/T/42/50 1.1.0.3/T/50/51 1.1.0.4/T/51/98 1.2/T/98/99 1.3/A/99/194 1.3.0/K/99/194 1.3.0.0/T/99/100
+1.3.0.1/T/100/101 1.3.0.2/T/101/109 1.3.0.3/T/109/110 1.3.0.4/T/110/194 1.4/T/194/199 2/G/199/274 2.0/T/199/215
+2.1/A/215/273 2.1.0/K/215/273 2.1.0.0/T/215/216 2.1.0.1/T/216/217 2.1.0.2/T/217/225 2.1.0.3/T/225/226
+2.1.0.4/T/226/273 3/L/274/538 3.0/G/274/371 3.0.0/G/274/275 3.0.0.0/T/274/275 3.0.1/G/275/371 3.0.1.0/A/275/370
+3.0.1.0.0/K/275/370 3.0.1.0.0.0/T/275/276 3.0.1.0.0.1/T/276/277 3.0.1.0.0.2/T/277/285 3.0.1.0.0.3/T/285/286
+3.0.1.0.0.4/T/286/370 3.1/G/371/527 3.1.0/G/371/372 3.1.0.0/T/371/372 3.1.1/G/372/527 3.1.1.0/A/372/430
+3.1.1.0.0/K/372/430 3.1.1.0.0.0/T/372/373 3.1.1.0.0.1/T/373/374 3.1.1.0.0.2/T/374/382 3.1.1.0.0.3/T/382/383
+3.1.1.0.0.4/T/383/430 3.1.1.1/T/430/431 3.1.1.2/A/431/526 3.1.1.2.0/K/431/526 3.1.1.2.0.0/T/431/432
+3.1.1.2.0.1/T/432/433 3.1.1.2.0.2/T/433/441 3.1.1.2.0.3/T/441/442 3.1.1.2.0.4/T/442/526 3.2/G/527/538
+3.2.0/G/527/528 3.2.0.0/T/527/528 3.2.1/G/528/538 3.2.1.0/T/528/538 4/G/538/575 4.0/T/538/575
+""")
+let dia7Plain = MarkerText.plain(dia7Raw)
+let dia7Candidates = UnreachableLines.candidates(text: dia7Value, breaks: ParagraphBreaks(value: dia7Value, fieldText: dia7Plain)!)
+let dia7Found = unreachableScanned(dia7Tree, dia7Candidates)!
+precondition(dia7Found.chips.map(\.range) == [40..<98, 99..<194, 215..<273, 275..<370, 372..<430, 431..<526])
+let dia7Model = folded(dia7Value, dia7Raw, dia7Tree)
+precondition(dia7Model.text == [
+    "Space probe opening paragraph.", "Two chips \u{2060} \u{2060} end.", "Chip then space \u{2060}", "\u{2060}",
+    "\u{2060} \u{2060}", "Plain item", "Closing paragraph of the space probe.",
+].joined(separator: "\n"))
+precondition(dia7Model.breaks.fieldText(dia7Model.text, at: 0..<dia7Model.text.utf16.count) == dia7Plain)
+precondition(roundTrips(dia7Model))
+precondition(dia7Model.breaks.atoms == [41, 43, 66, 68, 70, 72])
+
+let noUnreachable = UnreachableLines.Found(markers: [], chips: [])
+let dia1Unfound = UnreachableLines.fold(text: dia1Value, breaks: dia1Aligned, raw: dia1Raw, found: noUnreachable)
+precondition(dia1Unfound.text.contains("\n1.\nNumbered one") && !dia1Unfound.text.contains("To-do open\n\n"),
              "without discovery markers stay lines, and leaves still fold")
-precondition(UnreachableLines.fold(text: "ab\ncd", breaks: ParagraphBreaks(offsets: [2]), raw: "abcd", markers: [])
+precondition(UnreachableLines.fold(text: "ab\ncd", breaks: ParagraphBreaks(offsets: [2]), raw: "abcd", found: noUnreachable)
              == UnreachableLines.Model(text: "ab\ncd", breaks: ParagraphBreaks(offsets: [2]), folded: 0), "nothing to fold")
+let chipLast = UnreachableLines.fold(text: "a\n\u{2022}\nChip\n", breaks: ParagraphBreaks(offsets: [1, 3]), raw: "a\u{2022}Chip\n",
+                                     found: UnreachableLines.Found(markers: [1], chips: [.init(range: 2..<6, paragraph: 2..<7)]))
+precondition(chipLast.text == "a\nC" && chipLast.breaks.fieldOffset(3) == 7, "a <br> ending the field leaves no line")
 
 let todoOne = FakeNode("AXList", "AXContentList", 0, 2, [FakeNode("AXGroup", nil, 0, 2, [
     FakeNode("AXGroup", nil, 0, 0, [FakeNode("AXCheckBox", nil, 0, 0)]), paragraph(0, 2),
 ])])
-precondition(listScanned([todoOne], [0..<2])?.markers == [], "a to-do reading 1. has a checkbox where a marker would be")
+precondition(unreachableScanned([todoOne], UnreachableLines.Candidates(markers: [0..<2], chips: []))?.markers == [],
+             "a to-do reading 1. has a checkbox where a marker would be")
+precondition(unreachableScanned(dia6Tree, UnreachableLines.Candidates(markers: [], chips: [29..<36]))?.chips == [],
+             "text is no chip")
 dia1Tree[1].children[0].fails = true
-precondition(listScanned(dia1Tree, dia1Candidates) == nil, "a failed read fails the scan")
+precondition(unreachableScanned(dia1Tree, dia1Candidates) == nil, "a failed read fails the scan")
 dia1Tree[1].children[0].fails = false
-precondition(listScanned(dia1Tree, dia1Candidates, budget: 60) == nil, "past its budget")
+precondition(unreachableScanned(dia1Tree, dia1Candidates, budget: 60) == nil, "past its budget")
+let separated = FakeNode("AXGroup", nil, 2, 11, [FakeNode("AXGroup", "AXApplicationGroup", 2, 10, [text(2, 10)]),
+                                                 FakeNode("AXGroup", "AXEmptyGroup", 10, 10)])
+precondition(scanned([paragraph(0, 1), FakeNode("AXList", "AXContentList", 1, 11, [FakeNode("AXGroup", nil, 1, 11, [
+    FakeNode("AXGroup", nil, 1, 2, [text(1, 2)]), separated,
+])])], "a\u{2022}Chip one\n") == [], "the image after a chip is no empty paragraph")
 
-// The snapshot of that field with the caret at `Numbered two`, as the runtime builds it.
 var dia1Needs: [FieldSnapshot.Need] = []
-func dia1Build(caret field: Int, side: ParagraphBreaks.Side = .start(skipping: 0), listMarkers known: UnreachableLines.Memo?)
-    -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, listMarkers: UnreachableLines.Memo?) {
+func dia1Build(caret field: Int, side: ParagraphBreaks.Side = .start(skipping: 0), unreachable known: UnreachableLines.Memo?)
+    -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?) {
     var reads = FieldSnapshot.Reads(
         field: FieldReads(text: dia1Value, plain: field..<field, markers: MarkerReads(
             breaks: dia1Aligned, value: dia1Aligned.valueRange(field..<field) { _ in side }
@@ -4109,7 +4223,7 @@ func dia1Build(caret field: Int, side: ParagraphBreaks.Side = .start(skipping: 0
         length: dia1Value.utf16.count, webContent: true, blocks: dia1Tree.count, marked: field..<field, markerText: dia1Raw
     )
     var memo: EmptyParagraphs.Memo?
-    var markers = known
+    var unreachable = known
     return FieldSnapshot.Step.run(taking: { need in
         dia1Needs.append(need)
         switch need {
@@ -4117,30 +4231,30 @@ func dia1Build(caret field: Int, side: ParagraphBreaks.Side = .start(skipping: 0
         case .emptyParagraph: reads.inEmptyParagraph = false
         case .emptyParagraphs(let value, let raw):
             memo = EmptyParagraphs.Memo(value: value, markers: raw, blocks: reads.blocks, found: scanned(dia1Tree, dia1Plain))
-        case .listMarkers(let value, let raw, let candidates):
-            markers = UnreachableLines.Memo(value: value, markers: raw, blocks: reads.blocks,
-                                            found: listScanned(dia1Tree, candidates))
+        case .unreachable(let value, let raw, let candidates):
+            unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: reads.blocks,
+                                                found: unreachableScanned(dia1Tree, candidates))
         }
     }) {
         FieldSnapshot.build(reads, capabilities: keyProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
-                            listMarkers: markers)
+                            unreachable: unreachable)
     }
 }
-let dia1Built = dia1Build(caret: 68, listMarkers: nil)
-precondition(dia1Needs.contains(.listMarkers(value: dia1Value, markers: dia1Raw, candidates: dia1Candidates)))
+let dia1Built = dia1Build(caret: 68, unreachable: nil)
+precondition(dia1Needs.contains(.unreachable(value: dia1Value, markers: dia1Raw, candidates: dia1Candidates)))
 precondition(dia1Built.snapshot.text == dia1Model.text && dia1Built.snapshot.breaks == dia1Model.breaks)
-precondition(dia1Built.snapshot.selection == 66..<66 && dia1Built.snapshot.foldedLength == dia1Model.folded,
-             "the caret past 2. is at Numbered two's start")
+precondition(dia1Built.snapshot.selection == 66..<66 && dia1Built.snapshot.foldedLength == dia1Model.folded
+             && dia1Built.snapshot.holdsChips, "the caret past 2. is at Numbered two's start")
 dia1Needs = []
-let dia1Rebuilt = dia1Build(caret: 68, listMarkers: dia1Built.listMarkers)
-precondition(dia1Rebuilt.snapshot == dia1Built.snapshot && !dia1Needs.contains { if case .listMarkers = $0 { true } else { false } },
+let dia1Rebuilt = dia1Build(caret: 68, unreachable: dia1Built.unreachable)
+precondition(dia1Rebuilt.snapshot == dia1Built.snapshot && !dia1Needs.contains { if case .unreachable = $0 { true } else { false } },
              "a memo that holds spares discovery")
-precondition(dia1Build(caret: 66, side: .end, listMarkers: dia1Built.listMarkers).snapshot.selection == 65..<65,
+precondition(dia1Build(caret: 66, side: .end, unreachable: dia1Built.unreachable).snapshot.selection == 65..<65,
              "a caret before a marker is at the line above's end")
-let dia1Failed = dia1Build(caret: 68, listMarkers: UnreachableLines.Memo(
+let dia1Failed = dia1Build(caret: 68, unreachable: UnreachableLines.Memo(
     value: dia1Value, markers: dia1Raw, blocks: dia1Tree.count, found: nil
 )).snapshot
-precondition(dia1Failed.text == noMarkers.text, "failed discovery keeps the markers' lines")
+precondition(dia1Failed.text == dia1Unfound.text, "failed discovery keeps the markers' lines")
 
 func dia1Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlan {
     let snapshot = FieldSnapshot(
@@ -4159,29 +4273,62 @@ precondition(settleTraces(dia1Count).last == "sel=105..105 len=491", "3j counts 
 let dia1dd = dia1Planning("dd", caret: 53)
 precondition(checkedTexts(dia1dd) == ["Numbered one2."], "AXSelectedText runs through the next item's marker")
 precondition(settleTraces(dia1dd).last == "soft sel=54..54 len=nil", "a list renumbers, so the length goes unchecked")
-let dia1Written = dia1Planning("$", caret: 0, profile: writeKeys)
-precondition(dia1Written.steps.prefix(2) == [.setSelection(54..<54), .press(.left, count: 1)],
-             "a write at the marker lands on the side the caret came from, so the line's end is reached from past it")
+precondition(dia1Planning("$", caret: 0, profile: writeKeys).steps.prefix(2) == [.setSelection(51..<51), .press(.right, count: 1)],
+             "a write at a list marker lands by where the caret was, so the line's end is reached from inside it")
 
-// A Sim of Linear's lists moves as Vim does over the lines Linear shows, in both lanes.
-let linearDoc: [(String, String?, Int)] = [
-    ("Top paragraph", nil, 0), ("Numbered one", "1.", 0), ("Numbered two", "2.", 0), ("Nested numbered", "a.", 0),
-    ("Numbered three", "3.", 0), ("Middle paragraph", nil, 0), ("Bullet one", "\u{2022}", 0),
-    ("Nested bullet", "\u{25E6}", 0), ("\u{2060}\u{00A0}LIN-1645 Why j/k beeps", "\u{2022}", 1), ("", "\u{2022}", 0),
-    ("Bullet two", "\u{2022}", 0), ("Chores", nil, 2), ("A to-do item", nil, 2), ("", nil, 2), ("Last paragraph.", nil, 0),
+func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
+    let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,
+                                 breaks: dia6Model.breaks, foldedLength: dia6Model.folded, holdsChips: true)
+    return PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
+}
+let chipA = "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)"
+let chipB = "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim"
+precondition(dia6Planning("0", caret: 80, profile: writeKeys).plan.steps.prefix(2) == [.setSelection(281..<281), .press(.left, count: 1)],
+             "a caret written at a chip's start stops the next arrow, so a chip's start is reached from its end")
+precondition(dia6Planning("$", caret: 60, profile: writeKeys).plan.steps.first == .setSelection(222..<222),
+             "after a chip that ends its paragraph, the write goes before the <br>")
+precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(2) == [.setSelection(111..<111), .press(.left, count: 1)],
+             "a paragraph's start sharing an offset with the line above's end is reached from inside it")
+precondition(checkedTexts(dia6Planning("x", caret: 37).plan) == [chipA], "x takes the chip whole")
+precondition(dia6Planning("yy", caret: 60).plan.steps.contains(
+    .commit(.yanked(into: nil, content: .literal("Text then a chip " + chipB + "\n"), wise: .line))
+), "a register keeps a chip's label")
+precondition(dia6Planning("rx", caret: 37).rejection != nil && dia6Planning("~", caret: 37).rejection != nil,
+             "typed text cannot rebuild a chip")
+precondition(dia6Planning("~", caret: 36).rejection == nil)
+
+var chipKeys = KeyModel(text: "ab\u{2060}cd", anchor: 0, focus: 0, atoms: [2])
+precondition(chipKeys.press(Chord.paragraphEnd.shifted) && chipKeys.selection == 0..<2, "⇧⌃E stops at a chip")
+precondition(chipKeys.press(Chord.paragraphEnd.shifted) && chipKeys.selection == 0..<2)
+chipKeys = KeyModel(text: "ab\u{2060}cd", anchor: 5, focus: 5, atoms: [2])
+precondition(chipKeys.press(Chord.paragraphStart.shifted) && chipKeys.selection == 3..<5, "⇧⌃A stops after one")
+precondition(chipKeys.press(.paragraphStart) && chipKeys.selection == 0..<0, "⌃A crosses it")
+
+// A Sim of Linear's editor moves as Vim does over the lines Linear shows, in both lanes.
+let linearDoc: [(String, String?, Int, Bool)] = [
+    ("Top paragraph", nil, 0, false), ("Numbered one", "1.", 0, false), ("Numbered two", "2.", 0, false),
+    ("Nested numbered", "a.", 0, false), ("Numbered three", "3.", 0, false), ("Middle \u{2060} paragraph", nil, 0, false),
+    ("Two \u{2060} \u{2060} end", nil, 0, false), ("\u{2060} ", "\u{2022}", 0, false),
+    ("Bullet one", "\u{2022}", 0, false), ("Nested bullet", "\u{25E6}", 0, false), ("\u{2060}", "\u{2022}", 1, false),
+    ("", "\u{2022}", 0, false), ("Bullet \u{2060} two", "\u{2022}", 0, false), ("\u{2060} first", "\u{2022}", 0, false),
+    ("Chores", nil, 2, false), ("A to-do item", nil, 2, true), ("", nil, 2, true), ("Ends in \u{2060}", nil, 0, false),
+    ("\u{2060} starts", nil, 0, false), ("\u{2060}", nil, 0, false), ("Last paragraph.", nil, 0, false),
 ]
-func linearSim(_ profile: CapabilityProfile, findsMarkers: Bool = true) -> Sim {
+func linearSim(_ profile: CapabilityProfile, findsUnreachable: Bool = true) -> Sim {
     var host = Sim(text: linearDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
     host.emptyParagraphs = true
-    host.listLines = linearDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.0 != "Chores" && $0.2 == 2) }
-    host.findsListMarkers = findsMarkers
+    host.listLines = linearDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.3) }
+    host.findsUnreachable = findsUnreachable
     host.emulatesKeys = true
     host.readModel = .textContent
     return host
 }
 for profile in [keyProfile, writeKeys] {
-    for keys in ["jjjjjjjjjjjjjjkkkkkkkkkkkkkk", "3j2k4j", "5ljjjjjjjjjjjjkkkk", "$jjjjkkk", "Gkkkkkkkkkkkkk", "jjjjjjjj$",
-                 "jwwwwwwwwwwwbbbbb", "jjjjjjjjjdd"] {
+    let down = String(repeating: "j", count: linearDoc.count)
+    for keys in [down + String(repeating: "k", count: linearDoc.count), "3j2k4j5j3k", "5ljjjjjjjjjjjjjjjjkkkk",
+                 "$jjjjjjjjjjjjjjjjkkkk", "G" + String(repeating: "k", count: linearDoc.count - 1), "jjjjjjjjjjjjjjjjj0jj^",
+                 "jjjjjwwwwwwwwwwwbbbbbbb",
+                 "jjjjjjjjjjjjjjjjdd", "jjjjjlx"] {
         var linear = linearSim(profile)
         var plain = Sim(text: linear.text, caret: 0, profile: profile)
         plain.emulatesKeys = true
@@ -4193,70 +4340,24 @@ for profile in [keyProfile, writeKeys] {
         precondition(linear.settleFailures == 0 && linear.bells == 0, keys)
     }
 }
-// A chip ending an item: Linear follows it with a <br> the caret reads past, and while the caret is there, a separator.
-let chipFound = UnreachableLines.Found(markers: [1, 11], listEnds: [13])
-for (value, raw) in [("a\n\u{2022}\nChip one\n\u{2022}\nb", "a\u{2022}Chip one\n\u{2022}b"),
-                     ("a\n\u{2022}\nChip one\n\n\u{2022}\nb", "a\u{2022}Chip one\u{FFFC}\n\u{2022}b")] {
-    let aligned = ParagraphBreaks(value: value, fieldText: MarkerText.plain(raw))!
-    let trailing = UnreachableLines.trailingBreaks(in: MarkerText.plain(raw), found: chipFound, empty: [])
-    precondition(trailing == [10])
-    let model = UnreachableLines.fold(text: value, breaks: aligned, raw: raw, markers: [1, 11], trailing: trailing)
-    precondition(model.text == "a\nChip one\nb" && model.folded == value.utf16.count - 12, "the separator's line joins the chip's")
-    precondition(model.breaks.fieldOffset(10) == 11 && model.breaks.fieldOffset(11) == 12, "the chip's end reads past its <br>")
-    precondition(roundTrips(model))
-}
-precondition(UnreachableLines.trailingBreaks(in: "a\u{2022}Chip one\n\u{2022}b", found: chipFound, empty: [10]) == [],
-             "an empty paragraph's <br> is its own line")
-let separated = FakeNode("AXGroup", nil, 2, 11, [FakeNode("AXGroup", "AXApplicationGroup", 2, 10, [text(2, 10)]),
-                                                 FakeNode("AXGroup", "AXEmptyGroup", 10, 10)])
-precondition(scanned([paragraph(0, 1), FakeNode("AXList", "AXContentList", 1, 11, [FakeNode("AXGroup", nil, 1, 11, [
-    FakeNode("AXGroup", nil, 1, 2, [text(1, 2)]), separated,
-])])], "a\u{2022}Chip one\n") == [], "the separator after a chip is no empty paragraph")
-let chipLast = UnreachableLines.fold(text: "a\n\u{2022}\nChip\n", breaks: ParagraphBreaks(offsets: [1, 3]),
-                                     raw: "a\u{2022}Chip\n", markers: [1], trailing: [6])
-precondition(chipLast.text == "a\nChip" && chipLast.breaks.fieldOffset(6) == 7, "a <br> ending the field leaves no line")
-precondition(settleTraces(PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("j"), state: .initial), snapshot: FieldSnapshot(
-    capabilities: keyProfile, text: "\u{2060}\u{00A0}LIN-1\nb", selection: 0..<0, webContent: true,
-    breaks: ParagraphBreaks(offsets: [7], hidden: [.init(at: 0, text: "\u{2022}")]), foldedLength: 2, holdsChips: true
-))) == ["sel=8..8 len=nil edge=end", "sel=8..8 len=nil edge=start"], "beside a chip AXValue gains a line as the caret gets there")
-let todoBelow = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("k"), state: .initial), snapshot: FieldSnapshot(
-    capabilities: writeKeys, text: "ab\nc\nef", selection: 5..<5, webContent: true,
-    breaks: ParagraphBreaks(offsets: [2, 4], hidden: [.init(at: 3, text: "")]), foldedLength: 2
-))
-precondition(todoBelow.steps.prefix(2) == [.setSelection(1..<1), .setSelection(2..<2)],
-             "a to-do's start is written from above, where a write from below would land on the line above's end")
-let longTodoBelow = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("k"), state: .initial), snapshot: FieldSnapshot(
-    capabilities: writeKeys, text: "ab\ncdx\nef", selection: 7..<7, webContent: true,
-    breaks: ParagraphBreaks(offsets: [2, 6], hidden: [.init(at: 3, text: "")]), foldedLength: 2
-))
-precondition(longTodoBelow.steps.prefix(2) == [.setSelection(3..<3), .press(.left, count: 1)], "or from inside the line")
-let chipDoc: [(String, String?, Int, Bool)] = [
-    ("Top", nil, 0, false), ("\u{2060}\u{00A0}LIN-1645 Why j/k beeps", "\u{2022}", 0, true), ("Bullet", "\u{2022}", 0, false),
-    ("\u{2060}\u{00A0}LIN-1641 with an icon", "\u{2022}", 1, true), ("Chores", nil, 2, false), ("Last", nil, 0, false),
-]
-for profile in [keyProfile, writeKeys] {
-    for keys in ["jjjjjkkkkk", "j$jkk", "3j$kkk", "4ljjjjkkkk", "jjj$jjkkk"] {
-        var chips = Sim(text: chipDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
-        chips.emptyParagraphs = true
-        chips.listLines = chipDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, trailingBreak: $0.3) }
-        chips.emulatesKeys = true
-        chips.readModel = .textContent
-        var plain = Sim(text: chips.text, caret: 0, profile: profile)
-        plain.emulatesKeys = true
-        for key in keys {
-            chips.type(String(key))
-            plain.type(String(key))
-        }
-        precondition(chips.caret == plain.caret && chips.settleFailures == 0, "through chips: \(keys)")
-    }
-}
+var chipStart = linearSim(writeKeys)
+let firstChip = chipStart.chromium.chips[0].range.lowerBound
+chipStart.perform([.setSelection(firstChip..<firstChip), .press(.right, count: 1)])
+precondition(chipStart.readSelection == firstChip..<firstChip, "the Sim's caret written at a chip's start stops the next arrow")
 
-var linearLogged = linearSim(keyProfile, findsMarkers: false)
+var linearLogged = linearSim(keyProfile, findsUnreachable: false)
 linearLogged.type("j")
 precondition(linearLogged.settleFailures == 1 && linearLogged.caret == 14, "without discovery, LIN-1645's j into an item")
 linearLogged.type("k")
 precondition(linearLogged.settleFailures == 2, "and its k out of one")
 
+precondition(ChromiumParagraphs(text: "a \u{2060} b\nc \u{2060}\n\u{2060} d", lines: [Sim.ListLine(), Sim.ListLine(), Sim.ListLine()]).shown
+             == ("a \n\u{2060}\u{00A0}LIN-1 chip\n b\nc \n\u{2060}\u{00A0}LIN-1 chip\n\u{2060}\u{00A0}LIN-1 chip\n d",
+                 "a \u{2060}\u{00A0}LIN-1 chip bc \u{2060}\u{00A0}LIN-1 chip\n\u{2060}\u{00A0}LIN-1 chip d", []),
+             "a chip is a line of its own, and one ending its paragraph has a <br> after it")
+precondition(ChromiumParagraphs(text: "a \u{2060} \u{2060} b\nc \u{2060} ", lines: [Sim.ListLine(), Sim.ListLine()]).shown.value
+             == "a \n\u{2060}\u{00A0}LIN-1 chip \n\u{2060}\u{00A0}LIN-1 chip\n b\nc \n\u{2060}\u{00A0}LIN-1 chip ",
+             "spaces after a chip share its line")
 for paragraphs in [["L", "", "N"], ["", "L"], ["L", ""], [""], ["a", "", "bc", "", "", "d", ""]] {
     let host = ChromiumParagraphs(text: paragraphs.joined(separator: "\n"), lines: paragraphs.map { _ in Sim.ListLine() })
     precondition(host.shown == EmptyParagraphs.chromium(paragraphs) && host.plainMarkers == host.shown.markers,
