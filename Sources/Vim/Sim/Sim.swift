@@ -33,7 +33,7 @@ public struct Sim {
     /// The same lie about `AXSelectedTextRange` — what a `writeSelection` demotion leaves.
     public var swallowsSelect = false
 
-    /// Answers no `AXSelectedTextRange` at all — the recorder's `answered=0`.
+    /// Settle and repair reads get no `AXSelectedTextRange`; the snapshot's read still answers.
     public var unreadableSelection = false
 
     /// Makes the field a Chromium contenteditable: `AXSelectedTextRange` starts at `reads` of the selection's
@@ -45,6 +45,9 @@ public struct Sim {
 
     /// Off, discovery fails and the snapshot keeps `AXValue`'s lines.
     public var findsEmptyParagraphs = true
+
+    /// In Chromium modes, the field ends in an inline icon: a U+FFFC only the marker text has.
+    public var endsInTextlessLeaf = false
 
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
@@ -116,6 +119,9 @@ public struct Sim {
 
     /// The last snapshot's, to convert the drawn cursor at unbind.
     private var fieldBreaks: ParagraphBreaks?
+
+    /// The last discovery, kept as the Controller keeps it.
+    private var foundEmptyParagraphs: EmptyParagraphs.Memo?
 
     public init(
         text: String,
@@ -192,6 +198,7 @@ public struct Sim {
             }
             fieldBreaks = nil
         }
+        if transition != .sameElement { foundEmptyParagraphs = nil }
         if let text {
             self.text = text
             let clamped = TextModel(text).clamp(caret)
@@ -215,26 +222,15 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        let reading = read()
-        // Same cursor match-stamp as the runtime's Snapshotter.
-        var cursor: Range<Int>?
-        if let drawn = state.field.cursor, !drawn.isEmpty, drawn == reading.selection {
-            cursor = drawn
+        var (reads, observed) = read()
+        var memo = foundEmptyParagraphs
+        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo) }) {
+            FieldSnapshot.build(
+                reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo
+            )
         }
-        let snapshot = FieldSnapshot(
-            capabilities: profile,
-            text: reading.text ?? text,
-            selection: reading.selection,
-            length: fieldLength,
-            anchor: anchor,
-            cursor: cursor,
-            webContent: webContent || reads != nil || emptyParagraphs,
-            breaks: reading.breaks,
-            caretInEmptyParagraph: reading.emptyParagraph,
-            textlessLeaves: reading.textlessLeaves,
-            valueGap: reading.gap,
-            holdsEmptyParagraphs: reading.holdsEmptyParagraphs
-        )
+        foundEmptyParagraphs = built.memo
+        let snapshot = built.snapshot
         fieldBreaks = snapshot.breaks
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
         let physical = planned.plan
@@ -244,7 +240,7 @@ private extension Sim {
         let abortedAt = execute(physical.steps)
         abortedStep = abortedAt.map { physical.steps[$0] }
         // After the hygiene below, as the Controller's is.
-        defer { learn(from: reading) }
+        defer { learn(from: observed) }
         guard abortedAt == nil else {
             // Abort hygiene, mirroring the Controller down to the stand-down.
             if planned.abortedAtTextCheck(abortedAt) {
@@ -512,37 +508,37 @@ public extension Sim {
 
         public var model: ReadModel { resolved?.readModel ?? ReadModel(answer: chromium ? .textContent : .value) }
     }
-
-    struct Reading {
-        let selection: Range<Int>?
-        let breaks: ParagraphBreaks?
-        let emptyParagraph: Bool
-        let textlessLeaves: Bool
-        let observed: Learning.Observation
-        /// The planner's text where it is not the Sim's own.
-        var text: String?
-        var gap = 0
-        var holdsEmptyParagraphs = false
-    }
 }
 
 extension Sim {
-    /// The learner observes these reads before the snapshot interprets them.
-    mutating func read() -> Reading {
+    /// The fake field's reads, which the learner observes here.
+    mutating func read() -> (reads: FieldSnapshot.Reads, observed: Learning.Observation) {
         let (current, source) = learner.map { $0.model.reading(chromium: $0.chromium, children: hasChildren) }
             ?? (readModel, .start)
-        if emptyParagraphs { return readChromium(current: current, source: source) }
-        let plain = unreadableSelection ? nil : readSelection
-        let sampled = current == .value && source.observes && learner?.sampling.samples(text: text, plain: plain) == true
-        let reads = FieldReads(
-            text: text,
-            plain: plain,
-            selectedText: readSelectedText,
-            markers: markers && (current != .value || sampled) ? markerReads : nil
+        let plain = readSelection
+        var sampled = false
+        var reads = FieldSnapshot.Reads(
+            field: FieldReads(text: text, plain: plain, selectedText: readSelectedText), length: fieldLength,
+            webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
+        if emptyParagraphs {
+            let value = chromium.shown.value
+            let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
+            var memo: EmptyParagraphs.Memo?
+            let aligned = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo) }) {
+                MarkerReads.aligning(value: value, range: plain, text: text, sides: reads.sides)
+            }
+            reads.field = FieldReads(text: value, plain: plain, selectedText: readSelectedText, markers: aligned.reads)
+            reads.marked = plain
+            reads.markerText = aligned.text
+        } else {
+            sampled = current == .value && source.observes && learner?.sampling.samples(text: text, plain: plain) == true
+            if markers && (current != .value || sampled) { reads.field.markers = markerReads }
+        }
+        let field = reads.field
         var observed = Learning.Observation(before: current, source: source)
         if var learner {
-            observed = Learning.observe(reads, before: current, source: source, newEngine: learner.model.newEngine)
+            observed = Learning.observe(field, before: current, source: source, newEngine: learner.model.newEngine)
             if sampled { learner.sampling.sampled(markers: markers, evidence: observed.evidence, text: text, plain: plain) }
             if let evidence = observed.evidence {
                 learner.tally.count(evidence)
@@ -550,52 +546,27 @@ extension Sim {
             }
             self.learner = learner
         }
-        let interpreted = reads.interpreted(under: observed.after)
-        return Reading(
-            // A snapshot takes the plain read even where a settle would find none.
-            selection: observed.after == .value ? readSelection : interpreted.selection,
-            breaks: interpreted.breaks, emptyParagraph: interpreted.emptyParagraph, textlessLeaves: interpreted.textlessLeaves,
-            observed: observed
-        )
+        return (reads, observed)
     }
 
-    /// `Snapshotter.snapshot`'s order: the learner judges the reads as given, then the empty paragraphs go back in.
-    mutating func readChromium(current: OffsetsAnswer, source: OffsetsSource) -> Reading {
-        let chromium = self.chromium
-        let shown = chromium.shown
-        let field = readSelection
-        let aligned = ParagraphBreaks(value: shown.value, fieldText: shown.markers)
-        let truth = selection
-        let side = { (end: ParagraphBreaks.End) in chromium.side(end == .upper ? truth.upperBound : truth.lowerBound) }
-        let reads = FieldReads(
-            text: shown.value, plain: unreadableSelection ? nil : field, selectedText: readSelectedText,
-            markers: MarkerReads(breaks: aligned, value: aligned?.valueRange(field, side: side))
-        )
-        var observed = Learning.Observation(before: current, source: source)
-        if var learner {
-            observed = Learning.observe(reads, before: current, source: source, newEngine: learner.model.newEngine)
-            if let evidence = observed.evidence {
-                learner.tally.count(evidence)
-                learner.evidence.append(evidence)
-            }
-            self.learner = learner
+    /// Answers a step's read from the fake field, as `Snapshotter` does over AX.
+    func take(_ need: FieldSnapshot.Need, into reads: inout FieldSnapshot.Reads, memo: inout EmptyParagraphs.Memo?) {
+        switch need {
+        case .side(let end):
+            reads.sides.updateValue(chromium.side(end == .upper ? selection.upperBound : selection.lowerBound), forKey: end)
+        case .emptyParagraph:
+            reads.inEmptyParagraph = chromium.inEmptyParagraph(selection)
+        case .emptyParagraphs(let value, let markers):
+            let found = findsEmptyParagraphs ? chromium.shown.found : nil
+            memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
-        let interpreted = reads.interpreted(under: observed.after)
-        var reading = Reading(
-            selection: interpreted.selection, breaks: interpreted.breaks,
-            emptyParagraph: interpreted.selection != nil && chromium.inEmptyParagraph(truth), textlessLeaves: false,
-            observed: observed, text: shown.value
-        )
-        guard observed.after == .textContent, findsEmptyParagraphs, let aligned,
-              let model = EmptyParagraphs.restore(value: shown.value, fieldText: shown.markers, aligned: aligned, found: shown.found),
-              let resolved = model.breaks.valueRange(field, side: side) else { return reading }
-        reading = Reading(selection: resolved, breaks: model.breaks, emptyParagraph: false, textlessLeaves: false,
-                          observed: observed, text: model.text, gap: model.gap, holdsEmptyParagraphs: !shown.found.isEmpty)
-        return reading
     }
 
     /// `kAXNumberOfCharacters`: `AXValue`'s length.
     var fieldLength: Int { emptyParagraphs ? chromium.shown.value.utf16.count : text.utf16.count }
+
+    /// The child count: a block per paragraph.
+    var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
 
     var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text) }
 
@@ -605,18 +576,21 @@ extension Sim {
     }
 
     var markerReads: MarkerReads {
-        MarkerReads(breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection)
+        MarkerReads(
+            breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection,
+            textlessLeaves: endsInTextlessLeaf
+        )
     }
 
-    mutating func learn(from reading: Reading) {
+    mutating func learn(from observed: Learning.Observation) {
         guard var learner else { return }
-        if reading.observed.source.observes {
+        if observed.source.observes {
             for item in attribution.evidence { learner.tally.count(item) }
         }
         let config = learner.config
         let lesson = Learning.learn(
             store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
-            observed: reading.observed, run: attribution.evidence,
+            observed: observed, run: attribution.evidence,
             overridden: { config[$0]?.override != nil }, provenance: Provenance(), tally: learner.tally
         )
         learner.lessons.append(lesson)
@@ -633,6 +607,27 @@ extension Sim {
         learner.resolved = resolved
         profile = CapabilityResolver.resolve(probed: learner.probed, config: learner.config, beliefs: resolved).profile
         self.learner = learner
+    }
+}
+
+public extension EmptyParagraphs {
+    /// `AXValue`, the plain marker text and each empty paragraph's `<br>` offset, as Chrome 153 shows `paragraphs`.
+    static func chromium(_ paragraphs: [String]) -> (value: String, markers: String, found: [Int]) {
+        var value = ""
+        var markers = ""
+        var found: [Int] = []
+        for (index, paragraph) in paragraphs.enumerated() {
+            if paragraph.isEmpty {
+                found.append(markers.utf16.count)
+                markers += "\n"
+                value += "\n"
+            } else {
+                if index > 0, !paragraphs[index - 1].isEmpty { value += "\n" }
+                markers += paragraph
+                value += paragraph
+            }
+        }
+        return (value, markers, found)
     }
 }
 

@@ -135,102 +135,45 @@ public enum Snapshotter {
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
         let marked = readsMarkers || sampled ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
         let side = marked.map { sides(of: $0) }
-        let markerReading = marked.flatMap { marked in
-            side.map { markerReads(of: element, text: reads.string(0), marked: marked, side: $0) }
-        }
-        var fieldReads = FieldReads(
-            text: reads.string(0),
-            plain: plain,
-            selectedText: reads.string(4),
-            markers: markerReading?.reads
+        var snapshotReads = FieldSnapshot.Reads(
+            field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
+            length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
         )
-        let observed = Learning.observe(fieldReads, before: current, source: source, newEngine: model.newEngine)
-        let answer = observed.after
-        // Only the snapshot reads the empty paragraph, which costs four more round trips.
-        if answer == .textContent, let marked, fieldReads.markers?.breaks != nil {
-            fieldReads.markers?.emptyParagraph = marked.inEmptyParagraph
-        }
-        var interpreted = fieldReads.interpreted(under: answer)
-        if !capabilities.has(.readCaret) {
-            interpreted = (nil, answer == .textContent ? ParagraphBreaks() : nil, false, false)
-        }
-        var text = capabilities.has(.readText) ? fieldReads.text : nil
-        let length = capabilities.has(.readLength) ? reads.int(2) : nil
-        var selection = interpreted.selection
-        var breaks = interpreted.breaks
-        var emptyParagraph = interpreted.emptyParagraph
-        var gap = 0
-        var holdsEmptyParagraphs = false
-        var memo: EmptyParagraphs.Memo?
-        // After the learner, which judges the reads as the field gave them.
-        if answer == .textContent, let value = text, let aligned = breaks, let marked, let side,
-           let raw = markerReading?.raw, case let plainMarkers = MarkerText.plain(raw), plainMarkers.utf16.contains(10) {
-            memo = known.flatMap { $0.holds(value: value, markers: raw, blocks: blocks) ? $0 : nil }
-                ?? EmptyParagraphs.Memo(
-                    value: value, markers: raw, blocks: blocks,
-                    found: EmptyParagraphDiscovery.found(in: element, markers: raw, budget: EmptyParagraphs.readBudget)?.found
-                )
-            if let found = memo?.found,
-               let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found),
-               let resolved = restored.breaks.valueRange(marked.range, side: side),
-               resolved.upperBound <= restored.text.utf16.count {
-                text = restored.text
-                breaks = restored.breaks
-                selection = resolved
-                gap = restored.gap
-                holdsEmptyParagraphs = !found.isEmpty
-                let model = TextModel(restored.text)
-                // A caret on an empty line is in a paragraph the model already holds.
-                let onEmptyLine = resolved.isEmpty && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
-                emptyParagraph = emptyParagraph && !onEmptyLine
+        var memo = known
+        func take(_ need: FieldSnapshot.Need) {
+            switch need {
+            case .side(let end):
+                snapshotReads.sides.updateValue(side?(end), forKey: end)
+            case .emptyParagraph:
+                snapshotReads.inEmptyParagraph = marked?.inEmptyParagraph ?? false
+            case .emptyParagraphs(let value, let markers):
+                let found = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)?.found
+                memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
             }
         }
-        // The drawn cursor counts only while it still IS the selection;
-        // otherwise the selection is the user's.
-        let stampedCursor = (cursor != nil && !cursor!.isEmpty && cursor == selection) ? cursor : nil
-        let snapshot = FieldSnapshot(
-            capabilities: capabilities,
-            text: text,
-            selection: selection,
-            length: length,
-            anchor: anchor,
-            cursor: stampedCursor,
-            webContent: reads.string(3) != nil,
-            breaks: breaks,
-            caretInEmptyParagraph: emptyParagraph,
-            textlessLeaves: interpreted.textlessLeaves,
-            valueGap: gap,
-            holdsEmptyParagraphs: holdsEmptyParagraphs
-        )
+        if let marked {
+            let text = MarkerReads.takesText(reads.string(0)) ? AX.markerText(of: element) : nil
+            let aligned = FieldSnapshot.Step.run(taking: take) {
+                MarkerReads.aligning(value: reads.string(0), range: marked.range, text: text, sides: snapshotReads.sides)
+            }
+            snapshotReads.field.markers = aligned.reads
+            snapshotReads.markerText = aligned.text
+        }
+        let observed = Learning.observe(snapshotReads.field, before: current, source: source, newEngine: model.newEngine)
+        let built = FieldSnapshot.Step.run(taking: take) {
+            FieldSnapshot.build(
+                snapshotReads, capabilities: capabilities, answer: observed.after, anchor: anchor, cursor: cursor, memo: memo
+            )
+        }
         return Reading(
-            snapshot: snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: fieldReads, emptyParagraphs: memo
+            snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: snapshotReads.field,
+            emptyParagraphs: built.memo
         )
     }
 
     /// Chromium's `<textarea>` and `<input>` have no children; a failed count takes the marker read.
     static func hasParagraphs(_ element: AXUIElement) -> Bool {
         AX.childCount(of: element).map { $0 > 0 } ?? true
-    }
-
-    /// Also hands back the raw marker text, which empty-paragraph discovery starts from.
-    private static func markerReads(
-        of element: AXUIElement, text: String?, marked: AX.MarkedSelection, side: (ParagraphBreaks.End) -> ParagraphBreaks.Side?
-    ) -> (reads: MarkerReads, raw: String?) {
-        // A U+FFFC in `AXValue` is the page's own text, which the plain marker offsets drop as a placeholder.
-        guard let text, !text.utf16.contains(0xFFFC) else { return (MarkerReads(breaks: nil, value: nil), nil) }
-        var breaks = ParagraphBreaks()
-        var textlessLeaves = false
-        var raw: String?
-        if text.contains("\n") {
-            guard let markers = AX.markerText(of: element),
-                  let aligned = ParagraphBreaks(value: text, fieldText: MarkerText.plain(markers)) else {
-                return (MarkerReads(breaks: nil, value: nil), nil)
-            }
-            breaks = aligned
-            textlessLeaves = markers.utf16.contains(0xFFFC)
-            raw = markers
-        }
-        return (MarkerReads(breaks: breaks, value: breaks.valueRange(marked.range, side: side), textlessLeaves: textlessLeaves), raw)
     }
 
     /// Each end's side, read once per end, and once for a caret, whose ends share a marker.

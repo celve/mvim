@@ -212,7 +212,8 @@ mvim/
 │   │   ├── Key,Model,Raw,      #   pure engine (no AppKit/AX; `make test` compiles this):
 │   │   │   Logical,Physical,   #   the keystroke gate, vocabulary, parsing + key
 │   │   │   State,Text,Sim,     #   assembly, planners, state + reducer, text math,
-│   │   │   Learn               #   simulated host, the learner's beliefs
+│   │   │   Learn,Field         #   simulated host, the learner's beliefs, the field's
+│   │   │                       #   reads, snapshot and capabilities
 │   │   └── Runtime/            #   tap routing, AX execution, Controller, Diag, PasteboardLoan,
 │   │                           #   Beliefs (the beliefs file)
 │   └── App/                    # mvim app — composition root: MvimApp (the menu-bar
