@@ -1090,6 +1090,19 @@ var strandedKeyed = keyedSim(prose, caret: 4)
 strandedKeyed.reboundChords = [.selectWordLeft: .selectAll]
 strandedKeyed.type("ciwX")
 precondition(strandedKeyed.text == "X" + prose && strandedKeyed.pasteboard == nil, strandedKeyed.text)
+var strandedIgnored = keyedSim(prose, caret: 4)
+strandedIgnored.reboundChords = [.selectWordLeft: .selectAll]
+strandedIgnored.ignoredChords = [.left]
+strandedIgnored.type("ciw")
+precondition(strandedIgnored.state.field.mode == .normal && strandedIgnored.selection == 0..<15)
+precondition(strandedIgnored.settleFailures == 2, "the repair's own settle fails where the field ignores ←")
+var strandedPlain = Sim(text: prose, caret: 4, profile: readProfile)
+strandedPlain.reboundChords = [.selectRight: .selectAll]
+strandedPlain.type("x")
+precondition(strandedPlain.selection == 0..<0 && strandedPlain.settleFailures == 1)
+strandedPlain.reboundChords = [:]
+strandedPlain.type("iX")
+precondition(strandedPlain.text == "X" + prose, "i types beside a stranded selection, not over it")
 // Mid-word in a joined run a span rings; from a word's end it is proven.
 precondition(physical("dw", text: "foo,bar", caret: 1, profile: nativeRead).steps == [.bell])
 precondition(physical("db", text: "foo,bar", caret: 6, profile: nativeRead).steps == [.bell])
@@ -1266,6 +1279,21 @@ precondition(PhysicalPlanner.plan(
     .commit(.deleted(into: nil, content: .literal("b"), wise: .character)),
     .commit(.setCursor(nil)),
 ])
+
+precondition(PhysicalPlanner.collapse(4..<9, profile: axProfile) == PhysicalPlan(.setSelection(4..<4)))
+for profile in [nativeRead, readProfile] {
+    precondition(PhysicalPlanner.collapse(4..<9, profile: profile)
+                 == PhysicalPlan(.press(.left, count: 1), .settle(Expectation(selection: 4..<4))))
+}
+precondition(PhysicalPlanner.collapse(4..<9, profile: blindProfile) == PhysicalPlan(.press(.left, count: 1)))
+for profile in [axProfile, nativeRead, readProfile, blindProfile] {
+    precondition(PhysicalPlanner.collapse(4..<9, misread: true, profile: profile) == PhysicalPlan(.press(.left, count: 1)))
+}
+precondition(PhysicalPlanner.releaseCursor(6..<7, breaks: ParagraphBreaks(offsets: [3]), profile: axProfile)
+             == PhysicalPlan(.setSelection(5..<5)))
+precondition(PhysicalPlanner.releaseCursor(2..<3, breaks: ParagraphBreaks(offsets: [2]), profile: axProfile)
+             == PhysicalPlan(.setSelection(2..<2)), "no key steps back to a paragraph's end once focus has left")
+precondition(PhysicalPlanner.releaseCursor(6..<7, breaks: nil, profile: readProfile) == nil)
 
 // MARK: - Paragraph breaks (Chromium rich text)
 
@@ -2099,6 +2127,11 @@ precondition(sim.settleFailures == 1)
 precondition(sim.state.field.mode == .normal)
 precondition(sim.selection == 4..<9)
 precondition(sim.text == "say hello world")
+sim = Sim(text: "say hello world", caret: 4, profile: nativeAX)
+sim.perform([.setSelection(4..<9)])
+sim.swallowsSelect = true
+sim.type("o")
+precondition(sim.state.field.mode == .normal && sim.selection == 4..<9, "a field that takes writes is not repaired by ←")
 
 // Answering no selection at all: residency must not ride on a failed read.
 sim = Sim(text: "say hello world", caret: 6, profile: axProfile)
@@ -2189,6 +2222,12 @@ precondition(checkedText(misread.abortedStep) == "epsilon", "the offsets settle 
 precondition(misread.selection == 24..<24, "a failed check collapses what the keys selected")
 precondition(misread.state.field.mode == .normal, "the operand's offsets must not keep Insert over other text")
 precondition(misread.state.session.register("-") == nil && misread.state.session.lastChange == nil)
+var misreadIgnoresLeft = Sim(text: paragraphs, caret: 24, profile: readProfile)
+misreadIgnoresLeft.reads = omitsBreaks
+misreadIgnoresLeft.ignoredChords = [.left]
+misreadIgnoresLeft.type("ciw")
+precondition(checkedText(misreadIgnoresLeft.abortedStep) == "epsilon" && misreadIgnoresLeft.selection == 24..<31)
+precondition(misreadIgnoresLeft.state.field.mode == .normal)
 
 var unchecked = Sim(text: paragraphs, caret: 24, profile: readNothingSelected)
 unchecked.reads = omitsBreaks
@@ -2202,7 +2241,8 @@ for keys in ["x", "3x", "X", "dw", "de", "diw", "D", "C", "s", "S", "cc", "dd", 
     misread.reads = omitsBreaks
     misread.type(keys)
     precondition(misread.text == paragraphs && misread.settleFailures == 1, "\(keys) must ring, not edit, in paragraph 2")
-    precondition(!misread.state.field.mode.isInserting, keys)
+    precondition(misread.selection.isEmpty, "\(keys) leaves no selection to type over")
+    precondition(checkedText(misread.abortedStep) == nil || !misread.state.field.mode.isInserting, keys)
 }
 
 // Rule 2: a caret at an element boundary reads as its paragraph's start, in read offsets (as measured).
@@ -2281,6 +2321,18 @@ refocused.refocus(.sameDocument, text: "two")
 precondition(refocused.state.field.mode == .normal, "a block crossing must not end the session")
 refocused.refocus(.newSession, text: "three")
 precondition(refocused.state.field.mode == .insert)
+
+var leaving = Sim(text: "abc", caret: 0, profile: axProfile)
+leaving.type("l")
+precondition(leaving.selection == 1..<2 && leaving.state.field.cursor == 1..<2)
+leaving.refocus(.sameElement)
+precondition(leaving.selection == 1..<2)
+var unwritable = leaving
+leaving.refocus(.newSession)
+precondition(leaving.selection == 1..<1 && leaving.state.field.cursor == nil)
+unwritable.profile = readProfile
+unwritable.refocus(.newSession)
+precondition(unwritable.selection == 1..<2, "without a write the drawn cursor stays: a key would reach the new focus")
 
 // The dot body survives a crossing the user's own ⏎ caused: `ciw` opens the
 // body, the new block arrives mid-Insert, and Esc must still close it.
@@ -3501,6 +3553,10 @@ precondition(discovered.learner!.evidence.first == supportsTextContent)
 precondition(discovered.learner!.lessons.first?.move == Learning.Move(from: .value, to: .textContent, why: .plainIsTextContent))
 precondition(discovered.learner!.model.answer == .textContent && discovered.learner!.model.source == .learned)
 precondition(discovered.text == "a\nb\nc\nd\ne\nhello there" && discovered.settleFailures == 0, "the move takes effect on its own snapshot")
+var leftDiscovered = discovered
+precondition(leftDiscovered.selection == 20..<21)
+leftDiscovered.refocus(.newSession)
+precondition(leftDiscovered.selection == 20..<20, "the release writes the drawn cursor in field offsets")
 
 var misreadWord = chromiumSim(workedExample, caret: 16, profile: axProfile, markers: false)
 misreadWord.type("ciw")

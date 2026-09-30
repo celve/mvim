@@ -76,13 +76,7 @@ public enum PhysicalPlanner {
         // presentation selection. Empty and bell-only plans skip this —
         // they touch nothing and the cursor stays up.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
-            if profile.has(.writeSelection) {
-                steps += write(gap..<gap, context: context)
-            } else {
-                // Settled, so a later AX write cannot overtake the ←.
-                steps.append(.press(.left, count: 1))
-                steps += settle(context, profile: profile)
-            }
+            steps += collapse(to: gap, context: context, profile: profile)
         }
         for (index, step) in logical.steps.enumerated() {
             guard let lowered = lower(step, context: &context, profile: profile) else {
@@ -105,6 +99,26 @@ public enum PhysicalPlanner {
             if case .bell = step { return true }
             return false
         }
+    }
+}
+
+// MARK: - Repair and release
+
+public extension PhysicalPlanner {
+    /// Collapses a selection an aborted run left, as read in field offsets, to its start.
+    static func collapse(_ selection: Range<Int>, misread: Bool = false, profile: CapabilityProfile) -> PhysicalPlan {
+        // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
+        guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
+        let start = selection.lowerBound
+        let context = Context(snapshot: FieldSnapshot(capabilities: profile, selection: start..<start))
+        return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
+    }
+
+    /// Takes the drawn cursor off a field focus has left, by a write alone: a key would reach the field focus went to.
+    static func releaseCursor(_ cursor: Range<Int>, breaks: ParagraphBreaks?, profile: CapabilityProfile) -> PhysicalPlan? {
+        guard profile.has(.writeSelection) else { return nil }
+        let context = Context(snapshot: FieldSnapshot(capabilities: profile, breaks: breaks))
+        return PhysicalPlan(.setSelection(context.field(cursor.lowerBound..<cursor.lowerBound)))
     }
 }
 
@@ -320,6 +334,13 @@ private extension PhysicalPlanner {
         let step = PhysicalStep.setSelection(field)
         guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
         return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+    }
+
+    /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
+    static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
+        if profile.has(.writeSelection) { return write(start..<start, context: context) }
+        // Settled, so a later AX write cannot overtake the ←.
+        return [.press(.left, count: 1)] + settle(context, profile: profile)
     }
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {

@@ -270,17 +270,10 @@ public final class Controller {
     /// `FocusTransition`. A block crossing keeps the mode it was in, because
     /// a vim motion causing it is not the user going somewhere new.
     private func rebind(to new: FocusTracker.Binding?, transition: FocusTransition) {
-        if !transition.preservesDrawnCursor,
-           let old = binding, let cursor = state.field.cursor,
-           old.capabilities.has(.writeSelection) {
-            // Unbind hygiene, through the executor, which owns all field
-            // writes. A dead element rejects harmlessly (and bounded).
-            let gap = fieldBreaks?.fieldOffset(cursor.lowerBound) ?? cursor.lowerBound
-            executor.execute(
-                PhysicalPlan(.setSelection(gap..<gap)),
-                on: old.element,
-                state: &state
-            )
+        if !transition.preservesDrawnCursor, let old = binding, let cursor = state.field.cursor,
+           let release = PhysicalPlanner.releaseCursor(cursor, breaks: fieldBreaks, profile: old.capabilities) {
+            // Through the executor, which owns all field writes; a dead element rejects it harmlessly (and bounded).
+            executor.execute(release, on: old.element, state: &state)
         }
         if !transition.preservesDrawnCursor { fieldBreaks = nil }
         if transition != .sameElement {
@@ -382,9 +375,10 @@ public final class Controller {
         }
         guard executed else {
             if planned.abortedAtTextCheck(evidence.abortedAt) {
-                // Only lane B checks text, and ← is its one way to collapse; the mode the plan asked for goes too.
+                // Other text than the plan meant was selected, so the mode it asked for goes too.
                 if let read = selection(of: binding.element, paragraphs: paragraphs), !read.caret {
-                    executor.execute(PhysicalPlan(.press(.left, count: 1)), on: binding.element, state: &state)
+                    let collapse = PhysicalPlanner.collapse(read.range, misread: true, profile: binding.capabilities)
+                    executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
                 }
                 if state.field.mode.isInserting {
                     executor.commit(.setMode(before.nonVisual), state: &state)
@@ -491,25 +485,10 @@ public final class Controller {
         // Unknown is not empty: a settle can fail *because* the read went dark.
         guard let read = selection(of: binding.element, paragraphs: paragraphs) else { return false }
         guard !read.caret else { return true }
-        let range = read.range
         // Still the operand: the app's own editor substitutes on the first keystroke.
-        if state.field.mode.isInserting, range == operand { return true }
-        if binding.capabilities.has(.writeSelection) {
-            executor.execute(
-                PhysicalPlan(.setSelection(range.lowerBound..<range.lowerBound)),
-                on: binding.element,
-                state: &state
-            )
-        } else {
-            // ← collapses a selection to its start in every host measured (LIN-1532).
-            guard binding.capabilities.has(.nativeMotions) else { return false }
-            executor.execute(
-                PhysicalPlan(steps: [.press(.left, count: 1), .settle(Expectation(selection: range.lowerBound..<range.lowerBound))]),
-                on: binding.element,
-                state: &state,
-                paragraphs: paragraphs
-            )
-        }
+        if state.field.mode.isInserting, read.range == operand { return true }
+        let collapse = PhysicalPlanner.collapse(read.range, profile: binding.capabilities)
+        executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
         // The write that stranded this may be the one that lies, so confirm.
         return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false
     }
