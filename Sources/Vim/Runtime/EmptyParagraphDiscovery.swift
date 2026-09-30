@@ -5,24 +5,50 @@ import LoomCore
 enum EmptyParagraphDiscovery {
     /// Plain offsets in `markers` of the `<br>`s of line-starting empty blocks; nil on a failed read or past `budget` reads.
     static func found(in element: AXUIElement, markers: String, budget: Int) -> (found: [Int], reads: Int)? {
-        let raw = Array(markers.utf16)
-        let plain = raw.filter { $0 != 0xFFFC }
+        let plain = Array(markers.utf16).filter { $0 != 0xFFFC }
         guard plain.contains(10) else { return ([], 0) }
+        guard let tree = FieldTree(element, markers: markers) else { return nil }
+        var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
+        return scan.run(blocks: tree.blocks, plain: plain).map { ($0, scan.reads + 2) }
+    }
+}
+
+/// `ListMarkerScan` over a Chromium field's accessibility tree, for `UnreachableLines.fold` (LIN-1652).
+enum ListMarkerDiscovery {
+    /// Plain starts of the candidates that are list markers; nil on a failed read or past `budget` reads.
+    static func found(
+        in element: AXUIElement, markers: String, candidates: [Range<Int>], budget: Int
+    ) -> (found: [Int], reads: Int)? {
+        guard !candidates.isEmpty else { return ([], 0) }
+        guard let tree = FieldTree(element, markers: markers) else { return nil }
+        var scan = ListMarkerScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
+        return scan.run(blocks: tree.blocks, candidates: candidates).map { ($0, scan.reads + 2) }
+    }
+}
+
+/// The reads both discoveries descend a Chromium field's tree by.
+struct FieldTree {
+    let blocks: [AXUIElement]
+    let block: (AXUIElement) -> EmptyBlockScan<AXUIElement>.Block?
+    let offset: (AXUIElement, _ end: Bool) -> Int?
+
+    init?(_ element: AXUIElement, markers: String) {
         guard let start = AX.fieldStart(of: element), let blocks = AX.children(of: element) else { return nil }
         // Marker lengths count each U+FFFC before them, plain offsets do not.
         var objects = [0]
-        objects.reserveCapacity(raw.count + 1)
-        for unit in raw { objects.append(objects[objects.count - 1] + (unit == 0xFFFC ? 1 : 0)) }
-        var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: { node in
+        objects.reserveCapacity(markers.utf16.count + 1)
+        for unit in markers.utf16 { objects.append(objects[objects.count - 1] + (unit == 0xFFFC ? 1 : 0)) }
+        self.blocks = blocks
+        block = { node in
             let reads = AX.attributes([kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute], of: node)
-            guard (0..<3).allSatisfy({ absentOrRead(reads, $0) }) else { return nil }
+            guard (0..<3).allSatisfy({ Self.absentOrRead(reads, $0) }) else { return nil }
             return EmptyBlockScan.Block(role: reads.string(0), subrole: reads.string(1), children: reads.elements(2) ?? [])
-        }, offset: { node, end in
+        }
+        offset = { node, end in
             guard let length = AX.markerLength(from: start, to: node, end: end, in: element),
                   objects.indices.contains(length) else { return nil }
             return length - objects[length]
-        })
-        return scan.run(blocks: blocks, plain: plain).map { ($0, scan.reads + 2) }
+        }
     }
 
     /// A slot that read, or whose attribute the element lacks; any other failure is a failed read.

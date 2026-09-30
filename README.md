@@ -110,7 +110,8 @@ its selection. There mvim runs the same Normal-mode commands by pressing keys (a
 and ⌘↓), and checks the field after each step: when the field does not answer as planned, it beeps and
 stops rather than edit the wrong text. There is no block cursor there, and `o` and `O` paste their
 new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
-of more than about 250 paragraphs. In a field mvim cannot read at all, and under **Force**,
+of more than about 250 paragraphs, and a list's markers and to-do boxes are not, so `j` and `k` count
+the lines Linear shows. In a field mvim cannot read at all, and under **Force**,
 moves are approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
@@ -414,6 +415,9 @@ paragraph's end and the next one's start, `edge=end` or `edge=start` says which 
 for. `AXValue` leaves out an empty paragraph that sits between two others; mvim finds those in the
 accessibility tree and plans with each as a line of its own, while a settle's `len` stays
 `AXValue`'s, and `empty=N` on a `cmd` line is how many lines the plan had that `AXValue` lacks.
+The reverse holds for the lines `AXValue` gives what no caret reaches, such as a list marker Linear
+draws as a block of its own or a to-do's checkbox: the plan leaves them out, so the field's offsets
+run ahead of the plan's by each marker before them, and `folded=N` is how many units of `AXValue` they took.
 
 A web field finds its site by walking up to the page that contains it. When the walk names no
 site, the field keys at the app rung alongside the app's own chrome, and a `gate` line says
@@ -485,7 +489,12 @@ in it reading as the end of the line above, so mvim looks for these in the acces
 per text and gives each a line. Where it cannot, in a field of more than about 250 blocks
 or when a read fails, a key pressed from a caret whose marker sits on an empty paragraph is not
 blamed for seeming to do nothing. In such a field a yank within one line takes its register from
-the text the field selected.
+the text the field selected. A list item's marker (`•`, `1.`) is a line of its own in Linear's
+`AXValue`, and so is each icon, checkbox or heading menu that is a block; no caret stands on any of
+them, so mvim leaves them out of its lines. It tells a marker from a paragraph that only reads `1.`
+in the accessibility tree, once per text; where it cannot, past about sixty list items or when a
+read fails, markers stay lines and `j` or `k` into a list item beeps. Edits across list items run
+without checking the length, since a list renumbers and items gain or lose their markers.
 
 A register pasted where the field takes no AX insertion borrows the pasteboard. mvim saves every
 item in every type it holds, puts the text up for one ⌘V (marked `org.nspasteboard.TransientType`,

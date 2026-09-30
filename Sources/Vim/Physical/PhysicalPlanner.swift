@@ -158,10 +158,11 @@ private extension PhysicalPlanner {
             case selection, length, edge
         }
 
-        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back as lines.
+        /// `text` less `AXValue`, whose length settles check: the empty paragraphs put back, less the lines folded out.
         let valueGap: Int
 
-        let holdsEmptyParagraphs: Bool
+        /// Emptying or filling a line changes which lines `AXValue` shows beside it.
+        let reshapes: Bool
 
         var textlessLeaves = false
 
@@ -173,8 +174,8 @@ private extension PhysicalPlanner {
             breaks = snapshot.breaks
             emptyParagraphCaret = snapshot.caretInEmptyParagraph ? snapshot.selection : nil
             textlessLeaves = snapshot.textlessLeaves
-            valueGap = snapshot.valueGap
-            holdsEmptyParagraphs = snapshot.holdsEmptyParagraphs
+            valueGap = snapshot.valueGap - snapshot.foldedLength
+            reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -196,6 +197,13 @@ private extension PhysicalPlanner {
         /// Typing over `range` would drop a break that may bound an `<hr>` or a table cell, which no typed text rebuilds.
         func retypesStructure(_ range: Range<Int>) -> Bool {
             textlessLeaves && (breaks?.offsets.contains { range.contains($0) } ?? false)
+        }
+
+        /// A paragraph's end a write misses, landing on the next paragraph or, at a list marker, the side it came from.
+        func writesPast(_ offset: Int) -> Bool {
+            guard edge(offset) != .paragraphEnd else { return true }
+            guard let breaks, breaks.offsets.contains(offset) else { return false }
+            return breaks.hidden.contains { $0.at == offset + 1 && !$0.text.isEmpty }
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -281,17 +289,26 @@ private extension PhysicalPlanner {
             if !range.isEmpty { operand = field(range) }
             let before = model
             text = model?.replacing(range, with: replacement)
-            if holdsEmptyParagraphs, !replacement.contains("\n"), let before, let after = model {
+            if reshapes, !replacement.contains("\n"), let before, let after = model {
                 let caret = range.lowerBound + replacement.utf16.count
-                // Emptying or filling a line changes which of the empty paragraphs `AXValue` shows.
                 if before.touchesEmptyLine(range) || after.touchesEmptyLine(range.lowerBound..<caret) {
                     unknown.formUnion([.length, .edge])
                 }
             }
             if let current = breaks {
-                breaks = current.replacing(range, with: replacement)
+                // Deleting a plain line into a list item leaves the item; otherwise the first line keeps its own.
+                let plainLine = replacement.isEmpty && !current.hidden.contains { $0.at == range.lowerBound }
+                    && before?.lineStart(of: range.lowerBound) == range.lowerBound
+                let ownMarker = current.hidden.contains { $0.at == range.lowerBound && !$0.text.isEmpty }
+                let coversMarker = current.hidden.contains {
+                    range.lowerBound < $0.at && $0.at <= range.upperBound && !$0.text.isEmpty
+                }
+                breaks = current.replacing(range, with: replacement, keepingCovered: plainLine)
                 // A typed `\n` may have made a paragraph or a line break.
                 if replacement.contains("\n") { unknown.formUnion([.selection, .edge]) }
+                // An item made or merged gains or loses `AXValue` lines, and its list renumbers.
+                if !current.hidden.isEmpty, replacement.contains("\n") || current.covers(range) { unknown.insert(.length) }
+                if coversMarker, !plainLine, !ownMarker { unknown.formUnion([.selection, .edge]) }
             }
             let caretAfter = range.lowerBound + replacement.utf16.count
             selection = caretAfter..<caretAfter
@@ -321,19 +338,21 @@ private extension PhysicalPlanner {
         return [hard ? .settle(expectation) : .softSettle(expectation)]
     }
 
-    /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
+    /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by ← from its start.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         let field = context.field(range)
-        if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
+        if !range.isEmpty, context.writesPast(range.lowerBound), let model = context.model {
+            let next = context.field(range.lowerBound + 1..<range.lowerBound + 1).lowerBound
             return [
-                .setSelection(field.lowerBound..<field.lowerBound),
+                .setSelection(next..<next),
                 .press(.left, count: 1),
                 .press(.selectRight, count: model.graphemes(in: range)),
             ]
         }
-        let step = PhysicalStep.setSelection(field)
-        guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
-        return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+        guard context.writesPast(range.upperBound) else { return [.setSelection(field)] }
+        let next = context.field(range.upperBound + 1..<range.upperBound + 1).lowerBound
+        return [.setSelection(range.isEmpty ? next..<next : field.lowerBound..<next),
+                .press(range.isEmpty ? .left : .selectLeft, count: 1)]
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).

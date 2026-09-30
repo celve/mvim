@@ -49,6 +49,12 @@ public struct Sim {
     /// In Chromium modes, the field ends in an inline icon: a U+FFFC only the marker text has.
     public var endsInTextlessLeaf = false
 
+    /// With `emptyParagraphs`, Linear's lists: what each line of `text` draws before its text as blocks no caret reaches.
+    public var listLines: [ListLine]?
+
+    /// Off, list-marker discovery fails and markers stay lines.
+    public var findsListMarkers = true
+
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
         guard let reads else { return selection }
@@ -58,7 +64,7 @@ public struct Sim {
 
     public var readSelectedText: String {
         if emptyParagraphs {
-            let markers = Array(chromium.shown.markers.utf16)
+            let markers = Array(chromium.plainMarkers.utf16)
             let range = readSelection
             return String(decoding: markers[range.clamped(to: 0..<markers.count)], as: UTF16.self)
         }
@@ -120,8 +126,9 @@ public struct Sim {
     /// The last snapshot's, to convert the drawn cursor at unbind.
     private var fieldBreaks: ParagraphBreaks?
 
-    /// The last discovery, kept as the Controller keeps it.
+    /// The last discoveries, kept as the Controller keeps them.
     private var foundEmptyParagraphs: EmptyParagraphs.Memo?
+    private var foundListMarkers: UnreachableLines.Memo?
 
     public init(
         text: String,
@@ -198,7 +205,10 @@ public struct Sim {
             }
             fieldBreaks = nil
         }
-        if transition != .sameElement { foundEmptyParagraphs = nil }
+        if transition != .sameElement {
+            foundEmptyParagraphs = nil
+            foundListMarkers = nil
+        }
         if let text {
             self.text = text
             let clamped = TextModel(text).clamp(caret)
@@ -224,12 +234,15 @@ private extension Sim {
         }
         var (reads, observed) = read()
         var memo = foundEmptyParagraphs
-        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo) }) {
+        var listMarkers = foundListMarkers
+        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, listMarkers: &listMarkers) }) {
             FieldSnapshot.build(
-                reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo
+                reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
+                listMarkers: listMarkers
             )
         }
         foundEmptyParagraphs = built.memo
+        foundListMarkers = built.listMarkers
         let snapshot = built.snapshot
         fieldBreaks = snapshot.breaks
         let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
@@ -425,7 +438,7 @@ private extension Sim {
 
     /// In `reads`' coordinates a boundary offset lands at the next paragraph's start.
     func landing(_ offset: Int) -> Int {
-        if emptyParagraphs { return chromium.landing(offset) }
+        if emptyParagraphs { return chromium.landing(offset, from: selection.lowerBound) }
         guard writesInReadOffsets, let reads else { return offset }
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
     }
@@ -443,6 +456,10 @@ private extension Sim {
             wrap: wrapWidth
         )
         guard keys.press(chord) else { return false }
+        if keys.text != text {
+            let deleted = keys.selection.lowerBound..<(keys.selection.lowerBound + text.utf16.count - keys.text.utf16.count)
+            listLines = listLines.map { ListLine.carried($0, in: text, replacing: deleted, with: "") }
+        }
         text = keys.text
         selection = keys.selection
         backward = keys.focus < keys.anchor
@@ -466,6 +483,7 @@ private extension Sim {
     }
 
     mutating func applyReplace(_ replacement: String) {
+        listLines = listLines.map { ListLine.carried($0, in: text, replacing: selection, with: replacement) }
         text = TextModel(text).replacing(selection, with: replacement)
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
@@ -525,7 +543,8 @@ extension Sim {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
             var memo: EmptyParagraphs.Memo?
-            let aligned = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo) }) {
+            var listMarkers: UnreachableLines.Memo?
+            let aligned = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, listMarkers: &listMarkers) }) {
                 MarkerReads.aligning(value: value, range: plain, text: text, sides: reads.sides)
             }
             reads.field = FieldReads(text: value, plain: plain, selectedText: readSelectedText, markers: aligned.reads)
@@ -550,7 +569,10 @@ extension Sim {
     }
 
     /// Answers a step's read from the fake field, as `Snapshotter` does over AX.
-    func take(_ need: FieldSnapshot.Need, into reads: inout FieldSnapshot.Reads, memo: inout EmptyParagraphs.Memo?) {
+    func take(
+        _ need: FieldSnapshot.Need, into reads: inout FieldSnapshot.Reads, memo: inout EmptyParagraphs.Memo?,
+        listMarkers: inout UnreachableLines.Memo?
+    ) {
         switch need {
         case .side(let end):
             reads.sides.updateValue(chromium.side(end == .upper ? selection.upperBound : selection.lowerBound), forKey: end)
@@ -559,6 +581,9 @@ extension Sim {
         case .emptyParagraphs(let value, let markers):
             let found = findsEmptyParagraphs ? chromium.shown.found : nil
             memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
+        case .listMarkers(let value, let markers, let candidates):
+            let found = findsListMarkers ? candidates.map(\.lowerBound).filter(Set(chromium.listMarkers).contains) : nil
+            listMarkers = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
     }
 
@@ -568,7 +593,7 @@ extension Sim {
     /// The child count: a block per paragraph.
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
 
-    var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text) }
+    var chromium: ChromiumParagraphs { ChromiumParagraphs(text: text, lines: listLines) }
 
     /// The upper end's paragraph side from the Sim's own text, in every Chromium mode.
     var upperSide: ParagraphBreaks.Side? {
@@ -610,6 +635,36 @@ extension Sim {
     }
 }
 
+public extension Sim {
+    /// What Linear draws before a line's text, each a block of its own in `AXValue`: a list marker, then text-less leaves.
+    struct ListLine: Equatable, Sendable {
+        public var marker: String?
+        public var leaves: Int
+
+        public init(marker: String? = nil, leaves: Int = 0) {
+            self.marker = marker
+            self.leaves = leaves
+        }
+
+        /// `lines` once `range` of `text` is `replacement`, as Linear keeps them: the first line keeps its own, a deleted
+        /// plain line leaves the next line's, and a line the edit makes has none.
+        static func carried(
+            _ lines: [ListLine], in text: String, replacing range: Range<Int>, with replacement: String
+        ) -> [ListLine] {
+            let units = Array(text.utf16)
+            guard lines.count == units.filter({ $0 == 10 }).count + 1 else { return lines }
+            let first = units[..<range.lowerBound].filter { $0 == 10 }.count
+            let last = units[..<range.upperBound].filter { $0 == 10 }.count
+            var head = lines[first]
+            let wholeLines = replacement.isEmpty && !range.isEmpty && units[range.upperBound - 1] == 10
+                && (range.lowerBound == 0 || units[range.lowerBound - 1] == 10)
+            if wholeLines, head == ListLine() { head = lines[last] }
+            let made = replacement.utf16.filter { $0 == 10 }.count
+            return Array(lines[..<first]) + [head] + Array(repeating: ListLine(), count: made) + Array(lines[(last + 1)...])
+        }
+    }
+}
+
 public extension EmptyParagraphs {
     /// `AXValue`, the plain marker text and each empty paragraph's `<br>` offset, as Chrome 153 shows `paragraphs`.
     static func chromium(_ paragraphs: [String]) -> (value: String, markers: String, found: [Int]) {
@@ -631,23 +686,71 @@ public extension EmptyParagraphs {
     }
 }
 
-/// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612).
+/// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612), with Linear's list lines.
 struct ChromiumParagraphs {
     let text: String
     let paragraphs: [String]
+    let lines: [Sim.ListLine]?
+    /// `AXValue`, the raw marker text and each empty paragraph's `<br>` offset.
     let shown: (value: String, markers: String, found: [Int])
+    let plainMarkers: String
+    /// Plain starts of the list markers.
+    let listMarkers: [Int]
 
-    init(text: String) {
+    init(text: String, lines: [Sim.ListLine]? = nil) {
         self.text = text
         paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        shown = EmptyParagraphs.chromium(paragraphs)
+        self.lines = lines
+        guard let lines else {
+            shown = EmptyParagraphs.chromium(paragraphs)
+            plainMarkers = shown.markers
+            listMarkers = []
+            return
+        }
+        var value = ""
+        var raw = ""
+        var found: [Int] = []
+        var markers: [Int] = []
+        var plain = 0
+        var afterBreak = false
+        // Chromium breaks the line before each block but the first, a `<br>` alone, or one after a `<br>`.
+        func block(_ text: String, br: Bool = false) {
+            if !value.isEmpty || !raw.isEmpty, !br, !afterBreak { value += "\n" }
+            value += text
+            afterBreak = br || (text.isEmpty && afterBreak)
+        }
+        for (index, paragraph) in paragraphs.enumerated() {
+            let line = lines.indices.contains(index) ? lines[index] : Sim.ListLine()
+            if let marker = line.marker {
+                markers.append(plain)
+                block(marker)
+                raw += marker
+                plain += marker.utf16.count
+            }
+            for _ in 0..<line.leaves {
+                block("")
+                raw += "\u{FFFC}"
+            }
+            if paragraph.isEmpty {
+                found.append(plain)
+                block("\n", br: true)
+            } else {
+                block(paragraph)
+            }
+            raw += paragraph.isEmpty ? "\n" : paragraph
+            plain += max(paragraph.utf16.count, 1)
+        }
+        shown = (value, raw, found)
+        plainMarkers = FieldReads.withoutAttachments(raw)
+        listMarkers = markers
     }
 
     /// The marker offset of each true offset: paragraphs run together, an empty one standing as its `<br>`.
     func field(_ offset: Int) -> Int {
         var start = 0
         var marker = 0
-        for paragraph in paragraphs {
+        for (index, paragraph) in paragraphs.enumerated() {
+            marker += lines.flatMap { $0.indices.contains(index) ? $0[index].marker?.utf16.count : nil } ?? 0
             let length = paragraph.utf16.count
             if offset <= start + length { return marker + offset - start }
             start += length + 1
@@ -661,9 +764,14 @@ struct ChromiumParagraphs {
         return min(a, b)..<max(a, b)
     }
 
-    /// Where a write of marker offset `offset` lands: the last caret that reads it, as Chromium's land downstream.
-    func landing(_ offset: Int) -> Int {
-        (0...text.utf16.count).last { field($0) <= offset } ?? 0
+    /// Where a write of marker offset `offset` lands: the last caret that reads it, or in a list marker, `caret`'s side of it.
+    func landing(_ offset: Int, from caret: Int) -> Int {
+        let last = (0...text.utf16.count).last { field($0) <= offset } ?? 0
+        let units = Array(text.utf16)
+        guard last < units.count, units[last] == 10, caret <= last, let lines else { return last }
+        let line = units[..<(last + 1)].filter { $0 == 10 }.count
+        let marker = lines.indices.contains(line) ? lines[line].marker?.utf16.count ?? 0 : 0
+        return marker > 0 && offset >= field(last + 1) - marker ? last + 1 : last
     }
 
     /// `Snapshotter.paragraphSide`: a paragraph's start, empty or not, reads as the start.

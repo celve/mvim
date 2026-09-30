@@ -3,8 +3,23 @@ public struct ParagraphBreaks: Equatable, Sendable {
     /// Ascending `AXValue` offsets of the generated `\n`s.
     public let offsets: [Int]
 
-    public init(offsets: [Int] = []) {
+    /// Field text the model folds out, as no caret reaches it (LIN-1652); ascending, one run per offset.
+    public let hidden: [Hidden]
+
+    /// Stands before the model character at `at`; an empty run marks a folded line that held no field text.
+    public struct Hidden: Equatable, Sendable {
+        public let at: Int
+        public let text: String
+
+        public init(at: Int, text: String) {
+            self.at = at
+            self.text = text
+        }
+    }
+
+    public init(offsets: [Int] = [], hidden: [Hidden] = []) {
         self.offsets = offsets
+        self.hidden = hidden
     }
 
     /// Nil when `fieldText` is not `value` with some `\n`s taken out.
@@ -34,6 +49,7 @@ public struct ParagraphBreaks: Equatable, Sendable {
         }
         guard j == field.count else { return nil }
         self.offsets = offsets
+        hidden = []
     }
 }
 
@@ -51,6 +67,7 @@ public extension ParagraphBreaks {
 
     func fieldOffset(_ valueOffset: Int) -> Int {
         valueOffset - offsets.prefix { $0 < valueOffset }.count
+            + hidden.prefix { $0.at <= valueOffset }.reduce(0) { $0 + $1.text.utf16.count }
     }
 
     func fieldRange(_ range: Range<Int>) -> Range<Int> {
@@ -59,6 +76,7 @@ public extension ParagraphBreaks {
 
     /// The `AXValue` offsets a field offset names: two at a paragraph boundary.
     func valueOffsets(_ fieldOffset: Int) -> ClosedRange<Int> {
+        guard hidden.isEmpty else { return foldedOffsets(fieldOffset) }
         var before = 0
         var at = 0
         for (index, offset) in offsets.enumerated() {
@@ -72,6 +90,20 @@ public extension ParagraphBreaks {
             }
         }
         return (fieldOffset + before)...(fieldOffset + before + at)
+    }
+
+    /// A field offset inside a hidden run names the offset the run stands before; its start is the one before that.
+    private func foldedOffsets(_ fieldOffset: Int) -> ClosedRange<Int> {
+        var low = 0
+        var high = fieldOffset + offsets.count
+        while low < high {
+            let middle = (low + high) / 2
+            if self.fieldOffset(middle) < fieldOffset { low = middle + 1 } else { high = middle }
+        }
+        guard self.fieldOffset(low) == fieldOffset else { return low...low }
+        var upper = low
+        while self.fieldOffset(upper + 1) == fieldOffset { upper += 1 }
+        return low...upper
     }
 
     /// In `AXValue` offsets, asking `side` at a boundary or the field's start; nil if unresolved.
@@ -91,22 +123,46 @@ public extension ParagraphBreaks {
         return min(lower, upper)..<max(lower, upper)
     }
 
-    /// `text` at `range` without its breaks, as `AXSelectedText` reads it.
+    /// `text` at `range` without its breaks and with its hidden runs, as `AXSelectedText` reads it.
     func fieldText(_ text: String, at range: Range<Int>) -> String {
         let inside = Set(offsets.filter { range.contains($0) }.map { $0 - range.lowerBound })
-        guard !inside.isEmpty else { return text }
-        let units = text.utf16.enumerated().filter { !inside.contains($0.offset) }.map(\.element)
+        let runs = hidden.filter { range.lowerBound < $0.at && $0.at <= range.upperBound && !$0.text.isEmpty }
+        guard !inside.isEmpty || !runs.isEmpty else { return text }
+        var units: [UInt16] = []
+        var next = runs.makeIterator()
+        var run = next.next()
+        for (index, unit) in text.utf16.enumerated() {
+            while let current = run, current.at - range.lowerBound == index {
+                units += current.text.utf16
+                run = next.next()
+            }
+            if !inside.contains(index) { units.append(unit) }
+        }
+        while let current = run {
+            units += current.text.utf16
+            run = next.next()
+        }
         return String(decoding: units, as: UTF16.self)
     }
 
-    /// The breaks after an edit, counting each typed `\n` as a new paragraph.
-    func replacing(_ range: Range<Int>, with replacement: String) -> ParagraphBreaks {
+    /// The breaks after an edit, counting each typed `\n` as a new paragraph; `keepingCovered` moves the last list marker it
+    /// covers to its start (LIN-1652).
+    func replacing(_ range: Range<Int>, with replacement: String, keepingCovered: Bool = false) -> ParagraphBreaks {
         let delta = replacement.utf16.count - range.count
         var result = offsets.filter { $0 < range.lowerBound }
         for (index, unit) in replacement.utf16.enumerated() where unit == 10 {
             result.append(range.lowerBound + index)
         }
         result += offsets.filter { $0 >= range.upperBound }.map { $0 + delta }
-        return ParagraphBreaks(offsets: result)
+        var kept = hidden.filter { $0.at <= range.lowerBound }
+        let covered = hidden.filter { range.lowerBound < $0.at && $0.at <= range.upperBound && !$0.text.isEmpty }
+        if keepingCovered, let marker = covered.last { kept.append(Hidden(at: range.lowerBound, text: marker.text)) }
+        kept += hidden.filter { $0.at > range.upperBound }.map { Hidden(at: $0.at + delta, text: $0.text) }
+        return ParagraphBreaks(offsets: result, hidden: kept)
+    }
+
+    /// Whether an edit of `range` takes a hidden run with it.
+    func covers(_ range: Range<Int>) -> Bool {
+        hidden.contains { range.lowerBound < $0.at && $0.at <= range.upperBound }
     }
 }

@@ -32,6 +32,9 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// `text` holds empty paragraphs discovery found, whose lines `AXValue` shows by Chromium's own rule.
     public let holdsEmptyParagraphs: Bool
 
+    /// How many `AXValue` units `text` leaves out for lines no caret reaches (LIN-1652).
+    public let foldedLength: Int
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -44,7 +47,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         caretInEmptyParagraph: Bool = false,
         textlessLeaves: Bool = false,
         valueGap: Int = 0,
-        holdsEmptyParagraphs: Bool = false
+        holdsEmptyParagraphs: Bool = false,
+        foldedLength: Int = 0
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -58,6 +62,7 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.textlessLeaves = textlessLeaves
         self.valueGap = valueGap
         self.holdsEmptyParagraphs = holdsEmptyParagraphs
+        self.foldedLength = foldedLength
     }
 
     public var caret: Int? {
@@ -103,6 +108,8 @@ public extension FieldSnapshot {
         case emptyParagraph
         /// Discovery over `markers`, answered by passing its memo for `value`.
         case emptyParagraphs(value: String, markers: String)
+        /// Which `candidates` are list markers, answered by passing its memo for `value`.
+        case listMarkers(value: String, markers: String, candidates: [Range<Int>])
     }
 
     /// A step's result, or the read it needs first.
@@ -120,11 +127,11 @@ public extension FieldSnapshot {
         }
     }
 
-    /// Everything after the learner; `memo` is the last discovery, returned current.
+    /// Everything after the learner; `memo` and `listMarkers` are the last discoveries, returned current.
     static func build(
         _ reads: Reads, capabilities: CapabilityProfile, answer: OffsetsAnswer, anchor: Int?, cursor: Range<Int>?,
-        memo known: EmptyParagraphs.Memo?
-    ) -> Step<(snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?)> {
+        memo known: EmptyParagraphs.Memo?, listMarkers knownMarkers: UnreachableLines.Memo? = nil
+    ) -> Step<(snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, listMarkers: UnreachableLines.Memo?)> {
         var field = reads.field
         if answer == .textContent, reads.marked != nil, field.markers?.breaks != nil {
             guard let inEmptyParagraph = reads.inEmptyParagraph else { return .needs(.emptyParagraph) }
@@ -158,11 +165,35 @@ public extension FieldSnapshot {
                     selection = resolved
                     gap = restored.gap
                     holdsEmptyParagraphs = !found.isEmpty
-                    let model = TextModel(restored.text)
                     // A caret on an empty line is in a paragraph the model already holds.
-                    let onEmptyLine = resolved.isEmpty
-                        && model.lineStart(of: resolved.lowerBound) == model.lineEnd(of: resolved.lowerBound)
-                    emptyParagraph = emptyParagraph && !onEmptyLine
+                    emptyParagraph = emptyParagraph && !onEmptyLine(resolved, in: restored.text)
+                case .done:
+                    break
+                }
+            }
+        }
+        var foldedLength = 0
+        var markerMemo: UnreachableLines.Memo?
+        if answer == .textContent, capabilities.has(.readCaret), let value = field.text, let model = text, let current = breaks,
+           let marked = reads.marked, let raw = reads.markerText {
+            let candidates = UnreachableLines.candidates(text: model, breaks: current)
+            if !candidates.isEmpty {
+                guard let knownMarkers, knownMarkers.holds(value: value, markers: raw, blocks: reads.blocks) else {
+                    return .needs(.listMarkers(value: value, markers: raw, candidates: candidates))
+                }
+                markerMemo = knownMarkers
+            }
+            let folded = UnreachableLines.fold(text: model, breaks: current, raw: raw, markers: Set(markerMemo?.found ?? []))
+            if folded.folded > 0 {
+                switch valueRange(marked, in: folded.breaks, sides: reads.sides) {
+                case .needs(let need):
+                    return .needs(need)
+                case .done(let resolved?) where resolved.upperBound <= folded.text.utf16.count:
+                    text = folded.text
+                    breaks = folded.breaks
+                    selection = resolved
+                    foldedLength = folded.folded
+                    emptyParagraph = emptyParagraph && !onEmptyLine(resolved, in: folded.text)
                 case .done:
                     break
                 }
@@ -181,9 +212,15 @@ public extension FieldSnapshot {
             caretInEmptyParagraph: emptyParagraph,
             textlessLeaves: interpreted.textlessLeaves,
             valueGap: gap,
-            holdsEmptyParagraphs: holdsEmptyParagraphs
+            holdsEmptyParagraphs: holdsEmptyParagraphs,
+            foldedLength: foldedLength
         )
-        return .done((snapshot, memo))
+        return .done((snapshot, memo, markerMemo))
+    }
+
+    private static func onEmptyLine(_ selection: Range<Int>, in text: String) -> Bool {
+        let model = TextModel(text)
+        return selection.isEmpty && model.lineStart(of: selection.lowerBound) == model.lineEnd(of: selection.lowerBound)
     }
 
     /// `breaks.valueRange` over the sides read so far, or the side it needs next.
