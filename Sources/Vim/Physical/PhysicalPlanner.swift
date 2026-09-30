@@ -386,7 +386,13 @@ private extension PhysicalPlanner {
         }
         let step = PhysicalStep.setSelection(field)
         guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
-        return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+        return [step] + back(range.isEmpty, context: context)
+    }
+
+    /// From the next paragraph's start to this one's end, as a shifted ← and a collapse where a code span can take a plain ←.
+    static func back(_ caret: Bool, context: Context) -> [PhysicalStep] {
+        guard caret else { return [.press(.selectLeft, count: 1)] }
+        return context.arrowsSelect ? [.press(.selectLeft, count: 1), .press(.left, count: 1)] : [.press(.left, count: 1)]
     }
 
     /// Linear lands a write at a marker, checkbox or chip by where the caret was, so boundaries are reached by keys (LIN-1652).
@@ -425,7 +431,7 @@ private extension PhysicalPlanner {
             return [.setSelection(context.field(inside..<inside)), .press(.left, count: 1)]
         }
         guard context.edge(caret) == .paragraphEnd else { return [.setSelection(field)] }
-        return [.setSelection(field), .press(.left, count: 1)]
+        return [.setSelection(field)] + back(true, context: context)
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).

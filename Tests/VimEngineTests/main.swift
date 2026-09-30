@@ -1417,6 +1417,7 @@ precondition(paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: 
 ])
 precondition(paragraphPlanning("A", text: threeParagraphs, caret: 0, profile: noCursorProfile).plan.steps == [
     .setSelection(2..<2),
+    .press(.selectLeft, count: 1),
     .press(.left, count: 1),
     .settle(Expectation(selection: 2..<2, length: 11, edge: .paragraphEnd)),
     .commit(.setMode(.insert)),
@@ -3667,7 +3668,7 @@ appended.markers = true
 appended.writesInReadOffsets = true
 appended.readModel = .textContent
 var misplaced = appended
-misplaced.ignoredChords = [.left]
+misplaced.ignoredChords = [.left, .selectLeft]
 appended.type("A")
 precondition(appended.caret == 2 && appended.settleFailures == 0 && appended.state.field.mode == .insert)
 misplaced.type("A")
