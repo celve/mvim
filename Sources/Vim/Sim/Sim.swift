@@ -886,7 +886,7 @@ struct ChromiumParagraphs {
                     flush()
                     parts.append([])
                     partsRaw.append(0xFFFC)
-                    drawnCaret = UnreachableLines.Caret(offset: plain, startsParagraph: offset == 0)
+                    drawnCaret = UnreachableLines.Caret(offset: plain, place: offset == 0 ? .start : .middle)
                 }
                 guard unit == Self.chip else {
                     pending.append(unit)
@@ -912,7 +912,7 @@ struct ChromiumParagraphs {
             if drawn == units.count {
                 parts.append([])
                 partsRaw.append(0xFFFC)
-                drawnCaret = UnreachableLines.Caret(offset: plain, startsParagraph: false)
+                drawnCaret = UnreachableLines.Caret(offset: plain, place: .end)
                 drawnAtEnd = index
             }
             block(prefix + parts[0])

@@ -200,7 +200,7 @@ public enum Snapshotter {
 
     /// Where typing at a boundary end would land; nil when a read fails.
     static func paragraphSide(of marked: AX.MarkedSelection, upper: Bool) -> ParagraphBreaks.Side? {
-        if let drawn = drawnCaret(onMarkerOf: marked, upper: upper) { return DrawnCaret.side(at: drawn.offset, paragraph: drawn.paragraph) }
+        if let drawn = drawnCaret(onMarkerOf: marked, upper: upper) { return DrawnCaret.side(drawn.place) }
         switch marked.side(upper: upper) {
         case .end?: return .end
         case nil: return nil

@@ -12,18 +12,23 @@ public enum DrawnCaret {
         parent == code || previous == code || next == code
     }
 
+    /// Also when an inline group it starts or ends is beside one, as the bold group that holds it before a code span.
+    public static func isCode(_ subrole: String?) -> Bool {
+        subrole == code
+    }
+
     /// Links and style groups sit inside a paragraph, so a drawn caret's paragraph is the first ancestor that is neither.
     public static func isInline(role: String?, subrole: String?) -> Bool {
         role == "AXLink" || subrole?.hasSuffix("StyleGroup") == true
     }
 
-    /// The `AXValue` units one at plain `offset` adds: two inside `paragraph`, one at its start or at its end.
-    public static func length(at offset: Int, paragraph: Range<Int>) -> Int {
-        offset == paragraph.lowerBound || paragraph.upperBound - offset <= 1 ? 1 : 2
+    /// The `AXValue` units one adds: two in the middle of its paragraph, one at its start or at its end.
+    public static func length(_ place: UnreachableLines.Caret.Place) -> Int {
+        place == .middle ? 2 : 1
     }
 
-    /// Typing there lands at `paragraph`'s start, or else in the paragraph it ends.
-    public static func side(at offset: Int, paragraph: Range<Int>) -> ParagraphBreaks.Side {
-        offset == paragraph.lowerBound ? .start(skipping: 0) : .end
+    /// Typing there lands in its paragraph, which starts or ends there.
+    public static func side(_ place: UnreachableLines.Caret.Place) -> ParagraphBreaks.Side {
+        place == .start ? .start(skipping: 0) : .end
     }
 }

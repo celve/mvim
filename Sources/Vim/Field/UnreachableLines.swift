@@ -54,12 +54,18 @@ public enum UnreachableLines {
     /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
     public struct Caret: Equatable, Sendable {
         public let offset: Int
-        /// The break before its line is then its paragraph's own.
-        public let startsParagraph: Bool
+        public let place: Place
 
-        public init(offset: Int, startsParagraph: Bool) {
+        /// Where in its paragraph: at the start the break before its line is the paragraph's, at the end a `<br>` follows.
+        public enum Place: Equatable, Sendable {
+            case start
+            case middle
+            case end
+        }
+
+        public init(offset: Int, place: Place) {
             self.offset = offset
-            self.startsParagraph = startsParagraph
+            self.place = place
         }
     }
 
@@ -161,7 +167,7 @@ public enum UnreachableLines {
                end < units.count, let count = leaves[start], count > 0 {
                 // A drawn caret's breaks go, and the `<br>` after one ending its paragraph goes with the caret.
                 leaves[start] = count - 1
-                if !terminated || !caret.startsParagraph { dropped.insert(line.start - 1) }
+                if !terminated || caret.place != .start { dropped.insert(line.start - 1) }
                 if terminated {
                     dropped.insert(end)
                     keepsTerminator = false

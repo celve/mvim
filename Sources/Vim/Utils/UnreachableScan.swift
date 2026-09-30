@@ -98,11 +98,14 @@ public struct UnreachableScan<Node> {
         return nil
     }
 
-    /// An ancestor of a drawn caret: where it starts, and its subrole, nearest last.
+    /// An ancestor of a drawn caret, nearest last: its reads, where it starts, and its place among its siblings.
     private struct Ancestor {
+        let read: EmptyBlockScan<Node>.Block
         let start: Int
-        let subrole: String?
-        let inline: Bool
+        let path: [Int]
+        let siblings: [Node]
+
+        var inline: Bool { DrawnCaret.isInline(role: read.role, subrole: read.subrole) }
     }
 
     /// The drawn caret among the nodes holding `p` at either end; `.some(nil)` where there is none, nil on a failed read.
@@ -137,25 +140,48 @@ public struct UnreachableScan<Node> {
             if DrawnCaret.isEmptyGroup(subrole: read.subrole, children: read.children.count) {
                 guard let start = start(of: siblings[index], at: here) else { return nil }
                 guard start == p else { continue }
-                var neighbours: [String?] = [nil, nil]
-                for (slot, neighbour) in [index - 1, index + 1].enumerated() where siblings.indices.contains(neighbour) {
-                    guard let beside = self.read(siblings[neighbour], at: path + [neighbour]) else { return nil }
-                    neighbours[slot] = beside.subrole
-                }
-                guard DrawnCaret.isCaret(parent: ancestors.last?.subrole, previous: neighbours[0], next: neighbours[1]) else {
-                    continue
-                }
-                let paragraph = ancestors.last { !$0.inline }
-                return .some(UnreachableLines.Caret(offset: p, startsParagraph: paragraph?.start == p))
+                guard let place = place(of: here, among: siblings, under: ancestors) else { return nil }
+                if let place { return .some(UnreachableLines.Caret(offset: p, place: place)) }
+                continue
             }
             guard read.role != "AXStaticText", !read.children.isEmpty else { continue }
             guard let start = start(of: siblings[index], at: here) else { return nil }
-            let ancestor = Ancestor(start: start, subrole: read.subrole,
-                                    inline: DrawnCaret.isInline(role: read.role, subrole: read.subrole))
+            let ancestor = Ancestor(read: read, start: start, path: here, siblings: siblings)
             guard let found = caret(at: p, in: read.children, path: here, ancestors: ancestors + [ancestor]) else { return nil }
             if found != nil { return found }
         }
         return .some(nil)
+    }
+
+    /// For an empty group at `path`, its place in its paragraph if it is a drawn caret: it, or an inline group it starts
+    /// or ends, is beside a code span, or a code span holds it. `.some(nil)` where it is none, nil on a failed read.
+    private mutating func place(
+        of path: [Int], among siblings: [Node], under ancestors: [Ancestor]
+    ) -> UnreachableLines.Caret.Place?? {
+        var drawn = false
+        var index = path[path.count - 1]
+        var level = siblings
+        var levelPath = Array(path.dropLast())
+        // Whether the empty group starts, and ends, each node from it up to this level.
+        var atStart = true
+        var atEnd = true
+        var above = ancestors[...]
+        while true {
+            for (neighbour, touches) in [(index - 1, atStart), (index + 1, atEnd)]
+            where touches && !drawn && level.indices.contains(neighbour) {
+                guard let beside = read(level[neighbour], at: levelPath + [neighbour]) else { return nil }
+                drawn = DrawnCaret.isCode(beside.subrole)
+            }
+            atStart = atStart && index == 0
+            atEnd = atEnd && index == level.count - 1
+            guard let parent = above.popLast(), parent.inline else { break }
+            drawn = drawn || DrawnCaret.isCode(parent.read.subrole)
+            index = parent.path[parent.path.count - 1]
+            level = parent.siblings
+            levelPath = Array(parent.path.dropLast())
+        }
+        guard drawn else { return .some(nil) }
+        return .some(atStart ? .start : atEnd ? .end : .middle)
     }
 
     private mutating func start(of node: Node, at path: [Int]) -> Int? {

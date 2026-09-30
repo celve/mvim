@@ -4530,6 +4530,14 @@ let tailEndInsideTree = fakeTree("""
 5.4.0/T/297/298 5.5/T/298/310 6/G/310/339 6.0/T/310/339
 """)
 
+let boldEndTree = fakeTree("""
+0/G/0/59 0.0/T/0/59 1/G/59/145 1.0/T/59/68 1.1/S/68/77 1.1.0/T/68/77 1.2/T/77/86 1.3/F/86/97 1.3.0/T/86/97
+1.4/T/97/103 1.5/D/103/112 1.5.0/T/103/112 1.6/T/112/120 1.7/K/120/129 1.7.0/T/120/129 1.8/T/129/145 2/G/145/194
+2.0/D/145/149 2.0.0/T/145/149 2.1/T/149/194 3/G/194/228 3.0/T/194/224 3.1/D/224/228 3.1.0/T/224/228 4/G/228/268
+4.0/T/228/238 4.1/D/238/241 4.1.0/T/238/241 4.2/T/241/246 4.3/D/246/249 4.3.0/T/246/249 4.4/T/249/268 5/G/268/309
+5.0/T/268/277 5.1/S/277/281 5.1.0/T/277/281 5.1.1/E/281/281 5.2/D/281/285 5.2.0/T/281/285 5.3/T/285/296
+5.4/D/296/297 5.4.0/T/296/297 5.5/T/297/309 6/G/309/338 6.0/T/309/338
+""")
 func inserting(_ text: String, _ addition: String, at offset: Int) -> String {
     var units = Array(text.utf16)
     units.insert(contentsOf: addition.utf16, at: offset)
@@ -4540,14 +4548,18 @@ let midValue = (start: inserting(codeValue, "\n\n", at: 104), end: inserting(cod
 let midRaw = (start: inserting(codeRaw, "\u{FFFC}", at: 103), end: inserting(codeRaw, "\u{FFFC}", at: 112))
 let tailValue = inserting(codeValue, "\n", at: 232)
 let tailRaw = inserting(codeRaw, "\u{FFFC}\n", at: 228)
-let codeStates: [(name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int, starts: Bool)] = [
-    ("outside a start", midValue.start, midRaw.start, midStartOutsideTree, 103, 104, false),
-    ("inside a start", midValue.start, midRaw.start, midStartInsideTree, 103, 104, false),
-    ("inside an end", midValue.end, midRaw.end, midEndInsideTree, 112, 113, false),
-    ("outside an end", midValue.end, midRaw.end, midEndOutsideTree, 112, 113, false),
-    ("a paragraph's start", inserting(codeValue, "\n", at: 147), inserting(codeRaw, "\u{FFFC}", at: 145), leadStartTree, 145, 147, true),
-    ("outside a paragraph's end", tailValue, tailRaw, tailEndOutsideTree, 228, 231, false),
-    ("inside a paragraph's end", tailValue, tailRaw, tailEndInsideTree, 228, 231, false),
+typealias CodeState = (name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int,
+                       place: UnreachableLines.Caret.Place)
+let codeStates: [CodeState] = [
+    ("outside a start", midValue.start, midRaw.start, midStartOutsideTree, 103, 104, .middle),
+    ("inside a start", midValue.start, midRaw.start, midStartInsideTree, 103, 104, .middle),
+    ("inside an end", midValue.end, midRaw.end, midEndInsideTree, 112, 113, .middle),
+    ("outside an end", midValue.end, midRaw.end, midEndOutsideTree, 112, 113, .middle),
+    ("a paragraph's start", inserting(codeValue, "\n", at: 147), inserting(codeRaw, "\u{FFFC}", at: 145), leadStartTree, 145, 147, .start),
+    ("outside a paragraph's end", tailValue, tailRaw, tailEndOutsideTree, 228, 231, .end),
+    ("inside a paragraph's end", tailValue, tailRaw, tailEndInsideTree, 228, 231, .end),
+    ("inside bold before code", inserting(codeValue, "\n\n", at: 286), inserting(codeRaw, "\u{FFFC}", at: 281), boldEndTree, 281, 286,
+     .middle),
 ]
 let noCaret = UnreachableLines.Found(markers: [], chips: [])
 precondition(folded(codeValue, codeRaw, codeTree).text == codeValue, "code spans alone are no lines")
@@ -4556,8 +4568,7 @@ for state in codeStates {
     let aligned = ParagraphBreaks(value: state.value, fieldText: plain)!
     let candidates = UnreachableLines.candidates(text: state.value, breaks: aligned, raw: state.raw)
     precondition(candidates.carets == [state.caret], state.name)
-    precondition(unreachableScanned(state.tree, candidates)?.carets == [.init(offset: state.caret, startsParagraph: state.starts)],
-                 state.name)
+    precondition(unreachableScanned(state.tree, candidates)?.carets == [.init(offset: state.caret, place: state.place)], state.name)
     precondition(scanned(state.tree, plain) == [], "\(state.name): the <br> after a drawn caret is no empty paragraph")
     let model = folded(state.value, state.raw, state.tree)
     precondition(model.text == codeValue, "\(state.name): the model is the text without the drawn caret")
@@ -4565,7 +4576,7 @@ for state in codeStates {
     precondition(model.breaks.fieldText(model.text, at: 0..<model.text.utf16.count) == withoutBreak && roundTrips(model), state.name)
     precondition(model.breaks.fieldOffset(state.model) == state.caret, state.name)
     let unfolded = UnreachableLines.fold(text: state.value, breaks: aligned, raw: state.raw, found: noCaret).text
-    precondition(state.starts || unfolded != codeValue, "\(state.name): undiscovered, the drawn caret's line stays")
+    precondition(state.place == .start || unfolded != codeValue, "\(state.name): undiscovered, the drawn caret's line stays")
 }
 let tailModel = folded(tailValue, tailRaw, tailEndOutsideTree)
 precondition(tailModel.drawnBreak == 228 && tailModel.breaks.fieldOffset(232) == 228,
@@ -4580,12 +4591,10 @@ precondition(DrawnCaret.isCaret(parent: "AXCodeStyleGroup", previous: nil, next:
              && !DrawnCaret.isCaret(parent: "AXStrongStyleGroup", previous: "AXApplicationGroup", next: nil))
 precondition(DrawnCaret.isInline(role: "AXLink", subrole: nil) && DrawnCaret.isInline(role: "AXGroup", subrole: "AXStrongStyleGroup")
              && !DrawnCaret.isInline(role: "AXGroup", subrole: nil))
-precondition([(103, 59..<145), (145, 145..<194), (228, 194..<229)].map { DrawnCaret.length(at: $0, paragraph: $1) } == [2, 1, 1],
-             "the probe's shapes: two lines' worth inside a paragraph, one at its start or end")
-precondition(DrawnCaret.side(at: 145, paragraph: 145..<194) == .start(skipping: 0) && DrawnCaret.side(at: 228, paragraph: 194..<229) == .end)
+precondition([.middle, .start, .end].map(DrawnCaret.length) == [2, 1, 1], "two lines' worth inside a paragraph, one at its start or end")
+precondition(DrawnCaret.side(.start) == .start(skipping: 0) && DrawnCaret.side(.end) == .end)
 
-func codeBuild(_ state: (name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int, starts: Bool),
-               side: ParagraphBreaks.Side) -> FieldSnapshot {
+func codeBuild(_ state: CodeState, side: ParagraphBreaks.Side) -> FieldSnapshot {
     let plain = MarkerText.plain(state.raw)
     let aligned = ParagraphBreaks(value: state.value, fieldText: plain)!
     var reads = FieldSnapshot.Reads(
@@ -4615,7 +4624,7 @@ var lingering = codeStates[5]
 lingering.caret = 229
 precondition(codeBuild(lingering, side: .end).selection == 232..<232, "a read past the <br> is the next line's start")
 for state in codeStates {
-    let snapshot = codeBuild(state, side: state.starts ? .start(skipping: 0) : .end)
+    let snapshot = codeBuild(state, side: DrawnCaret.side(state.place))
     precondition(snapshot.text == codeValue && snapshot.selection == state.model..<state.model, state.name)
     precondition(snapshot.holdsDrawnCaret && !snapshot.caretInEmptyParagraph && snapshot.foldedLength > 0, state.name)
     let x = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand("x"), state: .initial), snapshot: snapshot)
