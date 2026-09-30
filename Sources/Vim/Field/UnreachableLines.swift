@@ -146,7 +146,7 @@ public enum UnreachableLines {
         var leaves = leafCounts(raw)
         let plain = raw.utf16.count - leaves.values.reduce(0, +)
         let markers = Set(found.markers)
-        let carets = Dictionary(found.carets.map { ($0.offset, $0) }) { first, _ in first }
+        var carets = Dictionary(found.carets.map { ($0.offset, $0) }) { first, _ in first }
         let chips = Dictionary(found.chips.map { ($0.range.lowerBound, $0) }) { first, _ in first }
         let plainUnits = Array(FieldReads.withoutAttachments(raw).utf16)
         let endings = Set(found.chips.filter { $0.endsParagraph(in: plainUnits) }.map(\.range.upperBound))
@@ -169,6 +169,7 @@ public enum UnreachableLines {
                end < units.count, let count = leaves[start], count > 0 {
                 // A drawn caret's breaks go, and the `<br>` after one ending its paragraph goes with the caret.
                 leaves[start] = count - 1
+                carets[start] = nil
                 if line.start > 0, !terminated || caret.place != .start { dropped.insert(line.start - 1) }
                 if terminated || breaks.fieldOffset(end) + 1 == plain {
                     // Ending the field, the `<br>` would leave an empty last line no caret reaches.

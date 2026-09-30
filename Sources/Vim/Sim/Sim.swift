@@ -507,7 +507,7 @@ private extension Sim {
         if keys.text != text {
             let deleted = keys.selection.lowerBound..<(keys.selection.lowerBound + text.utf16.count - keys.text.utf16.count)
             listLines = listLines.map { ListLine.carried($0, in: text, replacing: deleted, with: "") }
-            codeSpans = Self.carried(codeSpans, replacing: deleted, with: "")
+            codeSpans = Self.carried(codeSpans, replacing: deleted, with: "", into: keys.text)
         }
         text = keys.text
         selection = keys.selection
@@ -527,8 +527,9 @@ private extension Sim {
         listLines != nil && codeSpans.contains { (start ? $0.lowerBound : $0.upperBound) == offset }
     }
 
-    /// `spans` after an edit: inside a span it stays in, at an edge out, and spans it brings together join, as ProseMirror's.
-    static func carried(_ spans: [Range<Int>], replacing range: Range<Int>, with replacement: String) -> [Range<Int>] {
+    /// `spans` after an edit into `text`, as ProseMirror's marks: inside one it stays in, at an edge out; they join, `\n` splits.
+    static func carried(_ spans: [Range<Int>], replacing range: Range<Int>, with replacement: String, into text: String)
+        -> [Range<Int>] {
         let count = replacement.utf16.count
         let delta = count - range.count
         let kept = spans.compactMap { span -> Range<Int>? in
@@ -548,12 +549,23 @@ private extension Sim {
             }
             return kept.isEmpty ? nil : kept
         }.sorted { $0.lowerBound < $1.lowerBound }
-        return kept.reduce(into: []) { joined, span in
+        let joined: [Range<Int>] = kept.reduce(into: []) { joined, span in
             if let last = joined.last, last.upperBound >= span.lowerBound {
                 joined[joined.count - 1] = last.lowerBound..<max(last.upperBound, span.upperBound)
             } else {
                 joined.append(span)
             }
+        }
+        let units = Array(text.utf16)
+        return joined.flatMap { span in
+            var pieces: [Range<Int>] = []
+            var start = span.lowerBound
+            for index in span where index < units.count && units[index] == 10 {
+                if index > start { pieces.append(start..<index) }
+                start = index + 1
+            }
+            if span.upperBound > start { pieces.append(start..<span.upperBound) }
+            return pieces
         }
     }
 
@@ -575,9 +587,10 @@ private extension Sim {
 
     mutating func applyReplace(_ replacement: String) {
         listLines = listLines.map { ListLine.carried($0, in: text, replacing: selection, with: replacement) }
-        codeSpans = Self.carried(codeSpans, replacing: selection, with: replacement)
+        let replaced = TextModel(text).replacing(selection, with: replacement)
+        codeSpans = Self.carried(codeSpans, replacing: selection, with: replacement, into: replaced)
         codeInside = false
-        text = TextModel(text).replacing(selection, with: replacement)
+        text = replaced
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
         backward = false
