@@ -321,6 +321,12 @@ public final class Executor {
                 if expectation.converged(selection: selection, length: length, selectedText: text, side: side) {
                     return outcome(true)
                 }
+                // The caret Linear draws at a code span's edge is lines of its own, which no expected length counts.
+                if let expected = expectation.length, let observed = length, (1...2).contains(observed - expected),
+                   expectation.converged(selection: selection, length: observed - Snapshotter.drawnLength(at: marked),
+                                         selectedText: text, side: side) {
+                    return outcome(true)
+                }
             }
             guard Date() < deadline else { return outcome(false) }
             Thread.sleep(forTimeInterval: 0.01)

@@ -64,8 +64,6 @@ public struct Sim {
     /// A caret at a code span's edge is inside it; a plain arrow from the edge's near side only crosses the edge.
     private var codeInside = false
 
-    /// Linear draws the caret 20–160 ms after it reaches an edge, after that command's settles: from the next command on.
-    private var drawnAt: Int?
 
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
@@ -238,7 +236,6 @@ public struct Sim {
 
 private extension Sim {
     mutating func run(_ completed: RawMonitor.Completed) {
-        drawnAt = selection.isEmpty && (isCodeEdge(caret, start: true) || isCodeEdge(caret, start: false)) ? caret : nil
         let command = completed.command
         let logical = LogicalPlanner.plan(command, state: state)
         var anchor: Int?
@@ -429,7 +426,7 @@ private extension Sim {
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
                 let passed = expectation.converged(
-                    selection: observed, length: fieldLength, selectedText: readSelectedText, side: upperSide
+                    selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
                 )
                 attribution.record(.settle(expectation), passed: passed, selection: observed, length: fieldLength,
                                    selectedText: readSelectedText)
@@ -684,7 +681,16 @@ extension Sim {
 
     var chromium: ChromiumParagraphs {
         let caret = selection.isEmpty ? selection.lowerBound : nil
-        return ChromiumParagraphs(text: text, lines: listLines, caret: caret, drawn: caret.flatMap { $0 == drawnAt ? $0 : nil })
+        let drawn = caret.flatMap { isCodeEdge($0, start: true) || isCodeEdge($0, start: false) ? $0 : nil }
+        return ChromiumParagraphs(text: text, lines: listLines, caret: caret, drawn: drawn)
+    }
+
+    /// What the caret Linear draws adds to `fieldLength`, which a settle leaves out.
+    var drawnLength: Int {
+        let shown = chromium
+        guard shown.drawnCaret != nil else { return 0 }
+        return shown.shown.value.utf16.count
+            - ChromiumParagraphs(text: text, lines: listLines, caret: selection.lowerBound).shown.value.utf16.count
     }
 
     /// The upper end's paragraph side from the Sim's own text, in every Chromium mode.

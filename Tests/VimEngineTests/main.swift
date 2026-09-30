@@ -4580,6 +4580,9 @@ precondition(DrawnCaret.isCaret(parent: "AXCodeStyleGroup", previous: nil, next:
              && !DrawnCaret.isCaret(parent: "AXStrongStyleGroup", previous: "AXApplicationGroup", next: nil))
 precondition(DrawnCaret.isInline(role: "AXLink", subrole: nil) && DrawnCaret.isInline(role: "AXGroup", subrole: "AXStrongStyleGroup")
              && !DrawnCaret.isInline(role: "AXGroup", subrole: nil))
+precondition([(103, 59..<145), (145, 145..<194), (228, 194..<229)].map { DrawnCaret.length(at: $0, paragraph: $1) } == [2, 1, 1],
+             "the probe's shapes: two lines' worth inside a paragraph, one at its start or end")
+precondition(DrawnCaret.side(at: 145, paragraph: 145..<194) == .start(skipping: 0) && DrawnCaret.side(at: 228, paragraph: 194..<229) == .end)
 
 func codeBuild(_ state: (name: String, value: String, raw: String, tree: [FakeNode], caret: Int, model: Int, starts: Bool),
                side: ParagraphBreaks.Side) -> FieldSnapshot {

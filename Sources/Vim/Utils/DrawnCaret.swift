@@ -16,4 +16,14 @@ public enum DrawnCaret {
     public static func isInline(role: String?, subrole: String?) -> Bool {
         role == "AXLink" || subrole?.hasSuffix("StyleGroup") == true
     }
+
+    /// The `AXValue` units one at plain `offset` adds: two inside `paragraph`, one at its start or at its end.
+    public static func length(at offset: Int, paragraph: Range<Int>) -> Int {
+        offset == paragraph.lowerBound || paragraph.upperBound - offset <= 1 ? 1 : 2
+    }
+
+    /// Typing there lands at `paragraph`'s start, or else in the paragraph it ends.
+    public static func side(at offset: Int, paragraph: Range<Int>) -> ParagraphBreaks.Side {
+        offset == paragraph.lowerBound ? .start(skipping: 0) : .end
+    }
 }
