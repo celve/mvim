@@ -82,23 +82,4 @@ public enum EmptyParagraphs {
         else { return nil }
         return Model(text: text, breaks: breaks, gap: model.count - v.count)
     }
-
-    /// `AXValue`, the plain marker text and each empty paragraph's `<br>` offset, as Chrome 153 shows `paragraphs`.
-    public static func chromium(_ paragraphs: [String]) -> (value: String, markers: String, found: [Int]) {
-        var value = ""
-        var markers = ""
-        var found: [Int] = []
-        for (index, paragraph) in paragraphs.enumerated() {
-            if paragraph.isEmpty {
-                found.append(markers.utf16.count)
-                markers += "\n"
-                value += "\n"
-            } else {
-                if index > 0, !paragraphs[index - 1].isEmpty { value += "\n" }
-                markers += paragraph
-                value += paragraph
-            }
-        }
-        return (value, markers, found)
-    }
 }

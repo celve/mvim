@@ -636,6 +636,27 @@ extension Sim {
     }
 }
 
+public extension EmptyParagraphs {
+    /// `AXValue`, the plain marker text and each empty paragraph's `<br>` offset, as Chrome 153 shows `paragraphs`.
+    static func chromium(_ paragraphs: [String]) -> (value: String, markers: String, found: [Int]) {
+        var value = ""
+        var markers = ""
+        var found: [Int] = []
+        for (index, paragraph) in paragraphs.enumerated() {
+            if paragraph.isEmpty {
+                found.append(markers.utf16.count)
+                markers += "\n"
+                value += "\n"
+            } else {
+                if index > 0, !paragraphs[index - 1].isEmpty { value += "\n" }
+                markers += paragraph
+                value += paragraph
+            }
+        }
+        return (value, markers, found)
+    }
+}
+
 /// The Sim's text as Chrome 153 shows it when every `\n` ends a paragraph (LIN-1612).
 struct ChromiumParagraphs {
     let text: String

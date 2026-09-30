@@ -1,12 +1,3 @@
-/// How a field counts caret and selection offsets.
-public enum OffsetsAnswer: String, Codable, CaseIterable, Equatable, Sendable {
-    case value
-    /// Chromium's count, without the paragraph breaks it generates in `AXValue`.
-    case textContent
-    /// No count fits: the caret is withheld and commands go blind.
-    case untrusted
-}
-
 /// What a belief answers, stored as a capability's name or `offsets`.
 public enum Question: RawRepresentable, Codable, Hashable, Sendable {
     case write(Capability)
