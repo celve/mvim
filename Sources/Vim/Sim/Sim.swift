@@ -476,6 +476,11 @@ private extension Sim {
             return true
         }
         atChipStart = false
+        // Measured: from inside a code span's start, shifted → and ⇧⌃E do nothing.
+        if [.selectRight, Chord.paragraphEnd.shifted].contains(chord), selection.isEmpty, codeInside,
+           isCodeEdge(selection.lowerBound, start: true) {
+            return true
+        }
         if chord.modifiers.isEmpty, selection.isEmpty, [Key.arrowLeft, .arrowRight].contains(chord.key) {
             let at = selection.lowerBound
             let (start, end) = (isCodeEdge(at, start: true), isCodeEdge(at, start: false))

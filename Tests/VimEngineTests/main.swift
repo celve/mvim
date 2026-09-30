@@ -1404,6 +1404,8 @@ precondition(lastWordA.operand == 5..<7, "the operand is compared with the field
 precondition(paragraphPlanning("ciw", text: threeParagraphs, caret: 7, profile: readProfile).plan.steps == [
     .press(.selectLeft, count: 1),
     .press(.left, count: 1),
+    .press(.selectLeft, count: 1),
+    .press(.right, count: 1),
     .press(.selectRight, count: 2),
     .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd)),
     .settle(Expectation(selection: 5..<7, length: 11, edge: .paragraphEnd, selectedText: "ef")),
@@ -2923,7 +2925,7 @@ precondition(webAbove[(pasted + 2)...].allSatisfy {
 })
 let rowKeys = adding([.nativeMotions], to: removing([.lineStartKey], from: keyProfile))
 let rowAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: rowKeys, breaks: ParagraphBreaks(offsets: [2])).steps
-precondition(chords(PhysicalPlan(steps: rowAbove)) == [.selectLeft, .left, .up])
+precondition(chords(PhysicalPlan(steps: rowAbove)) == [.selectLeft, .left, .selectLeft, .right, .up])
 precondition(rowAbove[rowAbove.firstIndex(of: .press(.up, count: 1))! + 1] == .settle(Expectation(landing: nil)),
              "↑ past a pasted newline settles as blind as ⌃A does")
 for (keys, text) in [("oZ", "ab\nZ\ncd"), ("OZ", "Z\nab\ncd")] {
@@ -4652,7 +4654,8 @@ for profile in [keyProfile, writeKeys] {
     let down = String(repeating: "j", count: codeDoc.count)
     for keys in ["lllllllllllllllllllllllllllllll" + String(repeating: "h", count: 31), down + String(repeating: "k", count: codeDoc.count),
                  "wwwwwwwwwwwwwwwwbbbbbbbbbbbbbbbb", "eeeeeeeeeeee", "5l3lj2lkj$jjk0jjj^", "fsfcfpfk", "jlhjjlh",
-                 "jjj$hhlxlx", "wwxwwdwjx", "wwwcwX", "jA", "jjdd", "jwD", "wwwwD", "jjjwD"] {
+                 "jjj$hhlxlx", "wwxwwdwjx", "wwwcwX", "jA", "jjdd", "jwD", "wwwwD", "jjjwD", "llllllllllllhx",
+                 "llllllllllllhyw", "llllllllllllhD", "jlhdw", "jjjlhx", "llllllllllllhhlx"] {
         var code = codeSim(profile)
         var plain = Sim(text: code.text, caret: 0, profile: profile)
         plain.emulatesKeys = true

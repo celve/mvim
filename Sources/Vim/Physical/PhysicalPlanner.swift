@@ -79,8 +79,14 @@ public enum PhysicalPlanner {
             steps += collapse(to: gap, context: context, profile: profile)
         }
         for (index, step) in logical.steps.enumerated() {
-            guard let lowered = lower(step, context: &context, profile: profile) else {
+            guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
+            }
+            if context.drawnCaret, let first = lowered.firstIndex(where: { if case .press = $0 { true } else { false } }) {
+                // Linear's shifted → and ⇧⌃E do nothing from inside a code span's start (LIN-1683).
+                if case .press(let chord, _) = lowered[first], [.selectRight, Chord.paragraphEnd.shifted].contains(chord) {
+                    lowered.insert(contentsOf: outside, at: first)
+                }
             }
             steps.append(contentsOf: lowered)
             for step in lowered {
@@ -90,7 +96,9 @@ public enum PhysicalPlanner {
                 default: break
                 }
                 switch step {
-                case .setSelection, .replaceSelection, .press, .typeText, .clipboardCut, .clipboardInsert: context.drawnBreak = nil
+                case .setSelection, .replaceSelection, .press, .typeText, .clipboardCut, .clipboardInsert:
+                    context.drawnBreak = nil
+                    context.drawnCaret = false
                 default: break
                 }
             }
@@ -182,6 +190,7 @@ private extension PhysicalPlanner {
             reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
             if snapshot.holdsChips || snapshot.holdsDrawnCaret { unknown.insert(.length) }
             drawnBreak = snapshot.drawnBreak
+            drawnCaret = snapshot.holdsDrawnCaret && (snapshot.caret ?? 0) > 0
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -204,6 +213,9 @@ private extension PhysicalPlanner {
 
         /// The `<br>` after a caret Linear draws at a paragraph's end, which only a write before the caret moves meets.
         var drawnBreak: Int?
+
+        /// The caret is where Linear draws it, which may be inside a code span's start.
+        var drawnCaret = false
 
         /// A range in field offsets as a write meets it, past that `<br>` while it is there.
         func written(_ range: Range<Int>) -> Range<Int> {
@@ -560,26 +572,47 @@ private extension PhysicalPlanner {
         // ← collapses a selection to its start from either end.
         var presses: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
         let from = selection.lowerBound
+        if selecting, !selection.isEmpty, from > 0 { presses += outside }
         guard from != to else { return presses }
         let fromLine = model.lineStart(of: from)
         let toLine = model.lineStart(of: to)
         if fromLine == toLine {
             let count = model.graphemes(in: min(from, to)..<max(from, to))
-            return presses + arrows(to > from ? .right : .left, count: count, selecting: selecting)
+            return presses + counted(arrows(to > from ? .right : .left, count: count, selecting: selecting, to: to))
         }
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
         presses.append(.press(toLine > fromLine ? .down : .up, count: lines))
         presses.append(.press(.lineStart, count: 1))
+        if selecting, toLine > 0 { presses += outside }
         let column = model.graphemes(in: toLine..<to)
         if column > 0 {
-            presses += arrows(.right, count: column, selecting: selecting)
+            presses += counted(arrows(.right, count: column, selecting: selecting, to: to))
         }
         return presses
     }
 
-    /// `count` arrows, or as many shifted ones and the arrow that collapses them, which no code span's edge holds up.
-    static func arrows(_ arrow: Chord, count: Int, selecting: Bool) -> [PhysicalStep] {
-        selecting ? [.press(arrow.shifted, count: count), .press(arrow, count: 1)] : [.press(arrow, count: count)]
+    /// `count` arrows, or as many shifted ones and the arrow that collapses them, which no code span's edge holds up;
+    /// moving left, it steps back out of a code span it lands at the start of, which Linear's shifted → cannot leave.
+    static func arrows(_ arrow: Chord, count: Int, selecting: Bool, to: Int) -> [Chord] {
+        guard selecting else { return Array(repeating: arrow, count: count) }
+        let run = Array(repeating: arrow.shifted, count: count) + [arrow]
+        return arrow == .left && to > 0 ? run + [.selectLeft, .right] : run
+    }
+
+    /// ⇧← then →, which leaves a caret where it was, outside a code span it starts (LIN-1683).
+    static let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
+
+    /// One press per run of the same chord.
+    static func counted(_ chords: [Chord]) -> [PhysicalStep] {
+        var steps: [PhysicalStep] = []
+        for chord in chords {
+            if case .press(chord, let count)? = steps.last {
+                steps[steps.count - 1] = .press(chord, count: count + 1)
+            } else {
+                steps.append(.press(chord, count: 1))
+            }
+        }
+        return steps
     }
 
     /// Does resolving this need the model to describe geography beyond the
@@ -750,8 +783,7 @@ private extension PhysicalPlanner {
         let reached = landing.focus
         let step: Chord = target > reached ? .right : .left
         let column = model.graphemes(in: min(reached, target)..<max(reached, target))
-        let selecting = context.arrowsSelect && column > 0
-        groups.append((Array(repeating: selecting ? step.shifted : step, count: column) + (selecting ? [step] : []), nil))
+        groups.append((column > 0 ? arrows(step, count: column, selecting: context.arrowsSelect, to: target) : [], nil))
         return pressing(groups, to: target..<target, context: &context, profile: profile)
     }
 
@@ -849,15 +881,7 @@ private extension PhysicalPlanner {
                 capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget, exemptions: exemptions
             )
         }
-        var steps: [PhysicalStep] = []
-        for chord in chords {
-            if case .press(chord, let count)? = steps.last {
-                steps[steps.count - 1] = .press(chord, count: count + 1)
-            } else {
-                steps.append(.press(chord, count: 1))
-            }
-        }
-        return steps + settle(context, profile: profile, blame: blame)
+        return counted(chords) + settle(context, profile: profile, blame: blame)
     }
 
     /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
@@ -879,7 +903,7 @@ private extension PhysicalPlanner {
     static func collapsing(_ context: inout Context) -> [PhysicalStep] {
         guard let selection = context.selection, !selection.isEmpty else { return [] }
         context.selection = selection.lowerBound..<selection.lowerBound
-        return [.press(.left, count: 1)]
+        return [.press(.left, count: 1)] + (context.arrowsSelect && selection.lowerBound > 0 ? outside : [])
     }
 }
 
