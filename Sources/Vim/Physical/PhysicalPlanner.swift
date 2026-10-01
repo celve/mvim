@@ -73,6 +73,8 @@ public enum PhysicalPlanner {
         let profile = snapshot.capabilities
         var context = Context(snapshot: snapshot)
         var steps: [PhysicalStep] = []
+        // Writes in a folded field mix with keys at its line edges (LIN-1685).
+        let foldedWrites = profile.has(.writeSelection) && context.folded
         // The field shows our block cursor: physically collapse it to its
         // gap before the plan acts, so no step ever operates on the
         // presentation selection. Empty and bell-only plans skip this —
@@ -86,8 +88,8 @@ public enum PhysicalPlanner {
         }
         for (index, step) in logical.steps.enumerated() {
             let caret = context.unmoved ? context.caret : nil
-            // An AX write would overtake keys still queued, so a write after them waits for them to settle (LIN-1685).
-            let barrier = context.keysQueued ? settle(context, profile: profile) : []
+            // An AX write would overtake keys still queued, so a write after them waits for them to settle.
+            let barrier = foldedWrites && context.keysQueued ? settle(context, profile: profile) : []
             guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
@@ -106,8 +108,9 @@ public enum PhysicalPlanner {
                 context.unmoved = false
             }
         }
-        // ⌃A and ⌃E land alike from the cursor's one character, so a plan they start leaves it be (LIN-1685).
-        if let first = steps.first(where: moves), case .press(let chord, _) = first, [.paragraphStart, .paragraphEnd].contains(chord) {
+        // ⌃A and ⌃E land alike from the cursor's one character, so a plan they start leaves it be.
+        if foldedWrites, let first = steps.first(where: moves), case .press(let chord, _) = first,
+           [.paragraphStart, .paragraphEnd].contains(chord) {
             uncover = []
         }
         return Planning(plan: PhysicalPlan(steps: uncover + steps), rejection: nil, operand: context.operand)
