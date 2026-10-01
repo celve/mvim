@@ -725,7 +725,7 @@ extension Sim {
                     candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
                 },
                 carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? [],
-                joins: candidates.markers.contains { shown.listMarkers.contains($0.lowerBound) } ? shown.listJoins : []
+                joins: candidates.lists ? shown.listJoins : []
             ) : nil
             unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }

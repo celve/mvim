@@ -779,6 +779,8 @@ private extension PhysicalPlanner {
         }
         guard let target = resolve(destination, model: model, from: selection.lowerBound) else { return .reject }
         return nativeMove(destination, to: target, model: model, context: &context, profile: profile).or {
+            sameLine(to: target, model: model, context: &context, profile: profile)
+        }.or {
             let actuation: [PhysicalStep]
             if profile.has(.writeSelection) {
                 actuation = write(target..<target, context: context)
@@ -838,9 +840,7 @@ private extension PhysicalPlanner {
             // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
             var vertical: Direction?
             if case .motion(.line(let direction, _), _)? = destination { vertical = direction }
-            guard targetLine != line || vertical != nil else {
-                return sameLine(to: target, from: position, model: model, context: &context, profile: profile)
-            }
+            guard targetLine != line || vertical != nil else { return .next }
             if targetLine > line || vertical == .down {
                 guard profile.has(.lineEndKey) else { return .next }
                 let lines = model.newlineCount(in: line..<targetLine)
@@ -872,21 +872,29 @@ private extension PhysicalPlanner {
     }
 
     /// From ⌃A or ⌃E where that presses fewer keys than lane B's count from the caret; unblamed, as `0` `$` `j` `k` judge them.
-    static func sameLine(
-        to target: Int, from position: Int, model: TextModel, context: inout Context, profile: CapabilityProfile
-    ) -> Lane {
+    static func sameLine(to target: Int, model: TextModel, context: inout Context, profile: CapabilityProfile) -> Lane {
+        guard !profile.has(.writeSelection), let position = context.position,
+              model.lineStart(of: position) == model.lineStart(of: target) else { return .next }
         let selecting = context.arrowsSelect
         let normalizing = context.normalizes(target)
         func run(from reached: Int) -> [Chord] {
             let count = model.graphemes(in: min(reached, target)..<max(reached, target))
             return count > 0 ? arrows(target > reached ? .right : .left, count: count, selecting: selecting, normalizing: normalizing) : []
         }
+        let counting = run(from: position)
         let ends: [(Capability, Chord, Int)] = [
             (.lineStartKey, .paragraphStart, model.lineStart(of: position)), (.lineEndKey, .paragraphEnd, model.lineEnd(of: position)),
         ]
         guard let keys = ends.filter({ profile.has($0.0) }).map({ [$0.1] + run(from: $0.2) }).min(by: { $0.count < $1.count }),
-              keys.count < run(from: position).count else { return .next }
+              keys.count < counting.count + (counting.first.map { prefixCount($0, context: context, profile: profile) } ?? 0)
+        else { return .next }
         return pressing([(keys, nil)], to: target..<target, context: &context, profile: profile)
+    }
+
+    /// How many keys `planning` puts before `chord` when it is the plan's first actuation, from the caret the snapshot saw.
+    static func prefixCount(_ chord: Chord, context: Context, profile: CapabilityProfile) -> Int {
+        guard context.unmoved, let caret = context.caret else { return 0 }
+        return outside(before: chord, at: caret, context: context, profile: profile)?.count ?? 0
     }
 
     /// The starts of the `count` lines after `line`'s, as far as the text goes.
@@ -1472,10 +1480,13 @@ private extension PhysicalPlanner {
         let (key, back, needs): (Chord, Chord, Capability) = forward
             ? (Chord.paragraphEnd.shifted, .selectLeft, .lineEndKey) : (Chord.paragraphStart.shifted, .selectRight, .lineStartKey)
         let far = forward ? model.lineEnd(of: caret) : model.lineStart(of: caret)
+        let across: Chord = forward ? .selectRight : .selectLeft
         let fromKey = [key] + Array(repeating: back, count: model.graphemes(in: forward ? range.upperBound..<far : far..<range.lowerBound))
         var landing = KeyModel(text: model.text, anchor: caret, focus: caret, atoms: context.atoms, gaps: context.gaps)
-        guard profile.has(needs), fromKey.count < count, fromKey.allSatisfy({ landing.press($0) }), landing.selection == range else {
-            return [.press(forward ? .selectRight : .selectLeft, count: count)]
+        guard profile.has(needs), fromKey.count + prefixCount(key, context: context, profile: profile)
+                < count + prefixCount(across, context: context, profile: profile),
+              fromKey.allSatisfy({ landing.press($0) }), landing.selection == range else {
+            return [.press(across, count: count)]
         }
         return counted(fromKey)
     }

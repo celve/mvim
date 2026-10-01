@@ -41,14 +41,17 @@ public enum UnreachableLines {
         public let chips: [Range<Int>]
         /// Plain offsets of empty lines after a generated break holding one text-less leaf, and the caret's by any leaf.
         public let carets: [Int]
+        /// A marker or a to-do's checkbox may start a list, so which lists follow another is worth reading.
+        public let lists: Bool
 
-        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = []) {
+        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], lists: Bool = false) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
+            self.lists = lists
         }
 
-        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty }
+        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !lists }
     }
 
     /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
@@ -116,8 +119,11 @@ public enum UnreachableLines {
         var markers: [Range<Int>] = []
         var chips: [Range<Int>] = []
         var carets: [Int] = []
+        var leafLines = false
         for line in lines(of: text) {
             let start = breaks.fieldOffset(line.start)
+            let end = line.start + line.units.count
+            if line.units.isEmpty, end < length, generated.contains(end), leaves[start, default: 0] > 0 { leafLines = true }
             if isMarkerShaped(line.units) {
                 markers.append(start..<(start + line.units.count))
             } else if let count = prefixLength(line.units) {
@@ -130,7 +136,7 @@ public enum UnreachableLines {
         }
         // One can share its offset with a to-do's checkbox, or have no line after a `<br>`.
         if let caret, leaves[caret] != nil, !carets.contains(caret) { carets.append(caret) }
-        return Candidates(markers: markers, chips: chips, carets: carets)
+        return Candidates(markers: markers, chips: chips, carets: carets, lists: !markers.isEmpty || leafLines)
     }
 
     /// How many U+FFFCs the marker text has at each plain offset: one per text-less leaf.

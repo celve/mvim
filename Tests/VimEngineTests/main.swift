@@ -4887,6 +4887,11 @@ for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirs
     host.type(keys)
     precondition(host.text == left && host.settleFailures == 0, keys)
 }
+precondition(chords(webPhysical("de", text: "ab\ncd", caret: 0, profile: removing([.lineStartKey], from: keyProfile),
+                                breaks: ParagraphBreaks(offsets: [2])))
+             == [.selectRight, .selectRight, .deleteBack], "⇧⌃E's ⇧→ ← at a paragraph's start would cost more")
+let paste = webPhysical("\"+p", text: "x", caret: 0, profile: keyProfile, breaks: ParagraphBreaks())
+precondition(chords(paste) == [.selectRight, .right] && paste.traceShape.hasPrefix("PPV"), "a put's keys go before ⌘V unsettled")
 var yankedBack = Sim(text: twenty, caret: 52, profile: keyProfile)
 yankedBack.emulatesKeys = true
 yankedBack.type("yb")

@@ -38,7 +38,7 @@ public struct UnreachableScan<Node> {
             if let found = hit { carets.append(found) }
         }
         // Last, so running out of reads here loses only these.
-        let joins = markers.isEmpty ? [] : listJoins(in: roots) ?? []
+        let joins = candidates.lists ? listJoins(in: roots) ?? [] : []
         return UnreachableLines.Found(markers: markers, chips: chips, carets: carets, joins: joins)
     }
 
