@@ -1382,8 +1382,6 @@ precondition(paragraphPlanning("j", text: threeParagraphs, caret: 0, profile: no
     .commit(.setCursor(nil)),
 ])
 precondition(paragraphPlanning("l", text: threeParagraphs, caret: 9, profile: readProfile).plan.steps == [
-    .press(.selectLeft, count: 1),
-    .press(.right, count: 1),
     .press(.selectRight, count: 1),
     .press(.right, count: 1),
     .settle(Expectation(selection: 8..<8, length: 11)),
@@ -2928,7 +2926,7 @@ precondition(webAbove[(pasted + 2)...].allSatisfy {
 })
 let rowKeys = adding([.nativeMotions], to: removing([.lineStartKey], from: keyProfile))
 let rowAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: rowKeys, breaks: ParagraphBreaks(offsets: [2])).steps
-precondition(chords(PhysicalPlan(steps: rowAbove)) == [.selectLeft, .left, .selectLeft, .right, .up])
+precondition(chords(PhysicalPlan(steps: rowAbove)) == [.selectLeft, .left, .up])
 precondition(rowAbove[rowAbove.firstIndex(of: .press(.up, count: 1))! + 1] == .settle(Expectation(landing: nil)),
              "↑ past a pasted newline settles as blind as ⌃A does")
 for (keys, text) in [("oZ", "ab\nZ\ncd"), ("OZ", "Z\nab\ncd")] {
@@ -4347,9 +4345,8 @@ precondition(dia6Planning("0", caret: 80, profile: writeKeys).plan.steps.prefix(
              "a caret written at a chip's start stops the next arrow, so a chip's start is reached from its end")
 precondition(dia6Planning("$", caret: 60, profile: writeKeys).plan.steps.first == .setSelection(222..<222),
              "after a chip that ends its paragraph, the write goes before the <br>")
-precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(5) == [
-    .setSelection(111..<111), .press(.selectLeft, count: 1), .press(.left, count: 1), .press(.selectLeft, count: 1),
-    .press(.right, count: 1),
+precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(3) == [
+    .setSelection(111..<111), .press(.selectLeft, count: 1), .press(.left, count: 1),
 ], "a paragraph's start sharing an offset with the line above's end is reached from inside it")
 precondition(checkedTexts(dia6Planning("x", caret: 37).plan) == [chipA], "x takes the chip whole")
 precondition(dia6Planning("yy", caret: 60).plan.steps.contains(
