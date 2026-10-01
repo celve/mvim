@@ -3678,6 +3678,16 @@ for count in 1...Strikes.limit {
     ignored.feed("<Esc>")
 }
 precondition(ignored.learner!.lessons.contains { $0.committed == .insertText })
+var swallowedWrites = Sim(text: "say hello world", caret: 6, profile: axProfile)
+swallowedWrites.swallowsSelect = true
+swallowedWrites.learn(with: Sim.Learner(probed: axProfile))
+for count in 1...Strikes.limit {
+    swallowedWrites.type("l")
+    precondition(swallowedWrites.caret == 6 && swallowedWrites.learner!.lessons.last?.strikes == count)
+    precondition(swallowedWrites.profile.has(.writeSelection) == (count < Strikes.limit), "one lost write leaves writes on")
+}
+swallowedWrites.type("l")
+precondition(swallowedWrites.caret == 7, "then keys move the caret")
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
@@ -4376,7 +4386,9 @@ let dia1End = dia1Planning("$", caret: 0, profile: writeKeys)
 precondition(dia1End.traceShape == "P!C" && chords(dia1End) == [.paragraphEnd], "where ⌃E lands it alone, no write goes first")
 precondition(chords(dia1Planning("A", caret: 4, profile: writeKeys)) == [.paragraphEnd])
 func dia1Line(_ index: Int) -> Int { dia1Lines.prefix(index).map { $0.utf16.count + 1 }.reduce(0, +) }
-precondition(chords(dia1Planning("0", caret: dia1Line(1) + 3, profile: writeKeys)) == [.paragraphStart])
+precondition(chords(dia1Planning("0", caret: dia1Line(6) + 3, profile: writeKeys)) == [.paragraphStart])
+precondition(dia1Planning("0", caret: dia1Line(1) + 3, profile: writeKeys).steps.first == .setSelection(54..<54),
+             "past a list marker a write lands alone")
 precondition(dia1Planning("0", caret: 4, profile: writeKeys).steps.first == .setSelection(0..<0), "a write that lands alone stays")
 
 // LIN-1685: the folded write lane extends to a line's end by ⇧⌃E, which a chip would stop.
@@ -4390,6 +4402,24 @@ precondition(chords(dia1Planning("cc", caret: 4, profile: writeKeys)) == [Chord.
 precondition(chords(dia1Planning("dd", caret: 4, profile: writeKeys)) == [Chord.paragraphEnd.shifted, .selectRight])
 precondition(chords(dia1Planning("2dd", caret: 4, profile: writeKeys))
              == [Chord.paragraphEnd.shifted, .selectRight, Chord.paragraphEnd.shifted, .selectRight])
+
+// At a paragraph's start a write takes arrows after it, so a caret already there is not written again, and a collapse is ←.
+func writes(_ plan: PhysicalPlan) -> Bool { plan.steps.contains { if case .setSelection = $0 { true } else { false } } }
+let middle = dia1Line(6)
+let middleYank = dia1Planning("yw", caret: middle, profile: writeKeys)
+precondition(!writes(middleYank) && chords(middleYank) == Array(repeating: .selectRight, count: 7) + [.left])
+func dia1Cursor(_ keys: String, gap: Int) -> PhysicalPlan {
+    let snapshot = FieldSnapshot(
+        capabilities: adding([.drawCursor], to: writeKeys), text: dia1Model.text, selection: gap..<(gap + 1),
+        length: dia1Value.utf16.count, cursor: gap..<(gap + 1), webContent: true, breaks: dia1Model.breaks,
+        textlessLeaves: true, foldedLength: dia1Model.folded
+    )
+    return PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
+}
+let cursorX = dia1Cursor("x", gap: middle)
+precondition(!writes(cursorX) && cursorX.steps.first == .press(.left, count: 1) && chords(cursorX).prefix(2) == [.left, .selectRight])
+if case .settle = cursorX.steps[1] {} else { preconditionFailure("the drawn cursor collapses by a settled ←, so no write overtakes it") }
+precondition(writes(dia1Cursor("x", gap: middle + 2)), "inside a paragraph the write stays")
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,

@@ -398,8 +398,10 @@ private extension PhysicalPlanner {
     }
 
     /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
-    static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
-        if context.folded, let model = context.model { return foldedWrite(range, model: model, context: context) }
+    static func write(_ range: Range<Int>, from current: Int? = nil, context: Context) -> [PhysicalStep] {
+        if context.folded, let model = context.model {
+            return foldedWrite(range, from: current, model: model, context: context)
+        }
         let field = context.written(range)
         if !range.isEmpty, landsPast(range.lowerBound, context: context), let model = context.model {
             return [
@@ -425,13 +427,17 @@ private extension PhysicalPlanner {
     }
 
     /// Linear lands a write at a marker, checkbox or chip by where the caret was, so boundaries are reached by keys (LIN-1652).
-    static func foldedWrite(_ range: Range<Int>, model: TextModel, context: Context) -> [PhysicalStep] {
+    static func foldedWrite(
+        _ range: Range<Int>, from current: Int? = nil, model: TextModel, context: Context
+    ) -> [PhysicalStep] {
         guard range.isEmpty else {
             let ends = [range.lowerBound, range.upperBound]
             guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
             else { return [.setSelection(context.written(range))] }
-            let start = range.lowerBound..<range.lowerBound
-            return foldedWrite(start, model: model, context: context) + extending(range, model: model, context: context)
+            let placed = foldedWrite(range.lowerBound..<range.lowerBound, model: model, context: context)
+            // A caret already at the start needs no write that takes arrows after it.
+            return (current == range.lowerBound ? keyed(placed, or: [], context: context) : placed)
+                + extending(range, model: model, context: context)
         }
         let caret = range.lowerBound
         let field = context.written(range)
@@ -508,9 +514,15 @@ private extension PhysicalPlanner {
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
     static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
-        if profile.has(.writeSelection) { return write(start..<start, context: context) }
         // Settled, so a later AX write cannot overtake the ←.
-        return [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
+        let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
+        guard profile.has(.writeSelection) else { return keys }
+        return keyed(write(start..<start, context: context), or: keys, context: context)
+    }
+
+    /// A folded field's write that needs arrows after it gives way to the key lane's `keys` where they press no more (LIN-1685).
+    static func keyed(_ written: [PhysicalStep], or keys: [PhysicalStep], context: Context) -> [PhysicalStep] {
+        context.folded && presses(written) && pressCount(keys) <= pressCount(written) ? keys : written
     }
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {
@@ -627,7 +639,7 @@ private extension PhysicalPlanner {
             return [.commit(.setCursor(nil))]   // end of line/text: nothing to cover
         }
         context.selection = gap..<end
-        return write(gap..<end, context: context) + [.commit(.setCursor(gap..<end))]
+        return write(gap..<end, from: gap, context: context) + [.commit(.setCursor(gap..<end))]
     }
 }
 
@@ -1456,7 +1468,8 @@ private extension PhysicalPlanner {
             }
             if profile.has(.writeSelection) {
                 context.selection = range
-                return .steps(write(range, context: context) + settle(context, profile: profile))
+                let caret = selection.isEmpty ? selection.lowerBound : nil
+                return .steps(write(range, from: caret, context: context) + settle(context, profile: profile))
             }
             var presses = keyPath(from: selection, to: range.lowerBound, model: model, context: context)
             let count = model.graphemes(in: range)
@@ -1522,11 +1535,10 @@ private extension PhysicalPlanner {
             }
             let towardStart = target == selection.lowerBound
             context.selection = target..<target
-            if profile.has(.writeSelection) {
-                return write(target..<target, context: context) + settle(context, profile: profile)
-            }
             let settled = towardStart && context.normalizes(target) ? outside : []
-            return [.press(towardStart ? .left : .right, count: 1)] + settled + settle(context, profile: profile)
+            let keys = [.press(towardStart ? .left : .right, count: 1)] + settled + settle(context, profile: profile)
+            guard profile.has(.writeSelection) else { return keys }
+            return keyed(write(target..<target, context: context) + settle(context, profile: profile), or: keys, context: context)
         }
         if context.selectionOpaque {
             context.selectionOpaque = false
@@ -1731,7 +1743,7 @@ private extension PhysicalPlanner {
         var steps: [PhysicalStep] = []
         var settled = false
         if profile.has(.writeSelection) {
-            steps += write(range, context: context)
+            steps += write(range, from: selection.isEmpty ? selection.lowerBound : nil, context: context)
         } else {
             switch nativeSelect(.lines(count: count, interior: true), range: range,
                                 context: &context, profile: profile) {

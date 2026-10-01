@@ -129,12 +129,13 @@ motions `ge` `%` `(` `)` `H` `M` `L` `*` `#` `[[` `]]`; and `g-` `g+` `&` `gR` `
 
 ## Browsers and Electron apps
 
-Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field. Some also
-let it set the selection, as Linear does in Dia, and mvim then moves and selects by writing it. In the
-rest, and wherever mvim has learned that writes fail, it runs the same Normal-mode commands by pressing
-keys (arrows, ⌃A and ⌃E, ⌘↑ and ⌘↓) with no block cursor, and checks the field after each step: when
-the field does not answer as planned, it beeps and stops rather than edit the wrong text. `o` and `O`
-paste their new line there, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
+Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field, and some,
+such as Linear in Dia, let it set the selection too, so mvim moves and selects there by writing it.
+Where a field takes no writes, or mvim has learned that they fail, mvim runs the same Normal-mode
+commands by pressing keys (arrows, ⌃A and ⌃E, ⌘↑ and ⌘↓) with no block cursor, and checks the field
+after each step: when the field does not answer as planned, it beeps and stops rather than edit the
+wrong text. In these apps `o` and `O` paste their
+new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
 of more than about 250 paragraphs, a list's markers and to-do boxes are not, and a mention chip is
 one character on its paragraph's line, so `j` and `k` count the lines Linear shows, and columns start
 after a list item's `• ` or `1. `. In a field mvim cannot read at all, and under **Force**, moves are
