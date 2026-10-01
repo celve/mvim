@@ -52,17 +52,23 @@ extension Snapshotter {
 
     /// Waits for the caret Linear draws 20–160 ms late at a code span's end ending a paragraph, whose `<br>` moves offsets.
     static func waitsForDrawnCaret(_ snapshot: FieldSnapshot, in element: AXUIElement) -> Bool {
+        // Keys still landing read as a selection, which may yet end at a code span's end.
         guard snapshot.breaks != nil, !snapshot.holdsDrawnCaret, let caret = snapshot.caret, let text = snapshot.text,
-              TextModel(text).lineEnd(of: caret) == caret, let marked = AX.markedSelection(of: element), marked.isCollapsed,
-              marked.side(upper: false) == .end, let node = marked.node(upper: false), AX.role(of: node) == kAXStaticTextRole,
-              let parent = AX.parent(of: node), DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: parent).string(0))
-        else { return false }
+              TextModel(text).lineEnd(of: caret) == caret, let marked = AX.markedSelection(of: element),
+              !marked.isCollapsed || atCodeEnd(marked) else { return false }
         let length = AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0)
         let deadline = Date().addingTimeInterval(0.2)
         while Date() < deadline, AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0) == length {
             Thread.sleep(forTimeInterval: 0.01)
         }
         return true
+    }
+
+    /// A caret at the end of a code span's text, where Linear is about to draw one.
+    private static func atCodeEnd(_ marked: AX.MarkedSelection) -> Bool {
+        guard marked.side(upper: false) == .end, let node = marked.node(upper: false), AX.role(of: node) == kAXStaticTextRole,
+              let parent = AX.parent(of: node) else { return false }
+        return DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: parent).string(0))
     }
 
     /// A `<br>` Linear drew for a caret that has since left, which goes up to 300 ms later and moves every offset past it.
