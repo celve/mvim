@@ -118,12 +118,20 @@ public enum Snapshotter {
         known: EmptyParagraphs.Memo? = nil,
         knownUnreachable: UnreachableLines.Memo? = nil
     ) -> Reading {
-        let first = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
-                         model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
-        guard waitsForDrawnCaret(first.snapshot, in: element) else { return first }
-        return read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium, model: model,
-                    sampling: sampling, known: first.emptyParagraphs ?? known,
-                    knownUnreachable: first.unreachable ?? knownUnreachable)
+        func stable(_ known: EmptyParagraphs.Memo?, _ knownUnreachable: UnreachableLines.Memo?) -> Reading {
+            var reading = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
+                               model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
+            for _ in 0..<2 {
+                // Linear draws and removes carets beside code spans while a read runs, which leaves its parts disagreeing.
+                guard reading.snapshot.breaks != nil, AX.value(of: element) != reading.reads.text else { break }
+                reading = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
+                               model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
+            }
+            return reading
+        }
+        return settled(stable(known, knownUnreachable), in: element) {
+            stable($0.emptyParagraphs ?? known, $0.unreachable ?? knownUnreachable)
+        }
     }
 
     private static func read(

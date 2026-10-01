@@ -4774,9 +4774,10 @@ for (profile, text, spans, kinds, caret, keys) in [
                  "\(text) \(keys)")
 }
 
-// In the write lane no counted ← run follows a write, whose first ← a caret written at a code span's end can take.
+// No write-lane plan has a counted ← run, whose first ← a caret the last plan wrote at a code span's end can take.
 for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCodeStarts {
-    for keys in ["h", "3h", "b", "x", "X", "dw", "db", "D", "A", "I", "0", "$", "j", "k", "dd", "yy", "p", "J", "~"] {
+    for keys in ["h", "3h", "b", "2b", "x", "X", "3X", "dw", "db", "d3h", "c2h", "D", "A", "I", "0", "$", "j", "k", "dd",
+                 "yy", "p", "J", "~", "v3h", "2h", "vb"] {
         var host = listCodeSim(writeKeys, caret: caret, spans: listCodeSpans)
         var (reads, observed) = host.read()
         var memo: EmptyParagraphs.Memo?
@@ -4786,7 +4787,7 @@ for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCod
                                 unreachable: unreachable)
         }.snapshot
         let steps = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: host.state), snapshot: snapshot).steps
-        var written = false
+        var written = true
         for step in steps {
             switch step {
             case .setSelection: written = true

@@ -38,6 +38,18 @@ extension Snapshotter {
         return caret.flatMap { AX.markedSelection(at: children[$0], in: element) }
     }
 
+    /// `reading`, read `again` once Linear has drawn a caret it is about to and removed one it drew for a caret that left.
+    static func settled(_ reading: Reading, in element: AXUIElement, again: (Reading) -> Reading) -> Reading {
+        var reading = reading
+        if waitsForDrawnCaret(reading.snapshot, in: element) { reading = again(reading) }
+        let deadline = Date().addingTimeInterval(0.4)
+        while Date() < deadline, lingers(reading.snapshot, in: element) {
+            Thread.sleep(forTimeInterval: 0.02)
+            reading = again(reading)
+        }
+        return reading
+    }
+
     /// Waits for the caret Linear draws 20–160 ms late at a code span's end ending a paragraph, whose `<br>` moves offsets.
     static func waitsForDrawnCaret(_ snapshot: FieldSnapshot, in element: AXUIElement) -> Bool {
         guard snapshot.breaks != nil, !snapshot.holdsDrawnCaret, let caret = snapshot.caret, let text = snapshot.text,
@@ -51,6 +63,12 @@ extension Snapshotter {
             Thread.sleep(forTimeInterval: 0.01)
         }
         return true
+    }
+
+    /// A `<br>` Linear drew for a caret that has since left, which goes up to 300 ms later and moves every offset past it.
+    static func lingers(_ snapshot: FieldSnapshot, in element: AXUIElement) -> Bool {
+        guard let drawnBreak = snapshot.drawnBreak, let marked = AX.markedSelection(of: element) else { return false }
+        return !marked.isCollapsed || marked.range.lowerBound != drawnBreak
     }
 
     /// The drawn caret at plain `offset`, confirmed as discovery confirms one; nil where there is none or a read fails.

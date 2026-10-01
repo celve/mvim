@@ -64,6 +64,9 @@ public final class Executor {
     /// This run's last register paste, which only the settle straight after it can confirm.
     private var pastedAt: Int?
 
+    /// Where that paste began in Chromium's rich text, for a settle after it that predicts nothing.
+    private var pastedFrom: (range: Range<Int>, side: ParagraphBreaks.Side?)?
+
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
 
@@ -93,6 +96,17 @@ public final class Executor {
         return false
     }
 
+    /// Pastes land up to 250 ms late: a settle after one that predicts nothing waits for the caret to leave its start.
+    private func awaitPaste(_ expectation: Expectation, at index: Int, on element: AXUIElement) {
+        guard pastedAt == index - 1, let from = pastedFrom, expectation.landing == nil, expectation.length == nil,
+              expectation.selectedText == nil else { return }
+        let deadline = Date().addingTimeInterval(0.25)
+        while Date() < deadline, let marked = Snapshotter.markedSelection(of: element), marked.range == from.range,
+              Snapshotter.paragraphSide(of: marked, upper: true) == from.side {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+
     /// Only a caret landing straight after the paste proves the target read it: a length can match before it lands.
     private func confirmPaste(_ outcome: SettleOutcome, _ expectation: Expectation, at index: Int) {
         guard pastedAt == index - 1, outcome.converged, expectation.landing != nil else { return }
@@ -106,6 +120,7 @@ public final class Executor {
     ) -> Bool {
         captures = [:]
         pastedAt = nil
+        pastedFrom = nil
         lastRun = RunEvidence()
         lastWriteError = nil
         lastObserved = nil
@@ -193,6 +208,9 @@ public final class Executor {
                 // No sleep before ⌘V: the app reads the pasteboard only as it handles the ⌘V, queued after the write.
                 PasteboardLoan.shared.put(content)
                 pastedAt = index
+                pastedFrom = paragraphs ? Snapshotter.markedSelection(of: element).map {
+                    ($0.range, Snapshotter.paragraphSide(of: $0, upper: true))
+                } : nil
                 Synth.commandV()
             } else {
                 // Registers +/* and pasteboard markers paste what the user has there, not a register still on loan.
@@ -210,6 +228,7 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
+            awaitPaste(expectation, at: index, on: element)
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
@@ -222,6 +241,7 @@ public final class Executor {
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
+            awaitPaste(expectation, at: index, on: element)
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
