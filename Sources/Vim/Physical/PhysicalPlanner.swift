@@ -10,7 +10,9 @@
 /// 1. **The app's keys**, under `nativeMotions`: its word, paragraph, row
 ///    and page keys, landing wherever the app decides.
 /// 2. **Native line and document keys**, where selections cannot be
-///    written: ⌃A ⌃E ⌘↑ ⌘↓, shifted to select, with only a column counted.
+///    written: ⌃A ⌃E ⌘↑ ⌘↓, shifted to select, with only a column counted;
+///    and ⌃A or ⌃E to a line's start or end that a folded field's write
+///    would reach only with arrows after it.
 /// 3. **A** (AX write): compute exact offsets with `TextModel`, set ranges,
 ///    adding arrow keys at a Chromium paragraph end, where a write lands on
 ///    the next paragraph. Or **B** (read, no write): the same exact math,
@@ -190,8 +192,12 @@ private extension PhysicalPlanner {
 
         var textlessLeaves = false
 
+        /// ⇧⌃E may extend a folded write's selection to a line's end.
+        let lineEndKey: Bool
+
         init(snapshot: FieldSnapshot) {
             text = snapshot.text
+            lineEndKey = snapshot.capabilities.has(.lineEndKey)
             selection = snapshot.selection
             anchor = snapshot.anchor
             webContent = snapshot.webContent
@@ -425,7 +431,7 @@ private extension PhysicalPlanner {
             guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
             else { return [.setSelection(context.written(range))] }
             let start = range.lowerBound..<range.lowerBound
-            return foldedWrite(start, model: model, context: context) + [.press(.selectRight, count: model.graphemes(in: range))]
+            return foldedWrite(start, model: model, context: context) + extending(range, model: model, context: context)
         }
         let caret = range.lowerBound
         let field = context.written(range)
@@ -465,6 +471,29 @@ private extension PhysicalPlanner {
         return [.setSelection(field)] + back(true, context: context)
     }
 
+    /// From a caret at `range`'s start to all of it, by ⇧⌃E over each line's rest it holds whole and ⇧→ elsewhere (LIN-1685).
+    static func extending(_ range: Range<Int>, model: TextModel, context: Context) -> [PhysicalStep] {
+        let count: [PhysicalStep] = [.press(.selectRight, count: model.graphemes(in: range))]
+        guard context.lineEndKey else { return count }
+        var chords: [Chord] = []
+        var at = range.lowerBound
+        while at < range.upperBound {
+            let end = model.lineEnd(of: at)
+            // ⇧⌃E stops at a chip (LIN-1652), and over one character saves nothing.
+            let whole = end <= range.upperBound && model.graphemes(in: at..<end) > 1
+            if whole, !context.atoms.contains(where: { (at..<end).contains($0) }) {
+                chords.append(Chord.paragraphEnd.shifted)
+                at = end
+            } else {
+                chords.append(.selectRight)
+                at = model.advance(at, byGraphemes: 1)
+            }
+        }
+        var keys = KeyModel(text: model.text, anchor: range.lowerBound, focus: range.lowerBound, atoms: context.atoms)
+        guard chords.allSatisfy({ keys.press($0) }), keys.selection == range else { return count }
+        return counted(chords)
+    }
+
     /// The last letter of the nearest line above `offset`'s with two or more, strictly inside it.
     static func letterAbove(_ offset: Int, in model: TextModel) -> Int? {
         var end = model.lineStart(of: offset) - 1
@@ -486,6 +515,13 @@ private extension PhysicalPlanner {
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {
         steps.contains { if case .press = $0 { return true }; return false }
+    }
+
+    static func pressCount(_ steps: [PhysicalStep]) -> Int {
+        steps.reduce(0) { total, step in
+            guard case .press(_, let count) = step else { return total }
+            return total + count
+        }
     }
 
     /// A misread caret puts keys and writes on other text while every offset reads back as planned (LIN-1533).
@@ -773,17 +809,36 @@ private extension PhysicalPlanner {
             return .next
         }
         guard let target = resolve(destination, model: model, from: selection.lowerBound) else { return .reject }
-        return nativeMove(destination, to: target, model: model, context: &context, profile: profile).or {
-            let actuation: [PhysicalStep]
-            if profile.has(.writeSelection) {
-                actuation = write(target..<target, context: context)
-            } else {
-                actuation = keyPath(from: selection, to: target, model: model, context: context)
-            }
+        let written = profile.has(.writeSelection) ? write(target..<target, context: context) : nil
+        let keyed: Lane
+        if let written {
+            keyed = lineKey(destination, to: target, instead: written, model: model, context: &context, profile: profile)
+        } else {
+            keyed = nativeMove(destination, to: target, model: model, context: &context, profile: profile)
+        }
+        return keyed.or {
+            let actuation = written ?? keyPath(from: selection, to: target, model: model, context: context)
             context.selection = target..<target
             context.selectionOpaque = false
             return .steps(actuation + settle(context, profile: profile))
         }
+    }
+
+    /// A folded field's write reaches a line's start or end only with arrows after it, where ⌃A or ⌃E may need none (LIN-1685).
+    static func lineKey(
+        _ destination: LogicalStep.Destination, to target: Int, instead written: [PhysicalStep], model: TextModel,
+        context: inout Context, profile: CapabilityProfile
+    ) -> Lane {
+        switch destination {
+        case .motion(.lineStart, _), .motion(.lineEnd, 1): break
+        default: return .next
+        }
+        guard context.folded, presses(written) else { return .next }
+        var keyed = context
+        guard case .steps(let keys) = nativeMove(destination, to: target, model: model, context: &keyed, profile: profile),
+              pressCount(keys) <= pressCount(written) else { return .next }
+        context = keyed
+        return .steps(keys)
     }
 
     static func blindMove(_ destination: LogicalStep.Destination, context: inout Context) -> Lane {
@@ -806,7 +861,7 @@ private extension PhysicalPlanner {
         _ destination: LogicalStep.Destination?, to target: Int, model: TextModel,
         context: inout Context, profile: CapabilityProfile
     ) -> Lane {
-        guard !profile.has(.writeSelection), let position = context.position else { return .next }
+        guard let position = context.position else { return .next }
         let line = model.lineStart(of: position)
         let targetLine = model.lineStart(of: target)
         var groups: [KeyGroup]

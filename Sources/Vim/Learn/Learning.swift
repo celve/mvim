@@ -35,6 +35,8 @@ public enum Learning {
     public enum Skip: String, Equatable, Sendable {
         case userOverride = "user-override"
         case alreadyCommitted = "already-committed"
+        /// Fewer than `Strikes.limit` refuted runs in a row.
+        case strike
     }
 
     public struct Lesson: Equatable, Sendable {
@@ -44,6 +46,8 @@ public enum Learning {
         /// The write or key the run refuted, committed broken unless `skip` says why not.
         public var refuted: Evidence?
         public var skip: Skip?
+        /// Its refuted runs in a row, this one included.
+        public var strikes = 0
         public var republish = false
 
         public var committed: Capability? { skip == nil ? refuted?.question.capability : nil }
@@ -56,8 +60,9 @@ public enum Learning {
 
     /// The snapshot's offsets evidence already moved its answer, so `run` holds the command's settles alone.
     public static func learn(
-        store: inout BeliefStore, rung: String, versions: Versions, model: ReadModel, observed snapshot: Observation,
-        run: [Evidence], overridden: (Capability) -> Bool, provenance: Provenance, tally: Tally
+        store: inout BeliefStore, strikes: inout Strikes, rung: String, versions: Versions, model: ReadModel,
+        observed snapshot: Observation, run: [Evidence], overridden: (Capability) -> Bool, provenance: Provenance,
+        tally: Tally
     ) -> Lesson {
         var lesson = Lesson()
         var answer = snapshot.after
@@ -79,13 +84,22 @@ public enum Learning {
             if moved, let why { lesson.move = Move(from: snapshot.before, to: answer, why: why) }
         }
         lesson.republish = answer != model.answer || lesson.recorded
+        strikes.pass(run)
         // A run ends at its first failed settle, so it refutes one write or key at most.
         if let refuted = run.first(where: { $0.outcome == .refutes && $0.question.capability != nil }),
            let capability = refuted.question.capability {
             lesson.refuted = refuted
             if overridden(capability) {
                 lesson.skip = .userOverride
-            } else if store.commit(broken: capability, at: rung, judgedUnder: snapshot.after, versions: versions, provenance: provenance) {
+                return lesson
+            }
+            lesson.strikes = strikes.strike(capability, judgedUnder: snapshot.after, app: versions.app)
+            guard lesson.strikes >= Strikes.limit else {
+                lesson.skip = .strike
+                return lesson
+            }
+            strikes.clear(capability)
+            if store.commit(broken: capability, at: rung, judgedUnder: snapshot.after, versions: versions, provenance: provenance) {
                 lesson.republish = true
             } else {
                 lesson.skip = .alreadyCommitted
@@ -107,7 +121,11 @@ extension Learning.Lesson {
         }
         if let refuted {
             let fields = "q=\(refuted.question.rawValue) why=\(refuted.why.rawValue)"
-            lines.append(skip.map { "skip=\($0.rawValue) \(fields)" } ?? "commit \(fields) rung=\(rung) ver=\(versions.app ?? "nil")")
+            switch skip {
+            case .strike?: lines.append("strike \(strikes)/\(Strikes.limit) \(fields) rung=\(rung)")
+            case let skip?: lines.append("skip=\(skip.rawValue) \(fields)")
+            case nil: lines.append("commit \(fields) rung=\(rung) ver=\(versions.app ?? "nil")")
+            }
         }
         if republish {
             if lines.isEmpty { lines.append("offsets changed rung=\(rung)") }

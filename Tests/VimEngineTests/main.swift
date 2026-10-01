@@ -2616,8 +2616,8 @@ precondition(spent.stop == .budget && spent.hops == 1 && walkReads == 1, "the fi
 // MARK: - The learner's commit rule
 
 // The learner writes at the ROLE learnRung, never the identifier rung: a key per
-// individual field would scatter the evidence so thinly two consecutive strikes
-// would never land.
+// individual field would scatter the evidence so thinly its strikes in a row
+// would never add up.
 precondition(diaPageField.roleRung == "com.dia.app|notion.so|role:AXTextField")
 precondition(diaPageField.roleRung != diaPageField.rungs.first,
              "the learner must not write at the identifier learnRung")
@@ -2632,7 +2632,7 @@ precondition(diaChrome.rungs.contains(diaChrome.roleRung!))
 let learnRung = "com.dia.app|notion.so|role:AXTextField"
 let otherRung = "com.other.app|role:AXTextField"
 
-// One strike commits; `true` asks to persist and re-resolve.
+// The store commits at once; `true` asks to persist and re-resolve.
 let learnVersions = Versions(app: "1.49.1")
 func committing(_ store: inout BeliefStore, _ capability: Capability, at rung: String = learnRung,
                 under offsets: OffsetsAnswer = .value, versions: Versions = learnVersions) -> Bool {
@@ -2650,14 +2650,19 @@ var passed = RunAttribution()
 passed.record(.replaceSelection(""))
 passed.record(.settle(Expectation(selection: 4..<4)), passed: true, selection: 4..<4)
 precondition(passed.evidence == [Evidence(.write(.insertText), .supports(nil), why: .settled, seen: .settle(1))])
-for start in [BeliefStore(), trials] {
-    var store = start
-    let lesson = Learning.learn(
-        store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        observed: Learning.Observation(before: .value, source: .start), run: passed.evidence, overridden: { _ in false },
+func learned(_ store: inout BeliefStore, _ strikes: inout Strikes, _ run: [Evidence], under offsets: OffsetsAnswer = .value,
+             versions: Versions = learnVersions, overridden: Bool = false) -> Learning.Lesson {
+    Learning.learn(
+        store: &store, strikes: &strikes, rung: learnRung, versions: versions, model: ReadModel(answer: offsets),
+        observed: Learning.Observation(before: offsets, source: .start), run: run, overridden: { _ in overridden },
         provenance: Provenance(), tally: Tally()
     )
-    precondition(store == start && !lesson.republish && lesson.committed == nil)
+}
+for start in [BeliefStore(), trials] {
+    var store = start
+    var strikes = Strikes()
+    let lesson = learned(&store, &strikes, passed.evidence)
+    precondition(store == start && !lesson.republish && lesson.committed == nil && strikes.isEmpty)
 }
 
 var perRung = BeliefStore()
@@ -2674,16 +2679,41 @@ var struck = RunAttribution()
 struck.record(.setSelection(4..<9))
 struck.record(.settle(Expectation(selection: 4..<9)), passed: false, selection: 0..<0)
 precondition(struck.evidence == [Evidence(.write(.writeSelection), .refutes, why: .moved, seen: .settle(1))])
-for overridden in [true, false] {
-    var store = BeliefStore()
-    let lesson = Learning.learn(
-        store: &store, rung: learnRung, versions: learnVersions, model: ReadModel(answer: .value),
-        observed: Learning.Observation(before: .value, source: .start), run: struck.evidence, overridden: { _ in overridden },
-        provenance: Provenance(), tally: Tally()
-    )
-    precondition(overridden ? lesson.skip == .userOverride && store.beliefs.isEmpty
-                 : lesson.committed == .writeSelection && lesson.republish && broken(store) == [.writeSelection])
+var overruled = BeliefStore()
+var overruledStrikes = Strikes()
+precondition(learned(&overruled, &overruledStrikes, struck.evidence, overridden: true).skip == .userOverride
+             && overruled.beliefs.isEmpty && overruledStrikes.isEmpty)
+
+// LIN-1685: one refuted write leaves writes on; the third refuted run in a row switches them off.
+var struckStore = BeliefStore()
+var strikes = Strikes()
+for count in 1..<Strikes.limit {
+    let lesson = learned(&struckStore, &strikes, struck.evidence)
+    precondition(lesson.skip == .strike && lesson.strikes == count && lesson.committed == nil && !lesson.republish)
+    precondition(struckStore.beliefs.isEmpty && strikes.runs(.writeSelection) == count)
 }
+let third = learned(&struckStore, &strikes, struck.evidence)
+precondition(third.committed == .writeSelection && third.strikes == Strikes.limit && third.republish)
+precondition(broken(struckStore) == [.writeSelection] && strikes.isEmpty)
+
+var wrote = RunAttribution()
+wrote.record(.setSelection(4..<9))
+wrote.record(.settle(Expectation(selection: 4..<9)), passed: true, selection: 4..<9)
+func strikesAfter(_ runs: [(run: [Evidence], under: OffsetsAnswer, app: String)]) -> (Strikes, BeliefStore) {
+    var store = BeliefStore()
+    var strikes = Strikes()
+    for item in runs { _ = learned(&store, &strikes, item.run, under: item.under, versions: Versions(app: item.app)) }
+    return (strikes, store)
+}
+let miss = (run: struck.evidence, under: OffsetsAnswer.value, app: "1.49.1")
+let landedBetween = strikesAfter([miss, miss, (wrote.evidence, .value, "1.49.1"), miss])
+precondition(landedBetween.0.runs(.writeSelection) == 1 && landedBetween.1.beliefs.isEmpty, "a write that lands starts the count over")
+let otherPass = strikesAfter([miss, miss, (passed.evidence, .value, "1.49.1"), miss])
+precondition(otherPass.0.isEmpty && broken(otherPass.1) == [.writeSelection], "another write's pass does not")
+let reread = strikesAfter([miss, miss, (struck.evidence, .textContent, "1.49.1")])
+precondition(reread.0.runs(.writeSelection) == 1 && reread.1.beliefs.isEmpty, "a new offsets answer starts it over")
+let updated = strikesAfter([miss, miss, (struck.evidence, .value, "1.50")])
+precondition(updated.0.runs(.writeSelection) == 1 && updated.1.beliefs.isEmpty, "so does an app update")
 
 
 // MARK: - The recorder's renderers
@@ -3263,8 +3293,10 @@ precondition(resolving(migrated).broken == [.writeSelection] && resolving(migrat
 func lesson(_ store: inout BeliefStore, model: ReadModel, snapshot: (OffsetsAnswer, Evidence?, OffsetsAnswer),
             source: OffsetsSource = .start, run: [Evidence] = []) -> Learning.Lesson {
     let observed = Learning.Observation(before: snapshot.0, source: source, evidence: snapshot.1, after: snapshot.2)
-    return Learning.learn(store: &store, rung: learnRung, versions: learnVersions, model: model, observed: observed, run: run,
-                          overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"), tally: Tally())
+    var strikes = Strikes()
+    return Learning.learn(store: &store, strikes: &strikes, rung: learnRung, versions: learnVersions, model: model,
+                          observed: observed, run: run, overridden: { _ in false }, provenance: Provenance(tag: "e2.c5"),
+                          tally: Tally())
 }
 var observed = BeliefStore()
 let moved = lesson(&observed, model: ReadModel(answer: .value), snapshot: (.value, supportsTextContent, .textContent))
@@ -3466,6 +3498,8 @@ precondition(Learning.Lesson(refuted: lengthStrike, republish: true).traceLines(
     == ["commit q=insertText why=length rung=\(learnRung) ver=1.49.1 → republish"])
 precondition(Learning.Lesson(refuted: lengthStrike, skip: .alreadyCommitted).traceLines(rung: learnRung, versions: learnVersions)
     == ["skip=already-committed q=insertText why=length"])
+precondition(Learning.Lesson(refuted: lengthStrike, skip: .strike, strikes: 2).traceLines(rung: learnRung, versions: learnVersions)
+    == ["strike 2/3 q=insertText why=length rung=\(learnRung)"])
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields(text: true)
     == "sel=10..15 len=21 text=\"hello\"")
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields == "sel=10..15 len=21 text=(5)")
@@ -3637,8 +3671,13 @@ precondition(textarea.learner!.store == untrustedRung && textarea.learner!.evide
 var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
 ignored.swallowsReplace = true
 ignored.learn(with: Sim.Learner(probed: axProfile))
-ignored.type("ciw")
-precondition(ignored.learner!.lessons.last?.committed == .insertText && !ignored.profile.has(.insertText))
+for count in 1...Strikes.limit {
+    ignored.type("ciw")
+    precondition(ignored.learner!.lessons.last?.strikes == count)
+    precondition(ignored.profile.has(.insertText) == (count < Strikes.limit), "one swallowed replace leaves the write on")
+    ignored.feed("<Esc>")
+}
+precondition(ignored.learner!.lessons.contains { $0.committed == .insertText })
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
@@ -4330,9 +4369,27 @@ precondition(settleTraces(dia1Count).last == "sel=105..105 len=491", "3j counts 
 let dia1dd = dia1Planning("dd", caret: 53)
 precondition(checkedTexts(dia1dd) == ["Numbered one2."], "AXSelectedText runs through the next item's marker")
 precondition(settleTraces(dia1dd).last == "soft sel=54..54 len=nil", "a list renumbers, so the length goes unchecked")
-precondition(dia1Planning("$", caret: 0, profile: writeKeys).steps.prefix(3)
+precondition(dia1Planning("$", caret: 0, profile: removing([.lineEndKey], from: writeKeys)).steps.prefix(3)
              == [.setSelection(51..<51), .press(.selectRight, count: 1), .press(.right, count: 1)],
              "a write at a list marker lands by where the caret was, so the line's end is reached from inside it")
+let dia1End = dia1Planning("$", caret: 0, profile: writeKeys)
+precondition(dia1End.traceShape == "P!C" && chords(dia1End) == [.paragraphEnd], "where ⌃E lands it alone, no write goes first")
+precondition(chords(dia1Planning("A", caret: 4, profile: writeKeys)) == [.paragraphEnd])
+func dia1Line(_ index: Int) -> Int { dia1Lines.prefix(index).map { $0.utf16.count + 1 }.reduce(0, +) }
+precondition(chords(dia1Planning("0", caret: dia1Line(1) + 3, profile: writeKeys)) == [.paragraphStart])
+precondition(dia1Planning("0", caret: 4, profile: writeKeys).steps.first == .setSelection(0..<0), "a write that lands alone stays")
+
+// LIN-1685: the folded write lane extends to a line's end by ⇧⌃E, which a chip would stop.
+let dia1D = dia1Planning("D", caret: 4, profile: writeKeys)
+precondition(dia1D.steps.first == .setSelection(4..<4) && chords(dia1D) == [Chord.paragraphEnd.shifted])
+precondition(chords(dia1Planning("D", caret: 4, profile: removing([.lineEndKey], from: writeKeys)))
+             == Array(repeating: .selectRight, count: 48))
+precondition(Set(chords(dia1Planning("D", caret: dia1Line(10) + 7, profile: writeKeys))) == [.selectRight],
+             "the mention chip ends that line")
+precondition(chords(dia1Planning("cc", caret: 4, profile: writeKeys)) == [Chord.paragraphEnd.shifted])
+precondition(chords(dia1Planning("dd", caret: 4, profile: writeKeys)) == [Chord.paragraphEnd.shifted, .selectRight])
+precondition(chords(dia1Planning("2dd", caret: 4, profile: writeKeys))
+             == [Chord.paragraphEnd.shifted, .selectRight, Chord.paragraphEnd.shifted, .selectRight])
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,
@@ -4341,8 +4398,10 @@ func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyPr
 }
 let chipA = "\u{2060}\u{00A0}LIN-1645 Why j/k always beeps in Linear (macbook14 logs)"
 let chipB = "\u{2060}\u{00A0}LIN-1641 Build mvim's field snapshots with one pure builder shared by the runtime and the Sim"
-precondition(dia6Planning("0", caret: 80, profile: writeKeys).plan.steps.prefix(2) == [.setSelection(281..<281), .press(.left, count: 1)],
+precondition(dia6Planning("0", caret: 80, profile: removing([.lineStartKey], from: writeKeys)).plan.steps.prefix(2)
+             == [.setSelection(281..<281), .press(.left, count: 1)],
              "a caret written at a chip's start stops the next arrow, so a chip's start is reached from its end")
+precondition(chords(dia6Planning("0", caret: 80, profile: writeKeys).plan) == [.paragraphStart], "⌃A crosses the chip")
 precondition(dia6Planning("$", caret: 60, profile: writeKeys).plan.steps.first == .setSelection(222..<222),
              "after a chip that ends its paragraph, the write goes before the <br>")
 precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(3) == [

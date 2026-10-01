@@ -129,11 +129,12 @@ motions `ge` `%` `(` `)` `H` `M` `L` `*` `#` `[[` `]]`; and `g-` `g+` `&` `gR` `
 
 ## Browsers and Electron apps
 
-Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field but not set
-its selection. There mvim runs the same Normal-mode commands by pressing keys (arrows, ⌃A and ⌃E, ⌘↑
-and ⌘↓), and checks the field after each step: when the field does not answer as planned, it beeps and
-stops rather than edit the wrong text. There is no block cursor there, and `o` and `O` paste their
-new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
+Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field. Some also
+let it set the selection, as Linear does in Dia, and mvim then moves and selects by writing it. In the
+rest, and wherever mvim has learned that writes fail, it runs the same Normal-mode commands by pressing
+keys (arrows, ⌃A and ⌃E, ⌘↑ and ⌘↓) with no block cursor, and checks the field after each step: when
+the field does not answer as planned, it beeps and stops rather than edit the wrong text. `o` and `O`
+paste their new line there, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
 of more than about 250 paragraphs, a list's markers and to-do boxes are not, and a mention chip is
 one character on its paragraph's line, so `j` and `k` count the lines Linear shows, and columns start
 after a list item's `• ` or `1. `. In a field mvim cannot read at all, and under **Force**, moves are
@@ -142,8 +143,9 @@ search, marks and Visual mode beep. **Notion** comes with its own defaults, sinc
 is a separate field.
 
 mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
-check (it lands wrong, or not within a quarter of a second), mvim switches that capability off for
-fields like the one it failed in until the app updates. **Capabilities** then lists it first, under
+check (it lands wrong, or not within a quarter of a second) three commands in a row, mvim switches that
+capability off for fields like the one it failed in until the app updates. A command where it works
+starts the count over, and so does relaunching mvim. **Capabilities** then lists it first, under
 **Learned for …** with the day it failed, and **Try Again** forgets it so mvim tries it afresh.
 Some failures only stop the command: a key landing elsewhere in Chromium's rich text, a word key
 doing nothing in web content, anything under **Force**, and any capability you set yourself. mvim
@@ -490,14 +492,16 @@ paragraph, which is mvim's line, ⇧⌃A/⇧⌃E to select there, and ⌘↑/⌘
 document. `dd` is ⌃A, ⇧⌃E, ⇧→; `j` is ⌃E, → and then the column counted on the new line; `0`,
 `$`, `gg`, `G`, `D`, `C`, `cc`, `yy`, `o`, `O`, `J` and linewise puts follow the same pattern.
 `x` and `X` still select one character and check it before deleting, because ⌦ and ⌫ would
-delete first and join lines at a line end.
+delete first and join lines at a line end. Where a field is written but a write cannot land a line's
+start or end alone, as beside Linear's list markers and chips, mvim presses ⌃A or ⌃E instead, and a
+selection it wrote reaches a line's end by ⇧⌃E where no chip is in the way.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
 and caret mvim can read. A key that lands anywhere but where it
 should, including a caret key that leaves a selection (as a select-all binding would) or a key that does
-nothing where it had somewhere to go, is learned off for that surface like a write that lies, and mvim
-counts arrows there again; **Try Again** in the menu lets it try the key afresh. In Chromium's rich
+nothing where it had somewhere to go, is learned off for that surface after three such misses in a row,
+like a write that lies, and mvim counts arrows there again; **Try Again** in the menu lets it try the key afresh. In Chromium's rich
 text a key that lands somewhere else only aborts the command, because one paragraph can be several
 `AXValue` lines there (a mention chip) and a working key lands off the model's line; its `learn` line
 says `why=paragraph-lines`, and you can turn such a key off from the menu.
@@ -550,9 +554,10 @@ empty paragraphs, an edit that empties a line or types into an empty one changes
 mvim learns three kinds of answer about each kind of field — every field of one role on one site,
 or in one app natively — and keeps them in the [beliefs file](#the-beliefs-file):
 
-- **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and one
-  settle failure blamed on one sets it off for that kind of field until the app updates. A pass
-  changes nothing.
+- **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and three
+  settle failures in a row blamed on one set it off for that kind of field until the app updates. A
+  pass in between starts the count over, as do a new offsets answer and a new app version, and the
+  count lasts only while mvim runs.
 - **Offsets**: how the field counts caret and selection offsets. `value` is `AXValue`'s count,
   `textContent` is Chromium's without the paragraph breaks it generates (the text-marker path),
   and `untrusted` withholds the caret, so commands take the blind lane (`ciw` is ⌥← ⇧⌥→ ⌘X
@@ -575,7 +580,8 @@ the outcome is `supports`, `refutes` or `neutral`, and `seen` is `snapshot` or `
 step. A failed settle's line is logged; passes and snapshot reads only at debug level. A struck
 write says why: `unanswered`, `length`, `moved` (the selection read back elsewhere) or `edge` (the
 offsets held but not the paragraph side). A struck key says `unmoved`, `left-selection`, `too-long` or
-`off-target`, and the `commit` line that sets it off repeats the reason.
+`off-target`, and the `commit` line that sets it off repeats the reason; a failure short of the third
+logs `strike <n>/3 q=<question> why=<reason> rung=<rung>` instead.
 
 The bind line shows the read model as `offsets=<answer>/<source>`, where the source is `start`
 (the rule above), `learned`, `user` or `plain` (no children), followed by one `belief` line per
