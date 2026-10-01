@@ -24,6 +24,7 @@ public struct UnreachableScan<Node> {
     public mutating func run(blocks roots: [Node], candidates: UnreachableLines.Candidates) -> UnreachableLines.Found? {
         var markers: [Int] = []
         var chips: [UnreachableLines.Chip] = []
+        var carets: [UnreachableLines.Caret] = []
         for candidate in candidates.markers {
             guard let hit = descend(to: candidate, in: roots) else { return nil }
             if case .marker = hit { markers.append(candidate.lowerBound) }
@@ -32,7 +33,11 @@ public struct UnreachableScan<Node> {
             guard let hit = descend(to: candidate, in: roots) else { return nil }
             if case .chip(let range, let paragraph) = hit { chips.append(UnreachableLines.Chip(range: range, paragraph: paragraph)) }
         }
-        return UnreachableLines.Found(markers: markers, chips: chips)
+        for candidate in candidates.carets {
+            guard let hit = caret(at: candidate, in: roots, path: [], ancestors: []) else { return nil }
+            if let found = hit { carets.append(found) }
+        }
+        return UnreachableLines.Found(markers: markers, chips: chips, carets: carets)
     }
 
     private enum Hit {
@@ -91,6 +96,91 @@ public struct UnreachableScan<Node> {
             path = here
         }
         return nil
+    }
+
+    /// An ancestor of a drawn caret, nearest last: its reads, where it starts, and its place among its siblings.
+    private struct Ancestor {
+        let read: EmptyBlockScan<Node>.Block
+        let start: Int
+        let path: [Int]
+        let siblings: [Node]
+
+        var inline: Bool { DrawnCaret.isInline(role: read.role, subrole: read.subrole) }
+    }
+
+    /// The drawn caret among the nodes holding `p` at either end; `.some(nil)` where there is none, nil on a failed read.
+    private mutating func caret(
+        at p: Int, in siblings: [Node], path: [Int], ancestors: [Ancestor]
+    ) -> UnreachableLines.Caret?? {
+        guard ancestors.count < 16 else { return nil }
+        var low = 0
+        var high = siblings.count - 1
+        var last: Int?
+        while low <= high {
+            let middle = (low + high) / 2
+            guard let start = start(of: siblings[middle], at: path + [middle]) else { return nil }
+            if start <= p {
+                last = middle
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        guard let last else { return .some(nil) }
+        // Siblings are in text order, so those ending at or after `p` run back from the last starting at or before it.
+        var first = last
+        while first > 0 {
+            guard let end = end(of: siblings[first - 1], at: path + [first - 1]) else { return nil }
+            guard end >= p else { break }
+            first -= 1
+        }
+        for index in first...last {
+            let here = path + [index]
+            guard let read = read(siblings[index], at: here) else { return nil }
+            if DrawnCaret.isEmptyGroup(subrole: read.subrole, children: read.children.count) {
+                guard let start = start(of: siblings[index], at: here) else { return nil }
+                guard start == p else { continue }
+                guard let place = place(of: here, among: siblings, under: ancestors) else { return nil }
+                if let place { return .some(UnreachableLines.Caret(offset: p, place: place)) }
+                continue
+            }
+            guard read.role != "AXStaticText", !read.children.isEmpty else { continue }
+            guard let start = start(of: siblings[index], at: here) else { return nil }
+            let ancestor = Ancestor(read: read, start: start, path: here, siblings: siblings)
+            guard let found = caret(at: p, in: read.children, path: here, ancestors: ancestors + [ancestor]) else { return nil }
+            if found != nil { return found }
+        }
+        return .some(nil)
+    }
+
+    /// Where a drawn caret at `path` sits in its paragraph; `.some(nil)` for an empty group that is none, nil on a failed read.
+    private mutating func place(
+        of path: [Int], among siblings: [Node], under ancestors: [Ancestor]
+    ) -> UnreachableLines.Caret.Place?? {
+        var drawn = false
+        var index = path[path.count - 1]
+        var level = siblings
+        var levelPath = Array(path.dropLast())
+        // Whether the empty group starts, and ends, each node from it up to this level.
+        var atStart = true
+        var atEnd = true
+        var above = ancestors[...]
+        while true {
+            for (neighbour, touches) in [(index - 1, atStart), (index + 1, atEnd)]
+            where touches && !drawn && level.indices.contains(neighbour) {
+                guard let beside = read(level[neighbour], at: levelPath + [neighbour]) else { return nil }
+                drawn = DrawnCaret.isCode(beside.subrole)
+            }
+            atStart = atStart && index == 0
+            atEnd = atEnd && index == level.count - 1
+            guard let parent = above.popLast(), parent.inline else { break }
+            drawn = drawn || DrawnCaret.isCode(parent.read.subrole)
+            index = parent.path[parent.path.count - 1]
+            level = parent.siblings
+            levelPath = Array(parent.path.dropLast())
+        }
+        guard drawn else { return .some(nil) }
+        return .some(atStart ? .start : atEnd ? .end : .middle)
     }
 
     private mutating func start(of node: Node, at path: [Int]) -> Int? {

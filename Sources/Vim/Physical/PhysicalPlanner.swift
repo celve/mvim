@@ -77,10 +77,18 @@ public enum PhysicalPlanner {
         // they touch nothing and the cursor stays up.
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             steps += collapse(to: gap, context: context, profile: profile)
+            context.drawnBreak = nil
+            context.unmoved = false
         }
         for (index, step) in logical.steps.enumerated() {
-            guard let lowered = lower(step, context: &context, profile: profile) else {
+            let caret = context.unmoved ? context.caret : nil
+            guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
+            }
+            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, which a caret mvim did not place may be (LIN-1683).
+            if let caret, let first = lowered.firstIndex(where: moves), case .press(let chord, _) = lowered[first],
+               let prefix = outside(before: chord, at: caret, context: context, profile: profile) {
+                lowered.insert(contentsOf: prefix, at: first)
             }
             steps.append(contentsOf: lowered)
             for step in lowered {
@@ -90,8 +98,20 @@ public enum PhysicalPlanner {
                 default: break
                 }
             }
+            if lowered.contains(where: moves) {
+                context.drawnBreak = nil
+                context.unmoved = false
+            }
         }
         return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
+    }
+
+    /// A step that can take the caret from where the snapshot saw it.
+    static func moves(_ step: PhysicalStep) -> Bool {
+        switch step {
+        case .setSelection, .replaceSelection, .press, .typeText, .clipboardCut, .clipboardInsert: true
+        default: false
+        }
     }
 
     private static func isBellOnly(_ logical: LogicalPlan) -> Bool {
@@ -105,12 +125,16 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left, as read in field offsets, to its start.
-    static func collapse(_ selection: Range<Int>, misread: Bool = false, profile: CapabilityProfile) -> PhysicalPlan {
+    /// Collapses a selection an aborted run left, as read in field offsets, to its start; `paragraphs` for Chromium's rich text.
+    static func collapse(
+        _ selection: Range<Int>, misread: Bool = false, paragraphs: Bool = false, profile: CapabilityProfile
+    ) -> PhysicalPlan {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
         let start = selection.lowerBound
-        let context = Context(snapshot: FieldSnapshot(capabilities: profile, selection: start..<start))
+        let context = Context(snapshot: FieldSnapshot(
+            capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil
+        ))
         return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
     }
 
@@ -176,7 +200,8 @@ private extension PhysicalPlanner {
             textlessLeaves = snapshot.textlessLeaves
             valueGap = snapshot.valueGap - snapshot.foldedLength
             reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
-            if snapshot.holdsChips { unknown.insert(.length) }
+            if snapshot.holdsChips || snapshot.holdsDrawnCaret { unknown.insert(.length) }
+            drawnBreak = snapshot.drawnBreak
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -193,6 +218,24 @@ private extension PhysicalPlanner {
 
         /// The model holds folded text, where Linear lands a write by where the caret came from (LIN-1652).
         var folded: Bool { !(breaks?.hidden.isEmpty ?? true) }
+
+        /// Chromium rich text, where a plain arrow at a Linear code span's edge can stay put (LIN-1683).
+        var arrowsSelect: Bool { breaks != nil }
+
+        /// The `<br>` after a caret Linear draws at a paragraph's end, which only a write before the caret moves meets.
+        var drawnBreak: Int?
+
+        /// Nothing has pressed or written yet, so the caret is still the snapshot's, wherever it came from.
+        var unmoved = true
+
+        /// `range` in field offsets as a write meets them: past that `<br>`, one more while it is there.
+        func written(_ range: Range<Int>) -> Range<Int> {
+            let written = field(range)
+            guard let drawnBreak, let breaks else { return written }
+            let end = breaks.valueOffsets(drawnBreak).lowerBound
+            return (range.lowerBound > end ? written.lowerBound + 1 : written.lowerBound)
+                ..< (range.upperBound > end ? written.upperBound + 1 : written.upperBound)
+        }
 
         /// Model offsets of the chips, which keys cross in one step.
         var atoms: Set<Int> { breaks?.atoms ?? [] }
@@ -211,6 +254,11 @@ private extension PhysicalPlanner {
         /// Typing over `range` would drop a break bounding an `<hr>` or a table cell, or a chip: no typed text rebuilds them.
         func retypesStructure(_ range: Range<Int>) -> Bool {
             textlessLeaves && (breaks?.offsets.contains { range.contains($0) } ?? false) || (breaks?.coversAtom(range) ?? false)
+        }
+
+        /// A caret here may be inside a code span's start; ←, ⌘← and writes land outside one at a paragraph's start.
+        func normalizes(_ offset: Int) -> Bool {
+            arrowsSelect && offset > 0 && edge(offset) != .paragraphStart
         }
 
         /// Which side of a paragraph boundary `offset` is on; nil off a boundary.
@@ -346,8 +394,8 @@ private extension PhysicalPlanner {
     /// Chromium lands a write at a boundary on the next paragraph, so paragraph ends are reached by keys.
     static func write(_ range: Range<Int>, context: Context) -> [PhysicalStep] {
         if context.folded, let model = context.model { return foldedWrite(range, model: model, context: context) }
-        let field = context.field(range)
-        if !range.isEmpty, context.edge(range.lowerBound) == .paragraphEnd, let model = context.model {
+        let field = context.written(range)
+        if !range.isEmpty, landsPast(range.lowerBound, context: context), let model = context.model {
             return [
                 .setSelection(field.lowerBound..<field.lowerBound),
                 .press(.left, count: 1),
@@ -355,8 +403,19 @@ private extension PhysicalPlanner {
             ]
         }
         let step = PhysicalStep.setSelection(field)
-        guard context.edge(range.upperBound) == .paragraphEnd else { return [step] }
-        return [step, .press(range.isEmpty ? .left : .selectLeft, count: 1)]
+        guard landsPast(range.upperBound, context: context) else { return [step] }
+        return [step] + back(range.isEmpty, context: context)
+    }
+
+    /// A paragraph's end, whose write lands on the next paragraph, unless the `<br>` after a drawn caret still ends it.
+    static func landsPast(_ offset: Int, context: Context) -> Bool {
+        context.edge(offset) == .paragraphEnd && context.field(offset..<offset).lowerBound != context.drawnBreak
+    }
+
+    /// From the next paragraph's start to this one's end, as a shifted ← and a collapse where a code span can take a plain ←.
+    static func back(_ caret: Bool, context: Context) -> [PhysicalStep] {
+        guard caret else { return [.press(.selectLeft, count: 1)] }
+        return context.arrowsSelect ? [.press(.selectLeft, count: 1), .press(.left, count: 1)] : [.press(.left, count: 1)]
     }
 
     /// Linear lands a write at a marker, checkbox or chip by where the caret was, so boundaries are reached by keys (LIN-1652).
@@ -364,17 +423,17 @@ private extension PhysicalPlanner {
         guard range.isEmpty else {
             let ends = [range.lowerBound, range.upperBound]
             guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
-            else { return [.setSelection(context.field(range))] }
+            else { return [.setSelection(context.written(range))] }
             let start = range.lowerBound..<range.lowerBound
             return foldedWrite(start, model: model, context: context) + [.press(.selectRight, count: model.graphemes(in: range))]
         }
         let caret = range.lowerBound
-        let field = context.field(range)
+        let field = context.written(range)
         if context.isAtom(caret) {
             // Past the run of chips it starts, since each chip's end is the next one's start.
             var end = caret
             while context.isAtom(end) { end += 1 }
-            let written = context.field(caret..<end).upperBound
+            let written = context.written(caret..<end).upperBound
             return [.setSelection(written..<written), .press(.left, count: end - caret)]
         }
         if context.breaks?.endsBeforeBreak(caret) ?? false {
@@ -384,25 +443,45 @@ private extension PhysicalPlanner {
         let end = model.lineEnd(of: caret)
         if caret == end, caret < model.length, start < caret {
             let inside = model.advance(caret, byGraphemes: -1)
-            return foldedWrite(inside..<inside, model: model, context: context) + [.press(.right, count: 1)]
+            // A plain → from a code span's start only steps into it.
+            return foldedWrite(inside..<inside, model: model, context: context)
+                + run(.right, count: 1, selecting: context.arrowsSelect, normalizing: false)
         }
         // A line's start sharing its offset with the line above's end, as a to-do's does, takes a write from below there.
         if context.edge(caret) == .paragraphStart, field.lowerBound > 0 {
             let inside = model.advance(caret, byGraphemes: 1)
             guard inside < end, !context.isAtom(inside) else {
-                return [.setSelection(field.lowerBound - 1..<field.lowerBound - 1), .setSelection(field)]
+                if context.caret == caret { return [] }
+                if let from = context.caret, from < caret { return [.setSelection(field)] }
+                // First above it, at a letter no line boundary shares, where no caret Linear draws brings a `<br>`.
+                let above = letterAbove(caret, in: model) ?? 0
+                return [.setSelection(context.written(above..<above)), .setSelection(field)]
             }
-            return [.setSelection(context.field(inside..<inside)), .press(.left, count: 1)]
+            // A caret written at a code span's end takes no ← or ⇧← next, and a collapse onto its start may stay inside.
+            return [.setSelection(context.written(inside..<inside))]
+                + run(.left, count: 1, selecting: context.arrowsSelect, normalizing: context.normalizes(caret))
         }
-        guard context.edge(caret) == .paragraphEnd else { return [.setSelection(field)] }
-        return [.setSelection(field), .press(.left, count: 1)]
+        guard landsPast(caret, context: context) else { return [.setSelection(field)] }
+        return [.setSelection(field)] + back(true, context: context)
+    }
+
+    /// The last letter of the nearest line above `offset`'s with two or more, strictly inside it.
+    static func letterAbove(_ offset: Int, in model: TextModel) -> Int? {
+        var end = model.lineStart(of: offset) - 1
+        while end >= 0 {
+            let start = model.lineStart(of: end)
+            let last = model.advance(end, byGraphemes: -1)
+            if last > start { return last }
+            end = start - 1
+        }
+        return nil
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
     static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
         if profile.has(.writeSelection) { return write(start..<start, context: context) }
         // Settled, so a later AX write cannot overtake the ←.
-        return [.press(.left, count: 1)] + settle(context, profile: profile)
+        return [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
     }
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {
@@ -538,25 +617,66 @@ private extension PhysicalPlanner {
     /// is only ever reached through a model that already passed the
     /// `wholeDocument` gate, so either the span is same-line or the block
     /// has real internal geography (a Notion code block).
-    static func keyPath(from selection: Range<Int>, to: Int, model: TextModel) -> [PhysicalStep] {
+    static func keyPath(from selection: Range<Int>, to: Int, model: TextModel, context: Context) -> [PhysicalStep] {
+        let selecting = context.arrowsSelect
         // ← collapses a selection to its start from either end.
         var presses: [PhysicalStep] = selection.isEmpty ? [] : [.press(.left, count: 1)]
         let from = selection.lowerBound
+        if !selection.isEmpty, context.normalizes(from) { presses += outside }
         guard from != to else { return presses }
         let fromLine = model.lineStart(of: from)
         let toLine = model.lineStart(of: to)
         if fromLine == toLine {
             let count = model.graphemes(in: min(from, to)..<max(from, to))
-            return presses + [.press(to > from ? .right : .left, count: count)]
+            return presses + run(to > from ? .right : .left, count: count, selecting: selecting, normalizing: context.normalizes(to))
         }
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
         presses.append(.press(toLine > fromLine ? .down : .up, count: lines))
         presses.append(.press(.lineStart, count: 1))
+        if context.normalizes(toLine) { presses += outside }
         let column = model.graphemes(in: toLine..<to)
         if column > 0 {
-            presses.append(.press(.right, count: column))
+            presses += run(.right, count: column, selecting: selecting, normalizing: false)
         }
         return presses
+    }
+
+    /// `arrows` as presses; a run inside one grapheme presses nothing.
+    static func run(_ arrow: Chord, count: Int, selecting: Bool, normalizing: Bool) -> [PhysicalStep] {
+        selecting && count > 0 ? counted(arrows(arrow, count: count, selecting: true, normalizing: normalizing))
+            : [.press(arrow, count: count)]
+    }
+
+    /// `count` arrows, or shifted ones and a collapse no code edge holds up, leftward stepping out of a span it starts.
+    static func arrows(_ arrow: Chord, count: Int, selecting: Bool, normalizing: Bool) -> [Chord] {
+        guard selecting else { return Array(repeating: arrow, count: count) }
+        let run = Array(repeating: arrow.shifted, count: count) + [arrow]
+        return arrow == .left && normalizing ? run + [.selectLeft, .right] : run
+    }
+
+    /// ⇧← then →, which leaves a caret where it was, outside a code span it starts (LIN-1683).
+    static let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
+
+    /// What goes before ⇧→ or ⇧⌃E from `caret`; at a paragraph's start only ⇧⌃E sticks, and ⌃A or ⇧→ ← lands outside.
+    static func outside(before chord: Chord, at caret: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep]? {
+        guard context.arrowsSelect, [.selectRight, Chord.paragraphEnd.shifted].contains(chord) else { return nil }
+        guard caret == 0 || context.edge(caret) == .paragraphStart else { return outside }
+        guard chord != .selectRight, let model = context.model, model.lineEnd(of: caret) > caret else { return nil }
+        return profile.has(.lineStartKey) ? [.press(.paragraphStart, count: 1)]
+            : [.press(.selectRight, count: 1), .press(.left, count: 1)]
+    }
+
+    /// One press per run of the same chord.
+    static func counted(_ chords: [Chord]) -> [PhysicalStep] {
+        var steps: [PhysicalStep] = []
+        for chord in chords {
+            if case .press(chord, let count)? = steps.last {
+                steps[steps.count - 1] = .press(chord, count: count + 1)
+            } else {
+                steps.append(.press(chord, count: 1))
+            }
+        }
+        return steps
     }
 
     /// Does resolving this need the model to describe geography beyond the
@@ -658,7 +778,7 @@ private extension PhysicalPlanner {
             if profile.has(.writeSelection) {
                 actuation = write(target..<target, context: context)
             } else {
-                actuation = keyPath(from: selection, to: target, model: model)
+                actuation = keyPath(from: selection, to: target, model: model, context: context)
             }
             context.selection = target..<target
             context.selectionOpaque = false
@@ -726,7 +846,9 @@ private extension PhysicalPlanner {
               model.lineStart(of: landing.focus) == targetLine else { return .next }
         let reached = landing.focus
         let step: Chord = target > reached ? .right : .left
-        groups.append((Array(repeating: step, count: model.graphemes(in: min(reached, target)..<max(reached, target))), nil))
+        let column = model.graphemes(in: min(reached, target)..<max(reached, target))
+        groups.append((column > 0 ? arrows(step, count: column, selecting: context.arrowsSelect, normalizing: context.normalizes(target))
+            : [], nil))
         return pressing(groups, to: target..<target, context: &context, profile: profile)
     }
 
@@ -824,15 +946,7 @@ private extension PhysicalPlanner {
                 capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget, exemptions: exemptions
             )
         }
-        var steps: [PhysicalStep] = []
-        for chord in chords {
-            if case .press(chord, let count)? = steps.last {
-                steps[steps.count - 1] = .press(chord, count: count + 1)
-            } else {
-                steps.append(.press(chord, count: 1))
-            }
-        }
-        return steps + settle(context, profile: profile, blame: blame)
+        return counted(chords) + settle(context, profile: profile, blame: blame)
     }
 
     /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
@@ -854,7 +968,7 @@ private extension PhysicalPlanner {
     static func collapsing(_ context: inout Context) -> [PhysicalStep] {
         guard let selection = context.selection, !selection.isEmpty else { return [] }
         context.selection = selection.lowerBound..<selection.lowerBound
-        return [.press(.left, count: 1)]
+        return [.press(.left, count: 1)] + (context.normalizes(selection.lowerBound) ? outside : [])
     }
 }
 
@@ -1289,7 +1403,7 @@ private extension PhysicalPlanner {
                 context.selection = range
                 return .steps(write(range, context: context) + settle(context, profile: profile))
             }
-            var presses = keyPath(from: selection, to: range.lowerBound, model: model)
+            var presses = keyPath(from: selection, to: range.lowerBound, model: model, context: context)
             let count = model.graphemes(in: range)
             if count > 0 {
                 presses.append(.press(.selectRight, count: count))
@@ -1356,7 +1470,8 @@ private extension PhysicalPlanner {
             if profile.has(.writeSelection) {
                 return write(target..<target, context: context) + settle(context, profile: profile)
             }
-            return [.press(towardStart ? .left : .right, count: 1)] + settle(context, profile: profile)
+            let settled = towardStart && context.normalizes(target) ? outside : []
+            return [.press(towardStart ? .left : .right, count: 1)] + settled + settle(context, profile: profile)
         }
         if context.selectionOpaque {
             context.selectionOpaque = false
@@ -1569,7 +1684,7 @@ private extension PhysicalPlanner {
                 steps += keys
                 settled = true
             case .next:
-                steps += keyPath(from: selection, to: range.lowerBound, model: model)
+                steps += keyPath(from: selection, to: range.lowerBound, model: model, context: context)
                 steps.append(.press(.selectRight, count: model.graphemes(in: range)))
             case .reject:
                 return nil
@@ -1735,7 +1850,7 @@ private extension PhysicalPlanner {
         } else if let model = context.model, let selection = context.selection {
             switch nativeMove(destination, to: target, model: model, context: &context, profile: profile) {
             case .steps(let keys): return keys
-            case .next: steps = keyPath(from: selection, to: target, model: model)
+            case .next: steps = keyPath(from: selection, to: target, model: model, context: context)
             case .reject: return nil
             }
         } else {

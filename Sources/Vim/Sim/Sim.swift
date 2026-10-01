@@ -58,6 +58,19 @@ public struct Sim {
     /// A caret written at a chip's start, where Linear's next arrow does nothing.
     private var atChipStart = false
 
+    /// With `listLines`, Linear's inline code spans: a caret at an edge is inside or outside one, and drawn (LIN-1683).
+    public var codeSpans: [Range<Int>] = []
+
+    /// A caret at a code span's edge is inside it; a plain arrow from the edge's near side only crosses the edge.
+    private var codeInside = false
+
+    /// A caret written at a code span's end, where Linear's next ← or ⇧← can do nothing.
+    private var atWrittenCodeEnd = false
+
+    /// Linear draws the caret 20–160 ms after it arrives, so a quick command's snapshot can come first.
+    public var drawsLate = false
+    private var snapshotting = false
+
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
         guard let reads else { return selection }
@@ -235,14 +248,27 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        var (reads, observed) = read()
         var memo = foundEmptyParagraphs
         var unreachable = foundUnreachable
-        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
-            FieldSnapshot.build(
-                reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
-                unreachable: unreachable
-            )
+        func snapshot() -> (built: (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?),
+                            observed: Learning.Observation) {
+            var (reads, observed) = read()
+            let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
+                FieldSnapshot.build(
+                    reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
+                    unreachable: unreachable
+                )
+            }
+            return (built, observed)
+        }
+        snapshotting = true
+        var (built, observed) = snapshot()
+        snapshotting = false
+        // The Snapshotter waits for the caret drawn at a code span's end that ends a paragraph, whose `<br>` moves offsets.
+        let caret = selection.lowerBound
+        if drawsLate, built.snapshot.breaks != nil, !built.snapshot.holdsDrawnCaret, selection.isEmpty,
+           isCodeEdge(caret, start: false), TextModel(text).lineEnd(of: caret) == caret {
+            (built, observed) = snapshot()
         }
         foundEmptyParagraphs = built.memo
         foundUnreachable = built.unreachable
@@ -289,7 +315,7 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        executeAside(PhysicalPlanner.collapse(readSelection, profile: profile))
+        executeAside(PhysicalPlanner.collapse(readSelection, paragraphs: fieldBreaks != nil, profile: profile))
         return readSelection.isEmpty
     }
 
@@ -383,6 +409,9 @@ private extension Sim {
                 if !range.isEmpty, atoms.contains(upper) { upper += 1 }
                 selection = min(lower, upper)..<max(lower, upper)
                 atChipStart = selection.isEmpty && atoms.contains(lower)
+                // Measured, a caret written at a code span's start lands outside it, one at its end inside.
+                codeInside = selection.isEmpty && isCodeEdge(lower, start: false) && !isCodeEdge(lower, start: true)
+                atWrittenCodeEnd = codeInside
                 backward = false
 
             case .replaceSelection(let replacement):
@@ -417,7 +446,7 @@ private extension Sim {
                 // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
                 let observed = unreadableSelection ? nil : readSelection
                 let passed = expectation.converged(
-                    selection: observed, length: fieldLength, selectedText: readSelectedText, side: upperSide
+                    selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
                 )
                 attribution.record(.settle(expectation), passed: passed, selection: observed, length: fieldLength,
                                    selectedText: readSelectedText)
@@ -454,7 +483,7 @@ private extension Sim {
     }
 
     /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
-    static let countedKeys: Set<Chord> = [.left, .right, .up, .down, .lineStart, .selectRight, .deleteBack]
+    static let countedKeys: Set<Chord> = [.left, .right, .up, .down, .lineStart, .selectRight, .selectLeft, .deleteBack]
 
     /// One key as `KeyModel` has Cocoa's bindings do it, which is how LIN-1533 measured Chromium's arrows; false for
     /// a key the model does not know.
@@ -464,6 +493,27 @@ private extension Sim {
             return true
         }
         atChipStart = false
+        // Measured at some ends and not others, so always here: the first ← or ⇧← after a write at a code span's end.
+        defer { atWrittenCodeEnd = false }
+        if atWrittenCodeEnd, [.left, .selectLeft].contains(chord) { return true }
+        // Measured: from inside a code span's start, ⇧⌃E does nothing, and ⇧→ too unless the span starts its line.
+        if [.selectRight, Chord.paragraphEnd.shifted].contains(chord), selection.isEmpty, codeInside,
+           isCodeEdge(selection.lowerBound, start: true),
+           chord != .selectRight || TextModel(text).lineStart(of: selection.lowerBound) != selection.lowerBound {
+            return true
+        }
+        if chord.modifiers.isEmpty, selection.isEmpty, [Key.arrowLeft, .arrowRight].contains(chord.key) {
+            let at = selection.lowerBound
+            let (start, end) = (isCodeEdge(at, start: true), isCodeEdge(at, start: false))
+            // From the side of an edge the arrow points across, it steps inside or out and stays put, but ← leaves a paragraph.
+            let crosses = chord.key == .arrowRight
+                ? start && !codeInside || end && codeInside
+                : start && codeInside && TextModel(text).lineStart(of: at) != at || end && !codeInside
+            if crosses {
+                codeInside.toggle()
+                return true
+            }
+        }
         var keys = KeyModel(
             text: text,
             anchor: backward ? selection.upperBound : selection.lowerBound,
@@ -475,11 +525,66 @@ private extension Sim {
         if keys.text != text {
             let deleted = keys.selection.lowerBound..<(keys.selection.lowerBound + text.utf16.count - keys.text.utf16.count)
             listLines = listLines.map { ListLine.carried($0, in: text, replacing: deleted, with: "") }
+            codeSpans = Self.carried(codeSpans, replacing: deleted, with: "", into: keys.text)
         }
         text = keys.text
         selection = keys.selection
         backward = keys.focus < keys.anchor
+        // Measured: → and ⌥→ arrive outside a start and inside an end, ← the reverse but at a line start, the rest outside.
+        let arrived = selection.isEmpty ? selection.lowerBound : -1
+        switch (chord.key, chord.modifiers) {
+        case (.arrowRight, []), (.arrowRight, [.option]): codeInside = isCodeEdge(arrived, start: false)
+        case (.arrowLeft, []):
+            codeInside = isCodeEdge(arrived, start: true) && TextModel(text).lineStart(of: arrived) != arrived
+        default: codeInside = false
+        }
         return true
+    }
+
+    func isCodeEdge(_ offset: Int, start: Bool) -> Bool {
+        listLines != nil && codeSpans.contains { (start ? $0.lowerBound : $0.upperBound) == offset }
+    }
+
+    /// `spans` after an edit into `text`, as ProseMirror's marks: inside one it stays in, at an edge out; they join, `\n` splits.
+    static func carried(_ spans: [Range<Int>], replacing range: Range<Int>, with replacement: String, into text: String)
+        -> [Range<Int>] {
+        let count = replacement.utf16.count
+        let delta = count - range.count
+        let kept = spans.compactMap { span -> Range<Int>? in
+            let kept: Range<Int>
+            if range.upperBound <= span.lowerBound {
+                kept = (span.lowerBound + delta)..<(span.upperBound + delta)
+            } else if range.lowerBound >= span.upperBound {
+                kept = span
+            } else if span.lowerBound <= range.lowerBound, range.upperBound <= span.upperBound {
+                kept = span.lowerBound..<(span.upperBound + delta)
+            } else if range.lowerBound <= span.lowerBound, span.upperBound <= range.upperBound {
+                return nil
+            } else if range.lowerBound < span.lowerBound {
+                kept = (range.lowerBound + count)..<(span.upperBound + delta)
+            } else {
+                kept = span.lowerBound..<range.lowerBound
+            }
+            return kept.isEmpty ? nil : kept
+        }.sorted { $0.lowerBound < $1.lowerBound }
+        let joined: [Range<Int>] = kept.reduce(into: []) { joined, span in
+            if let last = joined.last, last.upperBound >= span.lowerBound {
+                joined[joined.count - 1] = last.lowerBound..<max(last.upperBound, span.upperBound)
+            } else {
+                joined.append(span)
+            }
+        }
+        let units = Array(text.utf16)
+        return joined.flatMap { span in
+            var pieces: [Range<Int>] = []
+            var start = span.lowerBound
+            for index in span where index < units.count && units[index] == 10 {
+                if index > start { pieces.append(start..<index) }
+                start = index + 1
+            }
+            if span.upperBound > start { pieces.append(start..<span.upperBound) }
+            return pieces
+        }
     }
 
     /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them.
@@ -500,7 +605,11 @@ private extension Sim {
 
     mutating func applyReplace(_ replacement: String) {
         listLines = listLines.map { ListLine.carried($0, in: text, replacing: selection, with: replacement) }
-        text = TextModel(text).replacing(selection, with: replacement)
+        let replaced = TextModel(text).replacing(selection, with: replacement)
+        codeSpans = Self.carried(codeSpans, replacing: selection, with: replacement, into: replaced)
+        codeInside = false
+        atWrittenCodeEnd = false
+        text = replaced
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
         backward = false
@@ -603,7 +712,8 @@ extension Sim {
                 markers: candidates.markers.map(\.lowerBound).filter(Set(shown.listMarkers).contains),
                 chips: shown.chips.filter { chip in
                     candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
-                }
+                },
+                carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? []
             ) : nil
             unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
@@ -616,7 +726,18 @@ extension Sim {
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
 
     var chromium: ChromiumParagraphs {
-        ChromiumParagraphs(text: text, lines: listLines, caret: selection.isEmpty ? selection.lowerBound : nil)
+        let caret = selection.isEmpty ? selection.lowerBound : nil
+        let drawn = drawsLate && snapshotting ? nil
+            : caret.flatMap { isCodeEdge($0, start: true) || isCodeEdge($0, start: false) ? $0 : nil }
+        return ChromiumParagraphs(text: text, lines: listLines, caret: caret, drawn: drawn)
+    }
+
+    /// What the caret Linear draws adds to `fieldLength`, which a settle leaves out.
+    var drawnLength: Int {
+        let shown = chromium
+        guard shown.drawnCaret != nil else { return 0 }
+        return shown.shown.value.utf16.count
+            - ChromiumParagraphs(text: text, lines: listLines, caret: selection.lowerBound).shown.value.utf16.count
     }
 
     /// The upper end's paragraph side from the Sim's own text, in every Chromium mode.
@@ -729,9 +850,12 @@ struct ChromiumParagraphs {
     /// Plain starts of the list markers, and the chips.
     let listMarkers: [Int]
     let chips: [UnreachableLines.Chip]
+    /// The caret Linear draws at a code span's edge, and the paragraph whose end it ends with a `<br>`.
+    let drawnCaret: UnreachableLines.Caret?
+    let drawnAtEnd: Int?
 
-    /// `caret` beside a chip that starts or ends its paragraph brings the image Linear puts there, a line of its own.
-    init(text: String, lines: [Sim.ListLine]? = nil, caret: Int? = nil) {
+    /// `caret` beside a chip that starts or ends its paragraph brings Linear's image, and `drawn` its drawn caret, each a line.
+    init(text: String, lines: [Sim.ListLine]? = nil, caret: Int? = nil, drawn drawnAt: Int? = nil) {
         self.text = text
         paragraphs = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         self.lines = lines
@@ -740,8 +864,12 @@ struct ChromiumParagraphs {
             plainMarkers = shown.markers
             listMarkers = []
             chips = []
+            drawnCaret = nil
+            drawnAtEnd = nil
             return
         }
+        var drawnCaret: UnreachableLines.Caret?
+        var drawnAtEnd: Int?
         var value = ""
         var raw = ""
         var found: [Int] = []
@@ -799,7 +927,15 @@ struct ChromiumParagraphs {
             let paragraphStart = plain
             // Measured, there is none before a chip right after another chip's `<br>`.
             let followsBreak = afterBreak
+            let drawn = drawnAt.flatMap { (start...(start + units.count)).contains($0) ? $0 - start : nil }
             for (offset, unit) in units.enumerated() {
+                if offset == drawn {
+                    flush()
+                    // Measured, one starting a paragraph right after a `<br>` has no line of its own.
+                    if offset > 0 || !followsBreak { parts.append([]) }
+                    partsRaw.append(0xFFFC)
+                    drawnCaret = UnreachableLines.Caret(offset: plain, place: offset == 0 ? .start : .middle)
+                }
                 guard unit == Self.chip else {
                     pending.append(unit)
                     partsRaw.append(unit)
@@ -821,11 +957,17 @@ struct ChromiumParagraphs {
                 }
             }
             flush()
+            if drawn == units.count {
+                parts.append([])
+                partsRaw.append(0xFFFC)
+                drawnCaret = UnreachableLines.Caret(offset: plain, place: .end)
+                drawnAtEnd = index
+            }
             block(prefix + parts[0])
             raw += String(decoding: prefix, as: UTF16.self)
             for part in parts.dropFirst() { value += "\n" + String(decoding: part, as: UTF16.self) }
             raw += String(decoding: partsRaw, as: UTF16.self)
-            if units.last == Self.chip {
+            if units.last == Self.chip || drawn == units.count {
                 value += "\n"
                 raw += "\n"
                 plain += 1
@@ -840,6 +982,8 @@ struct ChromiumParagraphs {
         plainMarkers = FieldReads.withoutAttachments(raw)
         listMarkers = markers
         self.chips = chips
+        self.drawnCaret = drawnCaret
+        self.drawnAtEnd = drawnAtEnd
     }
 
     /// The plain offset of each Sim offset; a caret after a chip ending its paragraph reads past the `<br>` after it.
@@ -851,11 +995,11 @@ struct ChromiumParagraphs {
             plain += line.marker?.utf16.count ?? 0
             let units = Array(paragraph.utf16)
             let chips = lines == nil ? 0 : units.filter { $0 == Self.chip }.count
-            let trailing = lines != nil && units.last == Self.chip ? 1 : 0
+            let trailing = lines != nil && units.last == Self.chip || drawnAtEnd == index ? 1 : 0
             if offset <= start + units.count {
                 let local = offset - start
                 let before = lines == nil ? 0 : units[..<local].filter { $0 == Self.chip }.count
-                let past = caret && local == units.count ? trailing : 0
+                let past = caret && local == units.count && drawnAtEnd != index ? trailing : 0
                 return plain + local + before * (Self.label.count - 1) + past
             }
             plain += max(units.count + chips * (Self.label.count - 1), 1) + trailing

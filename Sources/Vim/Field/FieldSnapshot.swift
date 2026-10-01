@@ -38,6 +38,12 @@ public struct FieldSnapshot: Equatable, Sendable {
     /// `text` holds a chip, beside which Linear gives the caret an `AXValue` line of its own when it gets there.
     public let holdsChips: Bool
 
+    /// The field shows Linear's caret drawn at a code span's edge, whose `AXValue` lines leave with the caret (LIN-1683).
+    public let holdsDrawnCaret: Bool
+
+    /// The plain offset of the `<br>` after a caret drawn at a paragraph's end, which `breaks` count as gone.
+    public let drawnBreak: Int?
+
     public init(
         capabilities: CapabilityProfile = CapabilityProfile(),
         text: String? = nil,
@@ -52,7 +58,9 @@ public struct FieldSnapshot: Equatable, Sendable {
         valueGap: Int = 0,
         holdsEmptyParagraphs: Bool = false,
         foldedLength: Int = 0,
-        holdsChips: Bool = false
+        holdsChips: Bool = false,
+        holdsDrawnCaret: Bool = false,
+        drawnBreak: Int? = nil
     ) {
         self.capabilities = capabilities
         self.text = text
@@ -68,6 +76,8 @@ public struct FieldSnapshot: Equatable, Sendable {
         self.holdsEmptyParagraphs = holdsEmptyParagraphs
         self.foldedLength = foldedLength
         self.holdsChips = holdsChips
+        self.holdsDrawnCaret = holdsDrawnCaret
+        self.drawnBreak = drawnBreak
     }
 
     public var caret: Int? {
@@ -177,12 +187,17 @@ public extension FieldSnapshot {
                 }
             }
         }
+        var textlessLeaves = interpreted.textlessLeaves
         var foldedLength = 0
         var holdsChips = false
+        var holdsDrawnCaret = false
+        var drawnBreak: Int?
         var unreachable: UnreachableLines.Memo?
         if answer == .textContent, capabilities.has(.readCaret), let value = field.text, let model = text, let current = breaks,
            let marked = reads.marked, let raw = reads.markerText {
-            let candidates = UnreachableLines.candidates(text: model, breaks: current)
+            let candidates = UnreachableLines.candidates(
+                text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil
+            )
             if !candidates.isEmpty {
                 guard let knownUnreachable, knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks) else {
                     return .needs(.unreachable(value: value, markers: raw, candidates: candidates))
@@ -191,8 +206,19 @@ public extension FieldSnapshot {
             }
             let found = unreachable?.found ?? UnreachableLines.Found(markers: [], chips: [])
             let folded = UnreachableLines.fold(text: model, breaks: current, raw: raw, found: found)
-            if !folded.breaks.hidden.isEmpty {
-                switch valueRange(marked, in: folded.breaks, sides: reads.sides) {
+            if folded.folded > 0 || !folded.breaks.hidden.isEmpty {
+                var read = marked
+                var sides = reads.sides
+                if let b = folded.drawnBreak {
+                    // Reads count the `<br>`: at it, the caret is its line's end, and just past it, the next line's start.
+                    func withoutBreak(_ offset: Int, _ end: ParagraphBreaks.End) -> Int {
+                        if offset == b { sides[end] = .end }
+                        if offset == b + 1 { sides[end] = .start(skipping: 0) }
+                        return offset > b ? offset - 1 : offset
+                    }
+                    read = withoutBreak(marked.lowerBound, .lower)..<withoutBreak(marked.upperBound, .upper)
+                }
+                switch valueRange(read, in: folded.breaks, sides: sides) {
                 case .needs(let need):
                     return .needs(need)
                 case .done(let resolved?) where resolved.upperBound <= folded.text.utf16.count:
@@ -201,7 +227,13 @@ public extension FieldSnapshot {
                     selection = resolved
                     foldedLength = folded.folded
                     holdsChips = !found.chips.isEmpty
-                    emptyParagraph = emptyParagraph && !onEmptyLine(resolved, in: folded.text)
+                    holdsDrawnCaret = !found.carets.isEmpty
+                    drawnBreak = folded.drawnBreak
+                    // A drawn caret is no element a retyped break could take with it.
+                    textlessLeaves = textlessLeaves && raw.utf16.filter { $0 == 0xFFFC }.count > found.carets.count
+                    // A marker on the drawn caret reads as an empty block.
+                    let drawn = marked.isEmpty && found.carets.contains { $0.offset == marked.lowerBound }
+                    emptyParagraph = emptyParagraph && !drawn && !onEmptyLine(resolved, in: folded.text)
                 case .done:
                     break
                 }
@@ -211,18 +243,21 @@ public extension FieldSnapshot {
         let snapshot = FieldSnapshot(
             capabilities: capabilities,
             text: text,
-            selection: selection,
+            // Past the text's end a selection is no read at all, and planning from it would trap.
+            selection: selection.flatMap { $0.upperBound <= (text?.utf16.count ?? .max) ? $0 : nil },
             length: capabilities.has(.readLength) ? reads.length : nil,
             anchor: anchor,
             cursor: stampedCursor,
             webContent: reads.webContent,
             breaks: breaks,
             caretInEmptyParagraph: emptyParagraph,
-            textlessLeaves: interpreted.textlessLeaves,
+            textlessLeaves: textlessLeaves,
             valueGap: gap,
             holdsEmptyParagraphs: holdsEmptyParagraphs,
             foldedLength: foldedLength,
-            holdsChips: holdsChips
+            holdsChips: holdsChips,
+            holdsDrawnCaret: holdsDrawnCaret,
+            drawnBreak: drawnBreak
         )
         return .done((snapshot, memo, unreachable))
     }

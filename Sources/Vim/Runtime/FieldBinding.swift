@@ -118,6 +118,33 @@ public enum Snapshotter {
         known: EmptyParagraphs.Memo? = nil,
         knownUnreachable: UnreachableLines.Memo? = nil
     ) -> Reading {
+        func stable(_ known: EmptyParagraphs.Memo?, _ knownUnreachable: UnreachableLines.Memo?) -> Reading {
+            var reading = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
+                               model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
+            for _ in 0..<2 {
+                // Linear draws and removes carets beside code spans while a read runs, which leaves its parts disagreeing.
+                guard reading.snapshot.breaks != nil, AX.value(of: element) != reading.reads.text else { break }
+                reading = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
+                               model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
+            }
+            return reading
+        }
+        return settled(stable(known, knownUnreachable), in: element) {
+            stable($0.emptyParagraphs ?? known, $0.unreachable ?? knownUnreachable)
+        }
+    }
+
+    private static func read(
+        of element: AXUIElement,
+        capabilities: CapabilityProfile,
+        anchor: Int?,
+        cursor: Range<Int>?,
+        chromium: Bool,
+        model: ReadModel,
+        sampling: OffsetsSampling,
+        known: EmptyParagraphs.Memo?,
+        knownUnreachable: UnreachableLines.Memo?
+    ) -> Reading {
         let blocks = AX.childCount(of: element)
         let (current, source) = model.reading(chromium: chromium, children: blocks.map { $0 > 0 } ?? true)
         // Observation keeps running under `untrusted`, whose withheld caret is still read.
@@ -136,7 +163,12 @@ public enum Snapshotter {
         let reads = AX.attributes(names, of: element)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
-        let marked = readsMarkers || sampled ? AX.markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        var marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        // A marker past the field's end, where reading the drawn caret's place failed, is no read.
+        if let range = marked?.range, range.upperBound > (reads.int(2) ?? .max),
+           range.upperBound > (AX.markerText(of: element).map { FieldReads.withoutAttachments($0).utf16.count } ?? .max) {
+            marked = nil
+        }
         let side = marked.map { sides(of: $0) }
         var snapshotReads = FieldSnapshot.Reads(
             field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
@@ -200,6 +232,7 @@ public enum Snapshotter {
 
     /// Where typing at a boundary end would land; nil when a read fails.
     static func paragraphSide(of marked: AX.MarkedSelection, upper: Bool) -> ParagraphBreaks.Side? {
+        if let drawn = drawnCaret(onMarkerOf: marked, upper: upper) { return DrawnCaret.side(drawn.place) }
         switch marked.side(upper: upper) {
         case .end?: return .end
         case nil: return nil

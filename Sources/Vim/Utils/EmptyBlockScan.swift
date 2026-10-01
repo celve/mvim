@@ -63,6 +63,7 @@ public struct EmptyBlockScan<Node> {
     /// Descends through the children holding plain offset `b`, found by binary search on their starts.
     private mutating func classify(_ b: Int, in blocks: [Node]) -> Verdict? {
         var siblings = blocks
+        var parent: String?
         for _ in 0..<16 {
             var low = 0
             var high = siblings.count - 1
@@ -82,10 +83,13 @@ public struct EmptyBlockScan<Node> {
             guard spend(1), let read = block(node) else { return nil }
             if read.subrole == "AXEmptyGroup", read.children.isEmpty {
                 guard hit.start == b else { return .text(end: b + 1) }
+                // A caret drawn at a code span's end is followed by the `<br>` of the paragraph it ends (LIN-1683).
+                if DrawnCaret.isCaret(parent: parent, previous: nil, next: nil) { return .text(end: b + 1) }
                 guard hit.index > 0 else { return .line }
                 guard spend(1), let previous = block(siblings[hit.index - 1]) else { return nil }
                 // After a chip it is the image Linear puts there while the caret is beside it (LIN-1652).
-                if previous.subrole == "AXApplicationGroup" { return .text(end: b + 1) }
+                let drawn = DrawnCaret.isCaret(parent: nil, previous: previous.subrole, next: nil)
+                if previous.subrole == "AXApplicationGroup" || drawn { return .text(end: b + 1) }
                 return previous.role == "AXListMarker" ? .item : .line
             }
             if read.role == "AXStaticText" || read.children.isEmpty {
@@ -93,6 +97,7 @@ public struct EmptyBlockScan<Node> {
                 return .text(end: max(end, b + 1))
             }
             siblings = read.children
+            parent = read.subrole
         }
         return nil
     }

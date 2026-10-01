@@ -64,8 +64,20 @@ public final class Executor {
     /// This run's last register paste, which only the settle straight after it can confirm.
     private var pastedAt: Int?
 
+    /// That paste was in Chromium's rich text, where a settle after it that predicts nothing waits for it to land.
+    private var pasteWaits = false
+
+    /// The caret the paste began at, when it read as one.
+    private var pastedFrom: (range: Range<Int>, side: ParagraphBreaks.Side?)?
+
+    /// Settles straight after a ⇧← → that keeps a caret outside a code span, whose target showed before those two keys.
+    private var afterNormalizing: Set<Int> = []
+
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
+
+    /// Keys pressed since the last settle.
+    private var pressed = 0
 
     /// An `AXError` worth reporting: `.success` is not one.
     private static func rejection(_ error: AXError) -> Int32? {
@@ -93,6 +105,25 @@ public final class Executor {
         return false
     }
 
+    /// Pastes land up to 250 ms late: a settle after one that predicts nothing waits for the caret to stay off its start.
+    private func awaitPaste(_ expectation: Expectation, at index: Int, on element: AXUIElement) {
+        guard pastedAt == index - 1, pasteWaits, expectation.landing == nil, expectation.length == nil,
+              expectation.selectedText == nil else { return }
+        let deadline = Date().addingTimeInterval(0.25)
+        var moved = 0
+        while Date() < deadline {
+            // A caret Linear draws beside code reads as a selection, or elsewhere, for a moment, which is no landing.
+            if let from = pastedFrom, let marked = Snapshotter.markedSelection(of: element), marked.isCollapsed,
+               marked.range != from.range || Snapshotter.paragraphSide(of: marked, upper: true) != from.side {
+                moved += 1
+                if moved == 2 { return }
+            } else {
+                moved = 0
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+    }
+
     /// Only a caret landing straight after the paste proves the target read it: a length can match before it lands.
     private func confirmPaste(_ outcome: SettleOutcome, _ expectation: Expectation, at index: Int) {
         guard pastedAt == index - 1, outcome.converged, expectation.landing != nil else { return }
@@ -106,11 +137,16 @@ public final class Executor {
     ) -> Bool {
         captures = [:]
         pastedAt = nil
+        pasteWaits = false
+        pastedFrom = nil
         lastRun = RunEvidence()
         lastWriteError = nil
         lastObserved = nil
         self.paragraphs = paragraphs
+        pressed = 0
         kept = [:]
+        let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
+        afterNormalizing = Set(plan.steps.indices.filter { $0 >= 2 && Array(plan.steps[$0 - 2..<$0]) == outside })
         for (index, next) in plan.steps.enumerated() {
             var step = next
             if case .settle(let expectation) = next { step = .settle(expectation.resolving(kept)) }
@@ -172,6 +208,7 @@ public final class Executor {
                 return false
             }
             Synth.key(code, flags(for: chord.modifiers), times: count)
+            pressed += count
             return true
 
         case .typeText(let text):
@@ -193,6 +230,10 @@ public final class Executor {
                 // No sleep before ⌘V: the app reads the pasteboard only as it handles the ⌘V, queued after the write.
                 PasteboardLoan.shared.put(content)
                 pastedAt = index
+                pasteWaits = paragraphs
+                pastedFrom = paragraphs ? Snapshotter.markedSelection(of: element).flatMap {
+                    $0.isCollapsed ? ($0.range, Snapshotter.paragraphSide(of: $0, upper: true)) : nil
+                } : nil
                 Synth.commandV()
             } else {
                 // Registers +/* and pasteboard markers paste what the user has there, not a register still on loan.
@@ -210,7 +251,14 @@ public final class Executor {
             return true
 
         case .settle(let expectation):
-            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            awaitPaste(expectation, at: index, on: element)
+            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            pressed = 0
+            if outcome.converged, afterNormalizing.contains(index) {
+                // Read again once the ⇧← → are in, so the next command never reads the selection between them.
+                Thread.sleep(forTimeInterval: 0.015)
+                outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            }
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
             if record(outcome, expectation, at: index, hard: true) {
@@ -222,7 +270,9 @@ public final class Executor {
         case .softSettle(let expectation):
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
-            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            awaitPaste(expectation, at: index, on: element)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            pressed = 0
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
             _ = record(outcome, expectation, at: index, hard: false)
@@ -257,7 +307,9 @@ public final class Executor {
     /// the rare fallback for an element that claimed `readLength` and then
     /// answered nil, and fetching it every poll would marshal the entire
     /// document 25 times per settle.
-    nonisolated static func settle(_ expectation: Expectation, on element: AXUIElement, paragraphs: Bool) -> SettleOutcome {
+    nonisolated static func settle(
+        _ expectation: Expectation, on element: AXUIElement, paragraphs: Bool, presses: Int = 0
+    ) -> SettleOutcome {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
@@ -284,7 +336,8 @@ public final class Executor {
         }
 
         let start = Date()
-        let deadline = start.addingTimeInterval(0.25)
+        // Chromium applies a long run of shifted arrows more slowly than mvim sends it, so the wait grows with the run.
+        let deadline = start.addingTimeInterval(0.25 + (paragraphs ? 0.0025 * Double(presses) : 0))
         var polls = 0
         while true {
             polls += 1
@@ -315,10 +368,16 @@ public final class Executor {
                 return outcome(true)
             }
             // Only the markers place a caret between elements or tell a boundary's sides apart.
-            if paragraphs, selectionSlot != nil, let marked = AX.markedSelection(of: element) {
+            if paragraphs, selectionSlot != nil, let marked = Snapshotter.markedSelection(of: element) {
                 selection = marked.range
                 let side = expectation.edge == nil ? nil : Snapshotter.paragraphSide(of: marked, upper: true)
                 if expectation.converged(selection: selection, length: length, selectedText: text, side: side) {
+                    return outcome(true)
+                }
+                // The caret Linear draws at a code span's edge is lines of its own, which no expected length counts.
+                if let expected = expectation.length, let observed = length, (1...2).contains(observed - expected),
+                   expectation.converged(selection: selection, length: observed - Snapshotter.drawnLength(at: marked),
+                                         selectedText: text, side: side) {
                     return outcome(true)
                 }
             }

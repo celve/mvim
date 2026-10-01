@@ -278,7 +278,7 @@ public enum AX {
     /// A Chromium field's selection in text-content offsets, read through markers that follow the real caret.
     public struct MarkedSelection {
         public let range: Range<Int>
-        let element: AXUIElement
+        public let element: AXUIElement
         let lower: AXTextMarker
         let upper: AXTextMarker
 
@@ -299,6 +299,11 @@ public enum AX {
             case start
             case end
             case between
+        }
+
+        /// The node an end's marker sits on; nil when the read fails.
+        public func node(upper isUpper: Bool) -> AXUIElement? {
+            AX.node(at: isUpper ? upper : lower, in: element)
         }
 
         /// Where an end sits in its marker's node; nil when a read fails.
@@ -349,6 +354,26 @@ public enum AX {
             lower: forward ? first : second,
             upper: forward ? second : first
         )
+    }
+
+    /// A caret at `node`'s start, in the field's text-content offsets.
+    public static func markedSelection(at node: AXUIElement, in element: AXUIElement) -> MarkedSelection? {
+        guard let marker = textStart(of: node, in: element), let field = fieldMarkers(of: element),
+              let offset = offset(of: marker, from: field.start, in: element) else { return nil }
+        return MarkedSelection(range: offset..<offset, element: element, lower: marker, upper: marker)
+    }
+
+    /// `node`'s text-content range in the field; nil when a read fails.
+    public static func plainRange(of node: AXUIElement, in element: AXUIElement) -> Range<Int>? {
+        guard let range = textMarkerRange(parameterized("AXTextMarkerRangeForUIElement", node, of: element)),
+              let field = fieldMarkers(of: element),
+              let start = offset(of: AXTextMarkerRangeCopyStartMarker(range), from: field.start, in: element),
+              let end = offset(of: AXTextMarkerRangeCopyEndMarker(range), from: field.start, in: element) else { return nil }
+        return start..<max(start, end)
+    }
+
+    public static func parent(of node: AXUIElement) -> AXUIElement? {
+        copyElement(node, kAXParentAttribute)
     }
 
     /// The field's start marker, from which `markerLength(from:to:end:in:)` measures.
