@@ -207,7 +207,7 @@ public final class Executor {
                 NSSound.beep()
                 return false
             }
-            Synth.key(code, flags(for: chord.modifiers), times: count)
+            Synth.key(code, flags(for: chord.modifiers), times: count, gap: Self.backToBack(chord) ? 0 : Synth.pairGap)
             pressed += count
             return true
 
@@ -336,8 +336,8 @@ public final class Executor {
         }
 
         let start = Date()
-        // Chromium applies a long run of shifted arrows more slowly than mvim sends it, so the wait grows with the run.
-        let deadline = start.addingTimeInterval(0.25 + (paragraphs ? 0.0025 * Double(presses) : 0))
+        // Keys go back to back, so a run lands inside this wait, and Chromium takes a long shifted one more slowly still.
+        let deadline = start.addingTimeInterval(0.25 + Double(presses) * (paragraphs ? 0.005 : 0.0025))
         var polls = 0
         while true {
             polls += 1
@@ -408,6 +408,15 @@ public final class Executor {
             case "v": return 9    // kVK_ANSI_V
             default: return nil
             }
+        }
+    }
+
+    /// Measured to land exactly with no gap between down and up, shifted or not (LIN-1686).
+    static func backToBack(_ chord: Chord) -> Bool {
+        switch chord.key {
+        case .arrowLeft, .arrowRight: return chord.modifiers.subtracting(.shift).isEmpty
+        case .character("a"), .character("e"): return chord.modifiers.subtracting(.shift) == [.control]
+        default: return false
         }
     }
 

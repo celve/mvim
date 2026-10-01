@@ -2911,14 +2911,13 @@ precondition(chords(physical("dG", text: "one\ntwo", caret: 1, profile: keyProfi
              == [.paragraphStart, Chord.documentEnd.shifted, .deleteBack])
 let keyedO = physical("o", text: oneLine, caret: 2, profile: keyProfile)
 precondition(chords(keyedO) == [.paragraphEnd] && keyedO.steps.contains(.typeText("\n")))
-precondition(chords(physical("O", text: oneLine, caret: 2, profile: keyProfile))
-             == [.paragraphStart, .paragraphStart, .left, .paragraphStart])
+precondition(chords(physical("O", text: oneLine, caret: 2, profile: keyProfile)) == [.paragraphStart, .paragraphStart, .left])
 let webO = webPhysical("o", text: oneLine, caret: 2, profile: keyProfile)
 precondition(chords(webO) == [.paragraphEnd] && webO.steps.contains(.clipboardInsert("\n"))
              && !webO.steps.contains(.typeText("\n")))
 let webAbove = webPhysical("O", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: ParagraphBreaks(offsets: [2])).steps
 let pasted = webAbove.firstIndex(of: .clipboardInsert("\n"))!
-precondition(chords(PhysicalPlan(steps: webAbove)) == [.paragraphStart, .paragraphStart, .left, .paragraphStart])
+precondition(chords(PhysicalPlan(steps: webAbove)) == [.paragraphStart, .paragraphStart, .left])
 precondition(webAbove[pasted + 1] == .softSettle(Expectation(selection: nil, length: 6)))
 precondition(webAbove[(pasted + 2)...].allSatisfy {
     guard case .settle(let expectation) = $0 else { return true }
@@ -4829,6 +4828,166 @@ for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCod
             default: break
             }
         }
+    }
+}
+
+// MARK: - Cheaper counted arrows (LIN-1686)
+
+let tenTwice = "abcdefghij\nabcdefghij"
+precondition(chords(physical("j", text: tenTwice, caret: 2, profile: keyProfile)) == [.paragraphEnd, .right, .right, .right])
+precondition(chords(physical("j", text: tenTwice, caret: 8, profile: keyProfile))
+             == [.paragraphEnd, .right, .paragraphEnd, .left, .left])
+precondition(chords(physical("j", text: tenTwice, caret: 10, profile: keyProfile)) == [.paragraphEnd, .right, .paragraphEnd])
+precondition(chords(physical("k", text: tenTwice, caret: 19, profile: keyProfile)) == [.paragraphStart, .left, .left, .left])
+precondition(chords(physical("k", text: tenTwice, caret: 13, profile: keyProfile))
+             == [.paragraphStart, .left, .paragraphStart, .right, .right])
+precondition(chords(physical("j", text: tenTwice, caret: 5, profile: keyProfile)).count == 7, "a tie counts from the start")
+let nearEnd = physical("j", text: tenTwice, caret: 8, profile: keyProfile)
+precondition(nearEnd.traceShape == "P!PP!P2!C" && nearEnd.steps[1] == .settle(Expectation(
+    landing: .exact(10..<10), length: 21,
+    blame: .init(capability: .lineEndKey, unmoved: [8..<8], leavesCaret: true, offTarget: true)
+)), "the extra ⌃E rides the unblamed hops")
+let tenBreak = ParagraphBreaks(offsets: [10])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 8, profile: keyProfile, breaks: tenBreak))
+             == [.paragraphEnd, .right, .paragraphEnd, .selectLeft, .selectLeft, .left, .selectLeft, .right])
+precondition(chords(physical("j", text: tenTwice, caret: 6, profile: keyProfile)).suffix(5) == [.paragraphEnd, .left, .left, .left, .left])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 6, profile: keyProfile, breaks: tenBreak))
+             == [.paragraphEnd, .right] + Array(repeating: .selectRight, count: 6) + [.right], "where those tip it to the start")
+
+let twenty = String(repeating: "word ", count: 20) + "end."
+precondition(chords(physical("fd", text: twenty, caret: 0, profile: keyProfile)) == [.right, .right, .right])
+let farFind = physical("t.", text: twenty, caret: 0, profile: keyProfile)
+precondition(farFind.steps.prefix(3) == [
+    .press(.paragraphEnd, count: 1), .press(.left, count: 2), .settle(Expectation(landing: .exact(102..<102), length: 104)),
+])
+precondition(chords(physical("0fw;;;;;;;;;;;;;;;;;", text: twenty, caret: 0, profile: keyProfile)).count < 20)
+precondition(chords(physical("Fw", text: twenty, caret: 99, profile: keyProfile)) == Array(repeating: .left, count: 4))
+precondition(chords(physical("Fw", text: twenty, caret: 102, profile: removing([.lineStartKey, .lineEndKey], from: keyProfile)))
+             == Array(repeating: .left, count: 7), "without the line keys it counts from the caret")
+var fromStart = Sim(text: twenty, caret: 103, profile: keyProfile)
+fromStart.emulatesKeys = true
+fromStart.type("2Fw")
+precondition(fromStart.caret == 90 && fromStart.settleFailures == 0)
+fromStart.type("0e")
+precondition(fromStart.caret == 3)
+
+precondition(chords(physical("X", text: twenty, caret: 50, profile: keyProfile)) == [.selectLeft, .deleteBack])
+precondition(chords(physical("db", text: twenty, caret: 52, profile: keyProfile)) == [.selectLeft, .selectLeft, .deleteBack])
+precondition(chords(physical("d^", text: twenty, caret: 60, profile: keyProfile)) == [Chord.paragraphStart.shifted, .deleteBack])
+precondition(chords(physical("dt.", text: twenty, caret: 0, profile: keyProfile))
+             == [Chord.paragraphEnd.shifted, .selectLeft, .deleteBack])
+precondition(chords(physical("x", text: twenty, caret: 3, profile: keyProfile)) == [.selectRight, .deleteBack])
+let chipInLine = ParagraphBreaks(hidden: [.init(at: 3, text: "LIN-1 chip", kind: .atom)])
+precondition(chords(webPhysical("dt.", text: "ab\u{2060}cd. and more", caret: 0, profile: keyProfile, breaks: chipInLine))
+             == Array(repeating: .selectRight, count: 5) + [.deleteBack], "⇧⌃E would stop at the chip")
+for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirst(50))), ("dF ", 99, String(twenty.prefix(95) + twenty.dropFirst(99))),
+                            ("d^", 60, String(twenty.dropFirst(60))), ("dt.", 0, ".")] {
+    var host = Sim(text: twenty, caret: caret, profile: keyProfile)
+    host.emulatesKeys = true
+    host.type(keys)
+    precondition(host.text == left && host.settleFailures == 0, keys)
+}
+var yankedBack = Sim(text: twenty, caret: 52, profile: keyProfile)
+yankedBack.emulatesKeys = true
+yankedBack.type("yb")
+precondition(yankedBack.caret == 50 && yankedBack.readSelection == 50..<50
+             && yankedBack.state.session.register("\"") == .content(RegisterContent(text: "wo", wise: .character)))
+
+// softlash/LIN-1686 scripts/list-boundary (Dia 1.49.1): a plain → or ↓ from a list's last item stops before the next list.
+var gapKeys = KeyModel(text: "a\nb\nc", anchor: 1, focus: 1, gaps: [2])
+precondition(gapKeys.press(.right) && gapKeys.selection == 1..<1 && gapKeys.inGap)
+precondition(gapKeys.press(.paragraphStart) && gapKeys.press(Chord.paragraphEnd.shifted) && gapKeys.inGap, "⌃A and ⇧⌃E stay")
+precondition(gapKeys.press(.right) && gapKeys.selection == 2..<2 && !gapKeys.inGap)
+gapKeys = KeyModel(text: "a\nb\nc", anchor: 0, focus: 0, gaps: [2])
+precondition(gapKeys.press(.down) && gapKeys.inGap && gapKeys.press(.selectRight) && gapKeys.selection == 2..<2)
+gapKeys = KeyModel(text: "a\nb\nc", anchor: 1, focus: 1, gaps: [2])
+precondition(gapKeys.press(.right) && gapKeys.press(.left) && gapKeys.selection == 1..<1 && !gapKeys.inGap)
+precondition(gapKeys.press(.selectRight) && gapKeys.selection == 1..<2, "⇧→ crosses")
+gapKeys = KeyModel(text: "a\nb\nc", anchor: 2, focus: 2, gaps: [2])
+precondition(gapKeys.press(.left) && gapKeys.selection == 1..<1, "← from the next list skips it")
+
+let boundaryValue = "LIN-1686 boundary probe: plain opening paragraph here.\n1.\nNumbered one alpha\n2.\nNumbered two bravo\n\u{2022}\nBullet one charlie\n\u{2022}\nBullet two delta\n1.\nNumbered again echo\n\n\nTodo one foxtrot\n\n\nTodo two golf\n1.\nNumbered after todo hotel\n\u{2022}\nDash bullet india\n\u{2022}\nStar bullet juliet\n\n\nTodo after star kilo\n\u{2022}\nStar after todo lima\nParagraph after list mike.\n\u{2022}\nBullet after paragraph november\n\n\nHeading after list oscar\nPlain closing paragraph papa."
+let boundaryRaw = "LIN-1686 boundary probe: plain opening paragraph here.1.Numbered one alpha2.Numbered two bravo\u{2022}Bullet one charlie\u{2022}Bullet two delta1.Numbered again echo\u{FFFC}\u{FFFC}Todo one foxtrot\u{FFFC}\u{FFFC}Todo two golf1.Numbered after todo hotel\u{2022}Dash bullet india\u{2022}Star bullet juliet\u{FFFC}\u{FFFC}Todo after star kilo\u{2022}Star after todo limaParagraph after list mike.\u{2022}Bullet after paragraph november\u{FFFC}\u{FFFC}Heading after list oscarPlain closing paragraph papa."
+let boundaryTree = fakeTree("""
+0/G/0/54 0.0/T/0/54 1/L/54/94 1.0/G/54/74 1.0.0/G/54/56 1.0.0.0/T/54/55 1.0.0.1/T/55/56 1.0.1/G/56/74 1.0.1.0/T/56/74
+1.1/G/74/94 1.1.0/G/74/76 1.1.0.0/T/74/75 1.1.0.1/T/75/76 1.1.1/G/76/94 1.1.1.0/T/76/94 2/L/94/130 2.0/G/94/113 2.0.0/G/94/95
+2.0.0.0/T/94/95 2.0.1/G/95/113 2.0.1.0/T/95/113 2.1/G/113/130 2.1.0/G/113/114 2.1.0.0/T/113/114 2.1.1/G/114/130
+2.1.1.0/T/114/130 3/L/130/151 3.0/G/130/151 3.0.0/G/130/132 3.0.0.0/T/130/131 3.0.0.1/T/131/132 3.0.1/G/132/151
+3.0.1.0/T/132/151 4/L/151/180 4.0/G/151/167 4.0.0/G/151/151 4.0.0.0/I/151/151 4.0.0.1/C/151/151 4.0.1/G/151/167
+4.0.1.0/G/151/167 4.0.1.0.0/T/151/167 4.1/G/167/180 4.1.0/G/167/167 4.1.0.0/I/167/167 4.1.0.1/C/167/167 4.1.1/G/167/180
+4.1.1.0/G/167/180 4.1.1.0.0/T/167/180 5/L/180/207 5.0/G/180/207 5.0.0/G/180/182 5.0.0.0/T/180/181 5.0.0.1/T/181/182
+5.0.1/G/182/207 5.0.1.0/T/182/207 6/L/207/225 6.0/G/207/225 6.0.0/G/207/208 6.0.0.0/T/207/208 6.0.1/G/208/225
+6.0.1.0/T/208/225 7/L/225/244 7.0/G/225/244 7.0.0/G/225/226 7.0.0.0/T/225/226 7.0.1/G/226/244 7.0.1.0/T/226/244
+8/L/244/264 8.0/G/244/264 8.0.0/G/244/244 8.0.0.0/I/244/244 8.0.0.1/C/244/244 8.0.1/G/244/264 8.0.1.0/G/244/264
+8.0.1.0.0/T/244/264 9/L/264/285 9.0/G/264/285 9.0.0/G/264/265 9.0.0.0/T/264/265 9.0.1/G/265/285 9.0.1.0/T/265/285
+10/G/285/311 10.0/T/285/311 11/L/311/343 11.0/G/311/343 11.0.0/G/311/312 11.0.0.0/T/311/312 11.0.1/G/312/343
+11.0.1.0/T/312/343 12/H/343/367 12.0/G/343/343 12.0.0/G/343/343 12.0.0.0/E/343/343 12.0.0.1/P/343/343 12.1/T/343/367
+13/G/367/396 13.0/T/367/396
+""")
+let boundaryModel = folded(boundaryValue, boundaryRaw, boundaryTree)
+func lineStart(of needle: String, in text: String) -> Int {
+    var offset = 0
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        if line.hasPrefix(needle) { return offset }
+        offset += line.utf16.count + 1
+    }
+    preconditionFailure(needle)
+}
+precondition(boundaryModel.breaks.gaps == Set(["Bullet one charlie", "Numbered again echo", "Todo one foxtrot",
+    "Numbered after todo hotel", "Dash bullet india", "Star bullet juliet", "Todo after star kilo", "Star after todo lima",
+].map { lineStart(of: $0, in: boundaryModel.text) }), "a stop before every list right after a list, and nowhere else")
+precondition(roundTrips(boundaryModel))
+let boundaryCandidates = UnreachableLines.candidates(text: boundaryValue, breaks: ParagraphBreaks(value: boundaryValue,
+    fieldText: MarkerText.plain(boundaryRaw))!, raw: boundaryRaw)
+precondition((1...400).contains { budget in
+    guard let found = unreachableScanned(boundaryTree, boundaryCandidates, budget: budget) else { return false }
+    return found.joins.isEmpty && found.markers.count == 10
+}, "running out of reads on the lists loses only the joins")
+precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
+             "no markers, no joins read")
+
+let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .gap)])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
+             == [.paragraphEnd, .right, .right])
+precondition(chords(webPhysical("w", text: tenTwice, caret: 3, profile: keyProfile, breaks: gapBreaks))
+             == [.paragraphEnd, .right, .right])
+precondition(chords(webPhysical("2$", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
+             == [.paragraphEnd, .right, .right, .paragraphEnd])
+precondition(chords(webPhysical("k", text: tenTwice, caret: 11, profile: keyProfile, breaks: gapBreaks))
+             == [.paragraphStart, .left, .paragraphStart], "← from below never stops")
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: removing([.lineEndKey, .lineStartKey], from: keyProfile),
+                                breaks: gapBreaks)) == [.down, .down, .lineStart], "lane B's ↓ stops there too")
+
+let joinedDoc: [(String, String?, Int, Bool, Bool)] = [
+    ("Top paragraph", nil, 0, false, false), ("Numbered one", "1.", 0, false, false), ("Numbered two", "2.", 0, false, false),
+    ("Bullet one", "\u{2022}", 0, false, true), ("Bullet two", "\u{2022}", 0, false, false),
+    ("A to-do", nil, 2, true, true), ("Numbered again", "1.", 0, false, true), ("Middle paragraph", nil, 0, false, false),
+    ("Bullet after", "\u{2022}", 0, false, false), ("Last paragraph.", nil, 0, false, false),
+]
+func joinedSim(_ profile: CapabilityProfile, caret: Int = 0) -> Sim {
+    var host = Sim(text: joinedDoc.map(\.0).joined(separator: "\n"), caret: caret, profile: profile)
+    host.emptyParagraphs = true
+    host.listLines = joinedDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.3, joinsList: $0.4) }
+    host.emulatesKeys = true
+    host.readModel = .textContent
+    return host
+}
+var stopped = joinedSim(keyProfile, caret: 27)
+stopped.perform([.press(.paragraphEnd, count: 1), .press(.right, count: 1)])
+precondition(stopped.caret == 39, "one → from a list's end stops between the lists")
+for profile in [keyProfile, writeKeys] {
+    let down = String(repeating: "j", count: joinedDoc.count)
+    for keys in [down + String(repeating: "k", count: joinedDoc.count), "3j2k4j5j3k", "9jkkkkkkkk", "5ljjjjjjjjjkkkk",
+                 "$jjjjjjjjjkkkk", "jjjwwwwwwwwwwbbbbbbbbbb", "jjjjjjeeeee", "jj2$", "jjdd", "jjjj0jj^jj$"] {
+        var joined = joinedSim(profile)
+        var plain = Sim(text: joined.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            joined.type(String(key))
+            plain.type(String(key))
+            precondition(joined.caret == plain.caret && joined.text == plain.text, "\(keys) at \(key)")
+        }
+        precondition(joined.settleFailures == 0 && joined.bells == 0, keys)
     }
 }
 

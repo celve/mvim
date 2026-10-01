@@ -74,11 +74,14 @@ public enum UnreachableLines {
         public let markers: [Int]
         public let chips: [Chip]
         public let carets: [Caret]
+        /// Plain starts of lists right after another list, where a plain → or ↓ stops between them first (LIN-1686).
+        public let joins: [Int]
 
-        public init(markers: [Int], chips: [Chip], carets: [Caret] = []) {
+        public init(markers: [Int], chips: [Chip], carets: [Caret] = [], joins: [Int] = []) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
+            self.joins = joins
         }
     }
 
@@ -245,8 +248,16 @@ public enum UnreachableLines {
             if !dropped.contains(index) { kept.append(unit) }
         }
         shift[units.count] = units.count - kept.count
-        let hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
+        var hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
         let offsets = (breaks.offsets + converted).sorted().filter { !dropped.contains($0) }.map { $0 - shift[$0] }
+        let folded = ParagraphBreaks(offsets: offsets, hidden: hidden)
+        let starts = [0] + kept.indices.filter { kept[$0] == 10 }.map { $0 + 1 }
+        // A join's list starts at the first line at or past it.
+        for join in found.joins {
+            guard let start = starts.first(where: { folded.fieldOffset($0) >= join }), start > 0 else { continue }
+            hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: .gap),
+                          at: hidden.lastIndex { $0.at <= start }.map { $0 + 1 } ?? 0)
+        }
         return Model(
             text: String(decoding: kept, as: UTF16.self), breaks: ParagraphBreaks(offsets: offsets, hidden: hidden),
             folded: dropped.count, drawnBreak: drawnBreak

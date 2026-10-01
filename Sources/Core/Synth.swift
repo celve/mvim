@@ -26,29 +26,27 @@ public enum Synth {
     /// cross-app ABI and defense-in-depth.
     private static let tapLocation: CGEventTapLocation = .cgAnnotatedSessionEventTap
     private static func source() -> CGEventSource? { CGEventSource(stateID: .combinedSessionState) }
-    /// A hair of air between down and up — some apps mishandle zero-interval
-    /// pairs. Nothing is needed *between* presses: the session event queue
-    /// already serializes delivery to the app. Best-effort law: pacing is a
-    /// tiny constant, never an observed wait.
-    private static func nudge(_ seconds: Double = 0.002) { Thread.sleep(forTimeInterval: seconds) }
+    /// Between down and up for keys not measured without it, as arrows and ⌃A ⌃E were (LIN-1686); none between presses.
+    public static let pairGap: TimeInterval = 0.002
+    private static func nudge(_ seconds: TimeInterval = pairGap) { if seconds > 0 { Thread.sleep(forTimeInterval: seconds) } }
 
     /// Synthesize ⌘V (clipboard paste). Used by clipboard-insert steps.
     public static func commandV() { key(0x09, .maskCommand) }   // 0x09 = kVK_ANSI_V
 
-    /// Post a key down+up with modifier flags (tagged).
-    public static func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
+    /// Post a key down+up with modifier flags (tagged), `gap` apart.
+    public static func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], gap: TimeInterval = pairGap) {
         let src = source()
         if let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true) {
             down.flags = flags; SynthTag.tag(down); down.post(tap: tapLocation)
         }
-        nudge()
+        nudge(gap)
         if let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) {
             up.flags = flags; SynthTag.tag(up); up.post(tap: tapLocation)
         }
     }
 
-    public static func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], times count: Int) {
-        for _ in 0..<max(0, count) { key(code, flags) }
+    public static func key(_ code: CGKeyCode, _ flags: CGEventFlags = [], times count: Int, gap: TimeInterval = pairGap) {
+        for _ in 0..<max(0, count) { key(code, flags, gap: gap) }
     }
 
     /// Type arbitrary Unicode (emoji/CJK verbatim — no layout mapping), tagged.

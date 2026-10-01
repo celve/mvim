@@ -240,6 +240,9 @@ private extension PhysicalPlanner {
         /// Model offsets of the chips, which keys cross in one step.
         var atoms: Set<Int> { breaks?.atoms ?? [] }
 
+        /// Starts of lines right after a list's end, where a plain → or ↓ from above stops first.
+        var gaps: Set<Int> { breaks?.gaps ?? [] }
+
         func isAtom(_ offset: Int) -> Bool { breaks?.isAtom(offset) ?? false }
 
         /// A register's text for `range`, each chip's label whole.
@@ -631,7 +634,9 @@ private extension PhysicalPlanner {
             return presses + run(to > from ? .right : .left, count: count, selecting: selecting, normalizing: context.normalizes(to))
         }
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
-        presses.append(.press(toLine > fromLine ? .down : .up, count: lines))
+        // ↓ into a line right after a list's end stops between the lists first.
+        let stops = toLine > fromLine ? context.gaps.filter { fromLine < $0 && $0 <= toLine }.count : 0
+        presses.append(.press(toLine > fromLine ? .down : .up, count: lines + stops))
         presses.append(.press(.lineStart, count: 1))
         if context.normalizes(toLine) { presses += outside }
         let column = model.graphemes(in: toLine..<to)
@@ -809,47 +814,90 @@ private extension PhysicalPlanner {
         guard !profile.has(.writeSelection), let position = context.position else { return .next }
         let line = model.lineStart(of: position)
         let targetLine = model.lineStart(of: target)
-        var groups: [KeyGroup]
+        let gaps = context.gaps
+        // Into a line right after a list, the first → stops between the lists.
+        func hops(into starts: [Int]) -> [[Chord]] { starts.map { gaps.contains($0) ? [.right, .right] : [.right] } }
+        // Each way to the target's line; the column is counted from where it lands, and the fewest keys win.
+        var ways: [[KeyGroup]]
         switch destination {
         case .motion(.lineStart, _)?:
             guard profile.has(.lineStartKey) else { return .next }
-            groups = [([.paragraphStart], .lineStartKey)]
+            ways = [[([.paragraphStart], .lineStartKey)]]
         case .motion(.lineEnd, let count)?:
             guard profile.has(.lineEndKey) else { return .next }
-            groups = [([.paragraphEnd], .lineEndKey), (repeated([.right, .paragraphEnd], count - 1), nil)]
+            let crossing = hops(into: lineStarts(after: line, count: count - 1, in: model))
+            let past = Array(repeating: [Chord.right], count: max(0, count - 1 - crossing.count))
+            ways = [[([.paragraphEnd], .lineEndKey), ((crossing + past).flatMap { $0 + [.paragraphEnd] }, nil)]]
         case .motion(.fileStart, _)?:
             guard profile.has(.documentStartKey) else { return .next }
-            groups = [([.documentStart], .documentStartKey)]
+            ways = [[([.documentStart], .documentStartKey)]]
         case .motion(.fileEnd, _)?:
             guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return .next }
-            groups = [([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]
+            ways = [[([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]]
         default:
             // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
             var vertical: Direction?
             if case .motion(.line(let direction, _), _)? = destination { vertical = direction }
-            guard targetLine != line || vertical != nil else { return .next }
+            guard targetLine != line || vertical != nil else {
+                return sameLine(to: target, from: position, model: model, context: &context, profile: profile)
+            }
             if targetLine > line || vertical == .down {
                 guard profile.has(.lineEndKey) else { return .next }
                 let lines = model.newlineCount(in: line..<targetLine)
-                var hops: [Chord] = lines > 0 ? [.right] : []
-                hops += repeated([.paragraphEnd, .right], lines - 1)
-                groups = [([.paragraphEnd], .lineEndKey), (hops, nil)]
+                let crossing = hops(into: lineStarts(after: line, count: lines, in: model))
+                let down = crossing.enumerated().flatMap { ($0.offset > 0 ? [Chord.paragraphEnd] : []) + $0.element }
+                ways = [[([.paragraphEnd], .lineEndKey), (down, nil)]]
+                if lines > 0 { ways.append([([.paragraphEnd], .lineEndKey), (down + [.paragraphEnd], nil)]) }
             } else {
                 guard profile.has(.lineStartKey) else { return .next }
                 let lines = model.newlineCount(in: targetLine..<line)
-                groups = [([.paragraphStart], .lineStartKey), (repeated([.left, .paragraphStart], lines), nil)]
+                let up = repeated([.left, .paragraphStart], lines)
+                ways = [[([.paragraphStart], .lineStartKey), (up, nil)]]
+                // The last ← already lands at the line's end.
+                if lines > 0 { ways.append([([.paragraphStart], .lineStartKey), (Array(up.dropLast()), nil)]) }
             }
         }
         // Only the column is counted, in its own settle so the line the field reports decides it.
-        var landing = KeyModel(text: model.text, anchor: position, focus: position, atoms: context.atoms)
-        guard groups.flatMap(\.chords).allSatisfy({ landing.press($0) }),
-              model.lineStart(of: landing.focus) == targetLine else { return .next }
-        let reached = landing.focus
-        let step: Chord = target > reached ? .right : .left
-        let column = model.graphemes(in: min(reached, target)..<max(reached, target))
-        groups.append((column > 0 ? arrows(step, count: column, selecting: context.arrowsSelect, normalizing: context.normalizes(target))
-            : [], nil))
+        let counted = ways.compactMap { way -> [KeyGroup]? in
+            var landing = KeyModel(text: model.text, anchor: position, focus: position, atoms: context.atoms, gaps: gaps)
+            guard way.flatMap(\.chords).allSatisfy({ landing.press($0) }),
+                  model.lineStart(of: landing.focus) == targetLine else { return nil }
+            let reached = landing.focus
+            let column = model.graphemes(in: min(reached, target)..<max(reached, target))
+            return way + [(column > 0 ? arrows(target > reached ? .right : .left, count: column, selecting: context.arrowsSelect,
+                                               normalizing: context.normalizes(target)) : [], nil)]
+        }
+        guard let groups = counted.min(by: { $0.flatMap(\.chords).count < $1.flatMap(\.chords).count }) else { return .next }
         return pressing(groups, to: target..<target, context: &context, profile: profile)
+    }
+
+    /// From ⌃A or ⌃E where that presses fewer keys than lane B's count from the caret; unblamed, as `0` `$` `j` `k` judge them.
+    static func sameLine(
+        to target: Int, from position: Int, model: TextModel, context: inout Context, profile: CapabilityProfile
+    ) -> Lane {
+        let selecting = context.arrowsSelect
+        let normalizing = context.normalizes(target)
+        func run(from reached: Int) -> [Chord] {
+            let count = model.graphemes(in: min(reached, target)..<max(reached, target))
+            return count > 0 ? arrows(target > reached ? .right : .left, count: count, selecting: selecting, normalizing: normalizing) : []
+        }
+        let ends: [(Capability, Chord, Int)] = [
+            (.lineStartKey, .paragraphStart, model.lineStart(of: position)), (.lineEndKey, .paragraphEnd, model.lineEnd(of: position)),
+        ]
+        guard let keys = ends.filter({ profile.has($0.0) }).map({ [$0.1] + run(from: $0.2) }).min(by: { $0.count < $1.count }),
+              keys.count < run(from: position).count else { return .next }
+        return pressing([(keys, nil)], to: target..<target, context: &context, profile: profile)
+    }
+
+    /// The starts of the `count` lines after `line`'s, as far as the text goes.
+    static func lineStarts(after line: Int, count: Int, in model: TextModel) -> [Int] {
+        var starts: [Int] = []
+        var end = model.lineEnd(of: line)
+        while starts.count < count, end < model.length {
+            starts.append(end + 1)
+            end = model.lineEnd(of: end + 1)
+        }
+        return starts
     }
 
     /// Line-shaped selections by native keys, as many as the command counts, since keys past the end do nothing;
@@ -904,7 +952,7 @@ private extension PhysicalPlanner {
         var context = original
         var steps = collapsing(&context)
         // One model throughout: which end of a selection moves is state the keys build up.
-        var model = KeyModel(text: text, anchor: position, focus: position, atoms: original.atoms)
+        var model = KeyModel(text: text, anchor: position, focus: position, atoms: original.atoms, gaps: original.gaps)
         for group in groups where !group.chords.isEmpty {
             for chord in group.chords {
                 guard model.press(chord) else { return .next }
@@ -934,7 +982,7 @@ private extension PhysicalPlanner {
         let blame = atom.flatMap { atom -> Expectation.Blame? in
             guard let before, let model else { return nil }
             let emptyParagraph = before == context.emptyParagraphCaret
-            let unmoved = emptyParagraph || mayStayPut(chords, from: before, in: model, atoms: context.atoms)
+            let unmoved = emptyParagraph || mayStayPut(chords, from: before, in: model, atoms: context.atoms, gaps: context.gaps)
                 ? [] : [context.field(before)]
             // Chromium's rich text can split one paragraph into several `AXValue` lines (a mention chip); nothing else does.
             let offTarget = context.breaks == nil
@@ -950,9 +998,9 @@ private extension PhysicalPlanner {
     }
 
     /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
-    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel, atoms: Set<Int>) -> Bool {
+    static func mayStayPut(_ chords: [Chord], from read: Range<Int>, in model: TextModel, atoms: Set<Int>, gaps: Set<Int>) -> Bool {
         guard read.isEmpty else { return true }
-        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound, atoms: atoms)
+        var keys = KeyModel(text: model.text, anchor: read.lowerBound, focus: read.lowerBound, atoms: atoms, gaps: gaps)
         guard chords.allSatisfy({ keys.press($0) }) else { return true }
         return keys.selection == read
     }
@@ -1403,14 +1451,33 @@ private extension PhysicalPlanner {
                 context.selection = range
                 return .steps(write(range, context: context) + settle(context, profile: profile))
             }
-            var presses = keyPath(from: selection, to: range.lowerBound, model: model, context: context)
-            let count = model.graphemes(in: range)
-            if count > 0 {
-                presses.append(.press(.selectRight, count: count))
-            }
+            let presses = selectKeys(range, from: selection, model: model, context: context, profile: profile)
             context.selection = range
             return .steps(presses + settle(context, profile: profile))
         }
+    }
+
+    /// From a caret at either end of a range within its line: ⇧ arrows across, or the shifted line key and ⇧ arrows back.
+    static func selectKeys(
+        _ range: Range<Int>, from selection: Range<Int>, model: TextModel, context: Context, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
+        let count = model.graphemes(in: range)
+        guard selection.isEmpty, count > 0, [range.lowerBound, range.upperBound].contains(selection.lowerBound),
+              model.lineStart(of: range.lowerBound) == model.lineStart(of: range.upperBound) else {
+            return keyPath(from: selection, to: range.lowerBound, model: model, context: context)
+                + (count > 0 ? [.press(.selectRight, count: count)] : [])
+        }
+        let caret = selection.lowerBound
+        let forward = caret == range.lowerBound
+        let (key, back, needs): (Chord, Chord, Capability) = forward
+            ? (Chord.paragraphEnd.shifted, .selectLeft, .lineEndKey) : (Chord.paragraphStart.shifted, .selectRight, .lineStartKey)
+        let far = forward ? model.lineEnd(of: caret) : model.lineStart(of: caret)
+        let fromKey = [key] + Array(repeating: back, count: model.graphemes(in: forward ? range.upperBound..<far : far..<range.lowerBound))
+        var landing = KeyModel(text: model.text, anchor: caret, focus: caret, atoms: context.atoms, gaps: context.gaps)
+        guard profile.has(needs), fromKey.count < count, fromKey.allSatisfy({ landing.press($0) }), landing.selection == range else {
+            return [.press(forward ? .selectRight : .selectLeft, count: count)]
+        }
+        return counted(fromKey)
     }
 
     static func blindSelect(_ target: LogicalStep.SelectionTarget, context: inout Context) -> Lane {

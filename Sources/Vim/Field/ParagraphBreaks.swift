@@ -21,6 +21,8 @@ public struct ParagraphBreaks: Equatable, Sendable {
             case atom
             /// A `<br>` ending a paragraph after a chip: a caret after the chip reads past it, a selection stops before it.
             case trailingBreak
+            /// No text: the line starts a list right after another, and a plain → or ↓ from above stops between them first.
+            case gap
         }
 
         public init(at: Int, text: String, kind: Kind = .structure) {
@@ -107,6 +109,11 @@ public extension ParagraphBreaks {
     /// Model offsets of the atoms.
     var atoms: Set<Int> {
         Set(hidden.filter { $0.kind == .atom }.map { $0.at - 1 })
+    }
+
+    /// Model offsets of the lines a stop between two lists comes before.
+    var gaps: Set<Int> {
+        Set(hidden.filter { $0.kind == .gap }.map(\.at))
     }
 
     /// `text` at `range` with each atom's whole text, as a register keeps it.

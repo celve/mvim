@@ -11,13 +11,26 @@ struct KeyModel {
     /// Offsets of chips, where Linear's shifted ⌃A and ⌃E stop (LIN-1652).
     var atoms: Set<Int> = []
 
+    /// Starts of lines a plain → or ↓ from the line above reaches only after a stop between two lists (LIN-1686).
+    var gaps: Set<Int> = []
+
+    /// The caret is in that stop, before the line after `focus`.
+    var inGap = false
+
     var selection: Range<Int> { min(anchor, focus)..<max(anchor, focus) }
 
     /// Applies one press; false for a key the model does not know.
     mutating func press(_ chord: Chord) -> Bool {
         let model = TextModel(text)
+        if inGap, let left = leaveGap(chord, in: model) { return left }
         let shift = chord.modifiers.contains(.shift)
         let collapsed = anchor == focus
+        if !shift, collapsed, entersGap(chord, in: model) {
+            focus = model.lineEnd(of: focus)
+            anchor = focus
+            inGap = true
+            return true
+        }
         let moved: Int
         switch Chord(chord.key, chord.modifiers.subtracting(.shift)) {
         case .deleteBack where !shift:
@@ -77,6 +90,37 @@ struct KeyModel {
     }
 
     static let pageRows = 10
+
+    /// → from a line's end, or ↓ from its last row, before a line that starts a list right after another.
+    private func entersGap(_ chord: Chord, in model: TextModel) -> Bool {
+        let end = model.lineEnd(of: focus)
+        guard end < model.length, gaps.contains(end + 1) else { return false }
+        switch chord {
+        case .right: return focus == end
+        case .down: return row(of: focus, in: model).end == end
+        default: return false
+        }
+    }
+
+    /// The press from inside the stop between two lists, as measured in Linear; nil for a key that acts from the line's end.
+    private mutating func leaveGap(_ chord: Chord, in model: TextModel) -> Bool? {
+        switch chord {
+        case .paragraphStart, .paragraphEnd, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted:
+            return true
+        case .right, .selectRight, .down:
+            focus += 1
+        case .up:
+            focus = row(of: focus, in: model).start
+        case .left:
+            break
+        default:
+            inGap = false
+            return nil
+        }
+        anchor = focus
+        inGap = false
+        return true
+    }
 
     /// Letter, digit and underscore runs; real apps also split Chinese by dictionary.
     private func wordEnd(from offset: Int, in model: TextModel) -> Int {

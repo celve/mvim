@@ -67,6 +67,9 @@ public struct Sim {
     /// A caret written at a code span's end, where Linear's next ← or ⇧← can do nothing.
     private var atWrittenCodeEnd = false
 
+    /// The caret stopped between two lists, before the line after it.
+    private var inListGap = false
+
     /// Linear draws the caret 20–160 ms after it arrives, so a quick command's snapshot can come first.
     public var drawsLate = false
     private var snapshotting = false
@@ -229,6 +232,7 @@ public struct Sim {
             self.text = text
             let clamped = TextModel(text).clamp(caret)
             selection = clamped..<clamped
+            inListGap = false
         }
         state.field = state.field.carried(across: transition)
         if transition.clearsChangeInFlight {
@@ -412,6 +416,7 @@ private extension Sim {
                 // Measured, a caret written at a code span's start lands outside it, one at its end inside.
                 codeInside = selection.isEmpty && isCodeEdge(lower, start: false) && !isCodeEdge(lower, start: true)
                 atWrittenCodeEnd = codeInside
+                inListGap = false
                 backward = false
 
             case .replaceSelection(let replacement):
@@ -502,7 +507,7 @@ private extension Sim {
            chord != .selectRight || TextModel(text).lineStart(of: selection.lowerBound) != selection.lowerBound {
             return true
         }
-        if chord.modifiers.isEmpty, selection.isEmpty, [Key.arrowLeft, .arrowRight].contains(chord.key) {
+        if !inListGap, chord.modifiers.isEmpty, selection.isEmpty, [Key.arrowLeft, .arrowRight].contains(chord.key) {
             let at = selection.lowerBound
             let (start, end) = (isCodeEdge(at, start: true), isCodeEdge(at, start: false))
             // From the side of an edge the arrow points across, it steps inside or out and stays put, but ← leaves a paragraph.
@@ -514,14 +519,18 @@ private extension Sim {
                 return true
             }
         }
+        let shown = chromium
         var keys = KeyModel(
             text: text,
             anchor: backward ? selection.upperBound : selection.lowerBound,
             focus: backward ? selection.lowerBound : selection.upperBound,
             wrap: wrapWidth,
-            atoms: chromium.atoms
+            atoms: shown.atoms,
+            gaps: shown.gaps,
+            inGap: inListGap
         )
         guard keys.press(chord) else { return false }
+        inListGap = keys.inGap
         if keys.text != text {
             let deleted = keys.selection.lowerBound..<(keys.selection.lowerBound + text.utf16.count - keys.text.utf16.count)
             listLines = listLines.map { ListLine.carried($0, in: text, replacing: deleted, with: "") }
@@ -538,6 +547,7 @@ private extension Sim {
             codeInside = isCodeEdge(arrived, start: true) && TextModel(text).lineStart(of: arrived) != arrived
         default: codeInside = false
         }
+        if inListGap { codeInside = false }
         return true
     }
 
@@ -609,6 +619,7 @@ private extension Sim {
         codeSpans = Self.carried(codeSpans, replacing: selection, with: replacement, into: replaced)
         codeInside = false
         atWrittenCodeEnd = false
+        inListGap = false
         text = replaced
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
@@ -713,7 +724,8 @@ extension Sim {
                 chips: shown.chips.filter { chip in
                     candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
                 },
-                carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? []
+                carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? [],
+                joins: candidates.markers.contains { shown.listMarkers.contains($0.lowerBound) } ? shown.listJoins : []
             ) : nil
             unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
         }
@@ -789,12 +801,15 @@ public extension Sim {
         public var checkbox: Bool
         /// The marker starts its item's line, as Chromium draws its own lists' markers.
         public var inline: Bool
+        /// The item starts a list right after another, so a plain → or ↓ from the line above stops between them first.
+        public var joinsList: Bool
 
-        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false, inline: Bool = false) {
+        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false, inline: Bool = false, joinsList: Bool = false) {
             self.marker = marker
             self.leaves = leaves
             self.checkbox = checkbox
             self.inline = inline
+            self.joinsList = joinsList
         }
 
         /// `lines` once `range` of `text` is `replacement`: the first keeps its own, but a deleted plain line the next's.
@@ -850,6 +865,9 @@ struct ChromiumParagraphs {
     /// Plain starts of the list markers, and the chips.
     let listMarkers: [Int]
     let chips: [UnreachableLines.Chip]
+    /// Plain starts of lists right after another, and the Sim offsets of their first lines.
+    let listJoins: [Int]
+    let gaps: Set<Int>
     /// The caret Linear draws at a code span's edge, and the paragraph whose end it ends with a `<br>`.
     let drawnCaret: UnreachableLines.Caret?
     let drawnAtEnd: Int?
@@ -864,6 +882,8 @@ struct ChromiumParagraphs {
             plainMarkers = shown.markers
             listMarkers = []
             chips = []
+            listJoins = []
+            gaps = []
             drawnCaret = nil
             drawnAtEnd = nil
             return
@@ -875,6 +895,8 @@ struct ChromiumParagraphs {
         var found: [Int] = []
         var markers: [Int] = []
         var chips: [UnreachableLines.Chip] = []
+        var joins: [Int] = []
+        var gaps: Set<Int> = []
         var plain = 0
         var start = 0
         var afterBreak = false
@@ -888,6 +910,10 @@ struct ChromiumParagraphs {
             let line = lines.indices.contains(index) ? lines[index] : Sim.ListLine()
             let units = Array(paragraph.utf16)
             let prefix = line.inline ? Array((line.marker ?? "").utf16) : []
+            if line.joinsList {
+                joins.append(plain)
+                gaps.insert(start)
+            }
             if let marker = line.marker {
                 markers.append(plain)
                 if !line.inline {
@@ -982,6 +1008,8 @@ struct ChromiumParagraphs {
         plainMarkers = FieldReads.withoutAttachments(raw)
         listMarkers = markers
         self.chips = chips
+        listJoins = joins
+        self.gaps = gaps
         self.drawnCaret = drawnCaret
         self.drawnAtEnd = drawnAtEnd
     }
