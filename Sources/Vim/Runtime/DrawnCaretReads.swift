@@ -7,7 +7,7 @@ extension Snapshotter {
     /// The marker selection, with a caret Chromium misreads beside a code span moved to the caret Linear draws there.
     static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> AX.MarkedSelection? {
         guard let marked = AX.markedSelection(of: element, selected: selected) else { return nil }
-        return misread(marked, in: element) ?? pastEnd(marked, in: element) ?? marked
+        return misread(marked, in: element) ?? codeStart(marked, in: element) ?? marked
     }
 
     /// The `AXValue` units a caret drawn at a collapsed read adds, which a settle leaves out of the length.
@@ -38,15 +38,15 @@ extension Snapshotter {
         return caret.flatMap { AX.markedSelection(at: children[$0], in: element) }
     }
 
-    /// The drawn caret inside a code span starting the field reads past the field's end, where its code group reads right.
-    private static func pastEnd(_ marked: AX.MarkedSelection, in element: AXUIElement) -> AX.MarkedSelection? {
-        guard marked.isCollapsed, let length = AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0),
-              marked.range.lowerBound > length, let leaf = marked.node(upper: false), let group = AX.parent(of: leaf),
-              DrawnCaret.isEmptyGroup(subrole: AX.attributes([kAXSubroleAttribute], of: leaf).string(0),
-                                      children: AX.childCount(of: leaf) ?? 1),
-              DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: group).string(0)),
-              let first = AX.children(of: group)?.first, CFEqual(first, leaf) else { return nil }
-        return AX.markedSelection(at: group, in: element)
+    /// A drawn caret that is its code group's first child sits at the group's start, which a span starting the field misreads.
+    private static func codeStart(_ marked: AX.MarkedSelection, in element: AXUIElement) -> AX.MarkedSelection? {
+        guard marked.isCollapsed, let leaf = marked.node(upper: false),
+              case let reads = AX.attributes([kAXSubroleAttribute, kAXChildrenAttribute], of: leaf),
+              DrawnCaret.isEmptyGroup(subrole: reads.string(0), children: reads.elements(1)?.count ?? 0),
+              let group = AX.parent(of: leaf), DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: group).string(0)),
+              let first = AX.children(of: group)?.first, CFEqual(first, leaf),
+              let start = AX.markedSelection(at: group, in: element), start.range != marked.range else { return nil }
+        return start
     }
 
     /// `reading`, read `again` once Linear has drawn a caret it is about to and removed one it drew for a caret that left.
