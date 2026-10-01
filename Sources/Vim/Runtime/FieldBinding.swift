@@ -164,15 +164,17 @@ public enum Snapshotter {
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
         var marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
-        // Stepped inside a code span that starts the field, Chromium reads the marker past the field's end (LIN-1683).
-        if let range = marked?.range, range.upperBound > (reads.int(2) ?? .max),
-           range.upperBound > (AX.markerText(of: element).map { FieldReads.withoutAttachments($0).utf16.count } ?? .max) {
+        var range = marked?.range
+        // Inside a code span starting the field, the marker reads past the field's end, while the plain read is right.
+        if let upper = range?.upperBound, upper > (reads.int(2) ?? .max),
+           upper > (AX.markerText(of: element).map { FieldReads.withoutAttachments($0).utf16.count } ?? .max) {
             marked = nil
+            range = plain
         }
         let side = marked.map { sides(of: $0) }
         var snapshotReads = FieldSnapshot.Reads(
             field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
-            length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
+            length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: range
         )
         var memo = known
         var unreachable = knownUnreachable
@@ -192,10 +194,10 @@ public enum Snapshotter {
                 unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
             }
         }
-        if let marked {
+        if let range {
             let text = MarkerReads.takesText(reads.string(0)) ? AX.markerText(of: element) : nil
             let aligned = FieldSnapshot.Step.run(taking: take) {
-                MarkerReads.aligning(value: reads.string(0), range: marked.range, text: text, sides: snapshotReads.sides)
+                MarkerReads.aligning(value: reads.string(0), range: range, text: text, sides: snapshotReads.sides)
             }
             snapshotReads.field.markers = aligned.reads
             snapshotReads.markerText = aligned.text
