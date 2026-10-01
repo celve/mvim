@@ -76,6 +76,9 @@ public final class Executor {
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
 
+    /// Keys pressed since the last settle.
+    private var pressed = 0
+
     /// An `AXError` worth reporting: `.success` is not one.
     private static func rejection(_ error: AXError) -> Int32? {
         error == .success ? nil : error.rawValue
@@ -140,6 +143,7 @@ public final class Executor {
         lastWriteError = nil
         lastObserved = nil
         self.paragraphs = paragraphs
+        pressed = 0
         kept = [:]
         let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
         afterNormalizing = Set(plan.steps.indices.filter { $0 >= 2 && Array(plan.steps[$0 - 2..<$0]) == outside })
@@ -204,6 +208,7 @@ public final class Executor {
                 return false
             }
             Synth.key(code, flags(for: chord.modifiers), times: count)
+            pressed += count
             return true
 
         case .typeText(let text):
@@ -247,7 +252,8 @@ public final class Executor {
 
         case .settle(let expectation):
             awaitPaste(expectation, at: index, on: element)
-            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            pressed = 0
             if outcome.converged, afterNormalizing.contains(index) {
                 // Read again once the ⇧← → are in, so the next command never reads the selection between them.
                 Thread.sleep(forTimeInterval: 0.015)
@@ -265,7 +271,8 @@ public final class Executor {
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
             awaitPaste(expectation, at: index, on: element)
-            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            pressed = 0
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
             _ = record(outcome, expectation, at: index, hard: false)
@@ -300,7 +307,9 @@ public final class Executor {
     /// the rare fallback for an element that claimed `readLength` and then
     /// answered nil, and fetching it every poll would marshal the entire
     /// document 25 times per settle.
-    nonisolated static func settle(_ expectation: Expectation, on element: AXUIElement, paragraphs: Bool) -> SettleOutcome {
+    nonisolated static func settle(
+        _ expectation: Expectation, on element: AXUIElement, paragraphs: Bool, presses: Int = 0
+    ) -> SettleOutcome {
         var names: [String] = []
         var selectionSlot: Int?
         var lengthSlot: Int?
@@ -327,7 +336,8 @@ public final class Executor {
         }
 
         let start = Date()
-        let deadline = start.addingTimeInterval(0.25)
+        // Chromium applies a long run of shifted arrows more slowly than mvim sends it, so the wait grows with the run.
+        let deadline = start.addingTimeInterval(0.25 + (paragraphs ? 0.0025 * Double(presses) : 0))
         var polls = 0
         while true {
             polls += 1
