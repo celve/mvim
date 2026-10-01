@@ -4949,7 +4949,13 @@ precondition((1...400).contains { budget in
     return found.joins.isEmpty && found.markers.count == 10
 }, "running out of reads on the lists loses only the joins")
 precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
-             "no markers, no joins read")
+             "nothing that starts a list, no joins read")
+let todosModel = folded("Top\n\n\nTodo a\n\n\nTodo b\nEnd", "Top\u{FFFC}\u{FFFC}Todo a\u{FFFC}\u{FFFC}Todo bEnd", fakeTree("""
+0/G/0/3 0.0/T/0/3 1/L/3/9 1.0/G/3/9 1.0.0/G/3/3 1.0.0.0/I/3/3 1.0.0.1/C/3/3 1.0.1/G/3/9 1.0.1.0/T/3/9 2/L/9/15 2.0/G/9/15
+2.0.0/G/9/9 2.0.0.0/I/9/9 2.0.0.1/C/9/9 2.0.1/G/9/15 2.0.1.0/T/9/15 3/G/15/18 3.0/T/15/18
+"""))
+precondition(todosModel.text == "Top\nTodo a\nTodo b\nEnd" && todosModel.breaks.gaps == [11], "two to-do lists alone stop too")
+precondition(!UnreachableLines.candidates(text: "Top\nEnd", breaks: ParagraphBreaks(offsets: [3]), raw: "TopEnd").lists)
 
 let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .gap)])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
