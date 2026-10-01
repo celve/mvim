@@ -99,15 +99,21 @@ public final class Executor {
         return false
     }
 
-    /// Pastes land up to 250 ms late: a settle after one that predicts nothing waits for the caret to leave its start.
+    /// Pastes land up to 250 ms late: a settle after one that predicts nothing waits for the caret to stay off its start.
     private func awaitPaste(_ expectation: Expectation, at index: Int, on element: AXUIElement) {
         guard pastedAt == index - 1, pasteWaits, expectation.landing == nil, expectation.length == nil,
               expectation.selectedText == nil else { return }
         let deadline = Date().addingTimeInterval(0.25)
+        var moved = 0
         while Date() < deadline {
-            // A caret Linear draws beside code reads as a selection for a moment, which is no landing.
+            // A caret Linear draws beside code reads as a selection, or elsewhere, for a moment, which is no landing.
             if let from = pastedFrom, let marked = Snapshotter.markedSelection(of: element), marked.isCollapsed,
-               marked.range != from.range || Snapshotter.paragraphSide(of: marked, upper: true) != from.side { return }
+               marked.range != from.range || Snapshotter.paragraphSide(of: marked, upper: true) != from.side {
+                moved += 1
+                if moved == 2 { return }
+            } else {
+                moved = 0
+            }
             Thread.sleep(forTimeInterval: 0.01)
         }
     }
