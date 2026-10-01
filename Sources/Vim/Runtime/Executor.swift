@@ -70,6 +70,9 @@ public final class Executor {
     /// The caret the paste began at, when it read as one.
     private var pastedFrom: (range: Range<Int>, side: ParagraphBreaks.Side?)?
 
+    /// Settles straight after a ⇧← → that keeps a caret outside a code span, whose target showed before those two keys.
+    private var afterNormalizing: Set<Int> = []
+
     /// The field selects in text content (Chromium rich text).
     private var paragraphs = false
 
@@ -138,6 +141,8 @@ public final class Executor {
         lastObserved = nil
         self.paragraphs = paragraphs
         kept = [:]
+        let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
+        afterNormalizing = Set(plan.steps.indices.filter { $0 >= 2 && Array(plan.steps[$0 - 2..<$0]) == outside })
         for (index, next) in plan.steps.enumerated() {
             var step = next
             if case .settle(let expectation) = next { step = .settle(expectation.resolving(kept)) }
@@ -242,7 +247,12 @@ public final class Executor {
 
         case .settle(let expectation):
             awaitPaste(expectation, at: index, on: element)
-            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            if outcome.converged, afterNormalizing.contains(index) {
+                // Read again once the ⇧← → are in, so the next command never reads the selection between them.
+                Thread.sleep(forTimeInterval: 0.015)
+                outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+            }
             lastObserved = outcome.observedSelection
             confirmPaste(outcome, expectation, at: index)
             if record(outcome, expectation, at: index, hard: true) {

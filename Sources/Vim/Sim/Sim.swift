@@ -496,9 +496,10 @@ private extension Sim {
         // Measured at some ends and not others, so always here: the first ← or ⇧← after a write at a code span's end.
         defer { atWrittenCodeEnd = false }
         if atWrittenCodeEnd, [.left, .selectLeft].contains(chord) { return true }
-        // Measured: from inside a code span's start, shifted → and ⇧⌃E do nothing.
+        // Measured: from inside a code span's start, ⇧⌃E does nothing, and ⇧→ too unless the span starts its line.
         if [.selectRight, Chord.paragraphEnd.shifted].contains(chord), selection.isEmpty, codeInside,
-           isCodeEdge(selection.lowerBound, start: true) {
+           isCodeEdge(selection.lowerBound, start: true),
+           chord != .selectRight || TextModel(text).lineStart(of: selection.lowerBound) != selection.lowerBound {
             return true
         }
         if chord.modifiers.isEmpty, selection.isEmpty, [Key.arrowLeft, .arrowRight].contains(chord.key) {

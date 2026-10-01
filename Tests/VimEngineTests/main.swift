@@ -4771,6 +4771,33 @@ for (profile, text, spans, kinds, caret, keys) in [
                  "\(text) \(keys)")
 }
 
+// A paragraph's first code span: ⇧→ selects from inside it, and only ⇧⌃E needs ⌃A first, the field's start included.
+var firstSpan = Sim(text: "aa\ncode x", caret: 3, profile: keyProfile)
+firstSpan.emptyParagraphs = true
+firstSpan.listLines = [Sim.ListLine(), Sim.ListLine()]
+firstSpan.codeSpans = [3..<7]
+firstSpan.emulatesKeys = true
+firstSpan.readModel = .textContent
+precondition(firstSpan.perform([.press(.right, count: 1), .press(.selectRight, count: 1)]) && firstSpan.selection == 3..<4)
+precondition(paragraphPlanning("D", text: "code x\nzz", caret: 0, profile: keyProfile).plan.steps.first
+             == .press(.paragraphStart, count: 1))
+precondition(paragraphPlanning("x", text: "code x\nzz", caret: 0, profile: keyProfile).plan.steps.first
+             == .press(.selectRight, count: 1))
+let noLineStart = removing([.lineStartKey], from: keyProfile)
+for (text, span, caret, left) in [("aa\ncode x", 3..<7, 3, "aa\n"), ("code x\nzz", 0..<4, 0, "\nzz")] {
+    for profile in [keyProfile, noLineStart] {
+        var host = Sim(text: text, caret: caret, profile: profile)
+        host.emptyParagraphs = true
+        host.listLines = [Sim.ListLine(), Sim.ListLine()]
+        host.codeSpans = [span]
+        host.emulatesKeys = true
+        host.readModel = .textContent
+        precondition(host.perform([.press(.right, count: 1)]))
+        host.type("D")
+        precondition(host.text == left && host.settleFailures == 0, "\(text) D")
+    }
+}
+
 // No write-lane plan has a counted ← run, whose first ← a caret the last plan wrote at a code span's end can take.
 for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCodeStarts {
     for keys in ["h", "3h", "b", "2b", "x", "X", "3X", "dw", "db", "d3h", "c2h", "D", "A", "I", "0", "$", "j", "k", "dd",

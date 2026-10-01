@@ -657,11 +657,13 @@ private extension PhysicalPlanner {
     /// ⇧← then →, which leaves a caret where it was, outside a code span it starts (LIN-1683).
     static let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
 
-    /// What goes before ⇧→ or ⇧⌃E from `caret`; at a paragraph's start only ⇧⌃E sticks, and ⌃A lands outside.
+    /// What goes before ⇧→ or ⇧⌃E from `caret`; at a paragraph's start only ⇧⌃E sticks, and ⌃A or ⇧→ ← lands outside.
     static func outside(before chord: Chord, at caret: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep]? {
-        guard context.arrowsSelect, caret > 0, [.selectRight, Chord.paragraphEnd.shifted].contains(chord) else { return nil }
-        guard context.edge(caret) == .paragraphStart else { return outside }
-        return chord == .selectRight || !profile.has(.lineStartKey) ? nil : [.press(.paragraphStart, count: 1)]
+        guard context.arrowsSelect, [.selectRight, Chord.paragraphEnd.shifted].contains(chord) else { return nil }
+        guard caret == 0 || context.edge(caret) == .paragraphStart else { return outside }
+        guard chord != .selectRight, let model = context.model, model.lineEnd(of: caret) > caret else { return nil }
+        return profile.has(.lineStartKey) ? [.press(.paragraphStart, count: 1)]
+            : [.press(.selectRight, count: 1), .press(.left, count: 1)]
     }
 
     /// One press per run of the same chord.
