@@ -4417,9 +4417,15 @@ func dia1Cursor(_ keys: String, gap: Int) -> PhysicalPlan {
     return PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
 }
 let cursorX = dia1Cursor("x", gap: middle)
-precondition(!writes(cursorX) && cursorX.steps.first == .press(.left, count: 1) && chords(cursorX).prefix(2) == [.left, .selectRight])
-if case .settle = cursorX.steps[1] {} else { preconditionFailure("the drawn cursor collapses by a settled ←, so no write overtakes it") }
+precondition(!writes(cursorX) && cursorX.steps.prefix(2) == [.press(.left, count: 1), .press(.selectRight, count: 1)],
+             "the drawn cursor collapses by ←")
 precondition(writes(dia1Cursor("x", gap: middle + 2)), "inside a paragraph the write stays")
+let cursorJ = dia1Cursor("j", gap: middle)
+precondition(cursorJ.steps.first == .press(.left, count: 1) && writes(cursorJ))
+if case .settle = cursorJ.steps[1] {} else { preconditionFailure("a write after the ← waits for it to settle") }
+precondition(chords(dia1Cursor("$", gap: middle + 2)) == [.paragraphEnd]
+             && chords(dia1Cursor("0", gap: middle + 2)) == [.paragraphStart, .selectRight],
+             "⌃A and ⌃E land alike from the cursor, which needs no collapse first; ⇧→ draws it again at the start")
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,

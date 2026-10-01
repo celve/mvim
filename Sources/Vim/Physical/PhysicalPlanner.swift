@@ -77,13 +77,17 @@ public enum PhysicalPlanner {
         // gap before the plan acts, so no step ever operates on the
         // presentation selection. Empty and bell-only plans skip this —
         // they touch nothing and the cursor stays up.
+        var uncover: [PhysicalStep] = []
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
-            steps += collapse(to: gap, context: context, profile: profile)
+            uncover = collapse(to: gap, context: context, profile: profile)
+            context.queue(uncover)
             context.drawnBreak = nil
             context.unmoved = false
         }
         for (index, step) in logical.steps.enumerated() {
             let caret = context.unmoved ? context.caret : nil
+            // An AX write would overtake keys still queued, so a write after them waits for them to settle (LIN-1685).
+            let barrier = context.keysQueued ? settle(context, profile: profile) : []
             guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
@@ -92,20 +96,28 @@ public enum PhysicalPlanner {
                let prefix = outside(before: chord, at: caret, context: context, profile: profile) {
                 lowered.insert(contentsOf: prefix, at: first)
             }
-            steps.append(contentsOf: lowered)
-            for step in lowered {
-                switch step {
-                case .press, .typeText, .clipboardCut, .clipboardCopy, .clipboardInsert: context.keysQueued = true
-                case .settle, .softSettle: context.keysQueued = false
-                default: break
-                }
+            if let first = lowered.first(where: moves), isWrite(first) {
+                lowered.insert(contentsOf: barrier, at: 0)
             }
+            steps.append(contentsOf: lowered)
+            context.queue(lowered)
             if lowered.contains(where: moves) {
                 context.drawnBreak = nil
                 context.unmoved = false
             }
         }
-        return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
+        // ⌃A and ⌃E land alike from the cursor's one character, so a plan they start leaves it be (LIN-1685).
+        if let first = steps.first(where: moves), case .press(let chord, _) = first, [.paragraphStart, .paragraphEnd].contains(chord) {
+            uncover = []
+        }
+        return Planning(plan: PhysicalPlan(steps: uncover + steps), rejection: nil, operand: context.operand)
+    }
+
+    static func isWrite(_ step: PhysicalStep) -> Bool {
+        switch step {
+        case .setSelection, .replaceSelection: true
+        default: false
+        }
     }
 
     /// A step that can take the caret from where the snapshot saw it.
@@ -171,6 +183,16 @@ private extension PhysicalPlanner {
 
         /// Posted events not yet settled, which an AX write would overtake at the window server.
         var keysQueued = false
+
+        mutating func queue(_ steps: [PhysicalStep]) {
+            for step in steps {
+                switch step {
+                case .press, .typeText, .clipboardCut, .clipboardCopy, .clipboardInsert: keysQueued = true
+                case .settle, .softSettle: keysQueued = false
+                default: break
+                }
+            }
+        }
 
         let webContent: Bool
 
@@ -514,9 +536,9 @@ private extension PhysicalPlanner {
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
     static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
-        // Settled, so a later AX write cannot overtake the ←.
-        let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
-        guard profile.has(.writeSelection) else { return keys }
+        let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : [])
+        // Settled, so a later AX write cannot overtake the ←; in a write lane `planning` settles before the next write.
+        guard profile.has(.writeSelection) else { return keys + settle(context, profile: profile) }
         return keyed(write(start..<start, context: context), or: keys, context: context)
     }
 
