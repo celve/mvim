@@ -1382,6 +1382,8 @@ precondition(paragraphPlanning("j", text: threeParagraphs, caret: 0, profile: no
     .commit(.setCursor(nil)),
 ])
 precondition(paragraphPlanning("l", text: threeParagraphs, caret: 9, profile: readProfile).plan.steps == [
+    .press(.selectLeft, count: 1),
+    .press(.right, count: 1),
     .press(.selectRight, count: 1),
     .press(.right, count: 1),
     .settle(Expectation(selection: 8..<8, length: 11)),
@@ -4742,6 +4744,59 @@ for (text, spans, caret, keys) in [
         if code.state.field.mode == .insert { code.feed("<Esc>"); plain.feed("<Esc>") }
     }
     precondition(code.caret == plain.caret && code.text == plain.text && code.settleFailures == 0, "\(text) \(keys)")
+}
+
+// A quick command's snapshot can come before Linear draws the caret, and a write beside a line ending in code can draw one.
+for (profile, text, spans, kinds, caret, keys) in [
+    (keyProfile, "ab code zz", [3..<7], "p", 4, ["yiw", "x"]), (writeKeys, "e\nd\n", [0..<1], "1.,t,p", 4, ["AQ"]),
+    (writeKeys, "e\nd\n", [0..<1], "1.,t,p", 4, ["IQ"]), (writeKeys, "ab\ne\nd\n", [3..<4], "p,1.,t,p", 0, ["3j", "AQ"]),
+] {
+    func sim(_ spans: [Range<Int>]) -> Sim {
+        var host = Sim(text: text, caret: caret, profile: profile)
+        host.emptyParagraphs = true
+        host.listLines = kinds.split(separator: ",").map {
+            $0 == "p" ? Sim.ListLine() : $0 == "t" ? Sim.ListLine(leaves: 2, checkbox: true) : Sim.ListLine(marker: String($0))
+        }
+        host.codeSpans = spans
+        host.drawsLate = true
+        host.emulatesKeys = true
+        host.readModel = .textContent
+        return host
+    }
+    var code = sim(spans)
+    var plain = sim([])
+    for command in keys {
+        code.type(command)
+        plain.type(command)
+        if code.state.field.mode == .insert { code.feed("<Esc>"); plain.feed("<Esc>") }
+    }
+    precondition(code.caret == plain.caret && code.text == plain.text && code.settleFailures == plain.settleFailures,
+                 "\(text) \(keys)")
+}
+
+// In the write lane no counted ← run follows a write, whose first ← a caret written at a code span's end can take.
+for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCodeStarts {
+    for keys in ["h", "3h", "b", "x", "X", "dw", "db", "D", "A", "I", "0", "$", "j", "k", "dd", "yy", "p", "J", "~"] {
+        var host = listCodeSim(writeKeys, caret: caret, spans: listCodeSpans)
+        var (reads, observed) = host.read()
+        var memo: EmptyParagraphs.Memo?
+        var unreachable: UnreachableLines.Memo?
+        let snapshot = FieldSnapshot.Step.run(taking: { host.take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
+            FieldSnapshot.build(reads, capabilities: writeKeys, answer: observed.after, anchor: nil, cursor: nil, memo: memo,
+                                unreachable: unreachable)
+        }.snapshot
+        let steps = PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: host.state), snapshot: snapshot).steps
+        var written = false
+        for step in steps {
+            switch step {
+            case .setSelection: written = true
+            case .press(.selectLeft, let count), .press(.left, let count):
+                precondition(!written || count < 2, "\(keys) from \(caret)")
+            case .press: written = false
+            default: break
+            }
+        }
+    }
 }
 
 print("Vim engine tests passed")

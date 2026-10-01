@@ -67,6 +67,10 @@ public struct Sim {
     /// A caret written at a code span's end, where Linear's next ← or ⇧← can do nothing.
     private var atWrittenCodeEnd = false
 
+    /// Linear draws the caret 20–160 ms after it arrives, so a quick command's snapshot can come first.
+    public var drawsLate = false
+    private var snapshotting = false
+
     public var readSelection: Range<Int> {
         if emptyParagraphs { return chromium.field(selection) }
         guard let reads else { return selection }
@@ -244,14 +248,27 @@ private extension Sim {
         if case .visual(let context) = state.field.mode {
             anchor = context.anchor
         }
-        var (reads, observed) = read()
         var memo = foundEmptyParagraphs
         var unreachable = foundUnreachable
-        let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
-            FieldSnapshot.build(
-                reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
-                unreachable: unreachable
-            )
+        func snapshot() -> (built: (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?),
+                            observed: Learning.Observation) {
+            var (reads, observed) = read()
+            let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
+                FieldSnapshot.build(
+                    reads, capabilities: profile, answer: observed.after, anchor: anchor, cursor: state.field.cursor, memo: memo,
+                    unreachable: unreachable
+                )
+            }
+            return (built, observed)
+        }
+        snapshotting = true
+        var (built, observed) = snapshot()
+        snapshotting = false
+        // The Snapshotter waits for the caret drawn at a code span's end that ends a paragraph, whose `<br>` moves offsets.
+        let caret = selection.lowerBound
+        if drawsLate, built.snapshot.breaks != nil, !built.snapshot.holdsDrawnCaret, selection.isEmpty,
+           isCodeEdge(caret, start: false), TextModel(text).lineEnd(of: caret) == caret {
+            (built, observed) = snapshot()
         }
         foundEmptyParagraphs = built.memo
         foundUnreachable = built.unreachable
@@ -298,7 +315,7 @@ private extension Sim {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        executeAside(PhysicalPlanner.collapse(readSelection, profile: profile))
+        executeAside(PhysicalPlanner.collapse(readSelection, paragraphs: fieldBreaks != nil, profile: profile))
         return readSelection.isEmpty
     }
 
@@ -590,6 +607,7 @@ private extension Sim {
         let replaced = TextModel(text).replacing(selection, with: replacement)
         codeSpans = Self.carried(codeSpans, replacing: selection, with: replacement, into: replaced)
         codeInside = false
+        atWrittenCodeEnd = false
         text = replaced
         let caretAfter = selection.lowerBound + replacement.utf16.count
         selection = caretAfter..<caretAfter
@@ -708,7 +726,8 @@ extension Sim {
 
     var chromium: ChromiumParagraphs {
         let caret = selection.isEmpty ? selection.lowerBound : nil
-        let drawn = caret.flatMap { isCodeEdge($0, start: true) || isCodeEdge($0, start: false) ? $0 : nil }
+        let drawn = drawsLate && snapshotting ? nil
+            : caret.flatMap { isCodeEdge($0, start: true) || isCodeEdge($0, start: false) ? $0 : nil }
         return ChromiumParagraphs(text: text, lines: listLines, caret: caret, drawn: drawn)
     }
 

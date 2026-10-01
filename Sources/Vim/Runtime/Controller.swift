@@ -497,7 +497,7 @@ public final class Controller {
         guard !read.caret else { return true }
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, read.range == operand { return true }
-        let collapse = PhysicalPlanner.collapse(read.range, profile: binding.capabilities)
+        let collapse = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
         executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
         // The write that stranded this may be the one that lies, so confirm.
         return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false

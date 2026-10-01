@@ -118,6 +118,25 @@ public enum Snapshotter {
         known: EmptyParagraphs.Memo? = nil,
         knownUnreachable: UnreachableLines.Memo? = nil
     ) -> Reading {
+        let first = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
+                         model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
+        guard waitsForDrawnCaret(first.snapshot, in: element) else { return first }
+        return read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium, model: model,
+                    sampling: sampling, known: first.emptyParagraphs ?? known,
+                    knownUnreachable: first.unreachable ?? knownUnreachable)
+    }
+
+    private static func read(
+        of element: AXUIElement,
+        capabilities: CapabilityProfile,
+        anchor: Int?,
+        cursor: Range<Int>?,
+        chromium: Bool,
+        model: ReadModel,
+        sampling: OffsetsSampling,
+        known: EmptyParagraphs.Memo?,
+        knownUnreachable: UnreachableLines.Memo?
+    ) -> Reading {
         let blocks = AX.childCount(of: element)
         let (current, source) = model.reading(chromium: chromium, children: blocks.map { $0 > 0 } ?? true)
         // Observation keeps running under `untrusted`, whose withheld caret is still read.

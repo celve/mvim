@@ -1,4 +1,5 @@
 import ApplicationServices
+import Foundation
 import Core
 
 /// Linear's caret drawn at an inline code span's edge, read over AX (LIN-1683); `DrawnCaret` has the rules.
@@ -35,6 +36,21 @@ extension Snapshotter {
                                       next: index + 1 < children.count ? subroles[index + 1] : nil)
         }
         return caret.flatMap { AX.markedSelection(at: children[$0], in: element) }
+    }
+
+    /// Waits for the caret Linear draws 20–160 ms late at a code span's end ending a paragraph, whose `<br>` moves offsets.
+    static func waitsForDrawnCaret(_ snapshot: FieldSnapshot, in element: AXUIElement) -> Bool {
+        guard snapshot.breaks != nil, !snapshot.holdsDrawnCaret, let caret = snapshot.caret, let text = snapshot.text,
+              TextModel(text).lineEnd(of: caret) == caret, let marked = AX.markedSelection(of: element), marked.isCollapsed,
+              marked.side(upper: false) == .end, let node = marked.node(upper: false), AX.role(of: node) == kAXStaticTextRole,
+              let parent = AX.parent(of: node), DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: parent).string(0))
+        else { return false }
+        let length = AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0)
+        let deadline = Date().addingTimeInterval(0.2)
+        while Date() < deadline, AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0) == length {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return true
     }
 
     /// The drawn caret at plain `offset`, confirmed as discovery confirms one; nil where there is none or a read fails.

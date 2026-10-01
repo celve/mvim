@@ -78,15 +78,16 @@ public enum PhysicalPlanner {
         if let gap = context.cursorCollapse, !logical.steps.isEmpty, !isBellOnly(logical) {
             steps += collapse(to: gap, context: context, profile: profile)
             context.drawnBreak = nil
-            context.drawnCaret = false
+            context.unmoved = false
         }
         for (index, step) in logical.steps.enumerated() {
+            let caret = context.unmoved ? context.caret : nil
             guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
-            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, where only the snapshot's caret can be (LIN-1683).
-            if context.drawnCaret, let first = lowered.firstIndex(where: moves), case .press(let chord, _) = lowered[first],
-               [.selectRight, Chord.paragraphEnd.shifted].contains(chord) {
+            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, which a caret mvim did not place may be (LIN-1683).
+            if context.arrowsSelect, let caret, caret > 0, let first = lowered.firstIndex(where: moves),
+               case .press(let chord, _) = lowered[first], [.selectRight, Chord.paragraphEnd.shifted].contains(chord) {
                 lowered.insert(contentsOf: outside, at: first)
             }
             steps.append(contentsOf: lowered)
@@ -99,7 +100,7 @@ public enum PhysicalPlanner {
             }
             if lowered.contains(where: moves) {
                 context.drawnBreak = nil
-                context.drawnCaret = false
+                context.unmoved = false
             }
         }
         return Planning(plan: PhysicalPlan(steps: steps), rejection: nil, operand: context.operand)
@@ -124,12 +125,16 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left, as read in field offsets, to its start.
-    static func collapse(_ selection: Range<Int>, misread: Bool = false, profile: CapabilityProfile) -> PhysicalPlan {
+    /// Collapses a selection an aborted run left, as read in field offsets, to its start; `paragraphs` for Chromium's rich text.
+    static func collapse(
+        _ selection: Range<Int>, misread: Bool = false, paragraphs: Bool = false, profile: CapabilityProfile
+    ) -> PhysicalPlan {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
         let start = selection.lowerBound
-        let context = Context(snapshot: FieldSnapshot(capabilities: profile, selection: start..<start))
+        let context = Context(snapshot: FieldSnapshot(
+            capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil
+        ))
         return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
     }
 
@@ -197,7 +202,6 @@ private extension PhysicalPlanner {
             reshapes = snapshot.holdsEmptyParagraphs || snapshot.foldedLength > 0
             if snapshot.holdsChips || snapshot.holdsDrawnCaret { unknown.insert(.length) }
             drawnBreak = snapshot.drawnBreak
-            drawnCaret = snapshot.holdsDrawnCaret && (snapshot.caret ?? 0) > 0
             if let cursor = snapshot.cursor, !cursor.isEmpty, cursor == snapshot.selection {
                 // The engine plans from the collapsed gap, not the block.
                 let gap = cursor.lowerBound
@@ -221,8 +225,8 @@ private extension PhysicalPlanner {
         /// The `<br>` after a caret Linear draws at a paragraph's end, which only a write before the caret moves meets.
         var drawnBreak: Int?
 
-        /// The caret is where Linear draws it, which may be inside a code span's start.
-        var drawnCaret = false
+        /// Nothing has pressed or written yet, so the caret is still the snapshot's, wherever it came from.
+        var unmoved = true
 
         /// `range` in field offsets as a write meets them: past that `<br>`, one more while it is there.
         func written(_ range: Range<Int>) -> Range<Int> {
@@ -442,13 +446,11 @@ private extension PhysicalPlanner {
         if context.edge(caret) == .paragraphStart, field.lowerBound > 0 {
             let inside = model.advance(caret, byGraphemes: 1)
             guard inside < end, !context.isAtom(inside) else {
-                let above = field.lowerBound - 1
-                guard let drawnBreak = context.drawnBreak, above > drawnBreak else {
-                    return [.setSelection(above..<above), .setSelection(field)]
-                }
-                // Leaving a drawn caret takes its `<br>` with it up to 300 ms later, which a read past it waits out.
-                return [.setSelection(above..<above), .settle(Expectation(landing: .exact(above - 1..<above - 1))),
-                        .setSelection(context.field(range))]
+                if context.caret == caret { return [] }
+                if let from = context.caret, from < caret { return [.setSelection(field)] }
+                // First above it, at a letter no line boundary shares, where no caret Linear draws brings a `<br>`.
+                let above = letterAbove(caret, in: model) ?? 0
+                return [.setSelection(context.written(above..<above)), .setSelection(field)]
             }
             // A caret written at a code span's end takes no ← or ⇧← next, and a collapse onto its start may stay inside.
             return [.setSelection(context.written(inside..<inside))]
@@ -458,11 +460,23 @@ private extension PhysicalPlanner {
         return [.setSelection(field)] + back(true, context: context)
     }
 
+    /// The last letter of the nearest line above `offset`'s with two or more, strictly inside it.
+    static func letterAbove(_ offset: Int, in model: TextModel) -> Int? {
+        var end = model.lineStart(of: offset) - 1
+        while end >= 0 {
+            let start = model.lineStart(of: end)
+            let last = model.advance(end, byGraphemes: -1)
+            if last > start { return last }
+            end = start - 1
+        }
+        return nil
+    }
+
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
     static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
         if profile.has(.writeSelection) { return write(start..<start, context: context) }
         // Settled, so a later AX write cannot overtake the ←.
-        return [.press(.left, count: 1)] + settle(context, profile: profile)
+        return [.press(.left, count: 1)] + (context.arrowsSelect && start > 0 ? outside : []) + settle(context, profile: profile)
     }
 
     static func presses(_ steps: [PhysicalStep]) -> Bool {
@@ -1439,7 +1453,8 @@ private extension PhysicalPlanner {
             if profile.has(.writeSelection) {
                 return write(target..<target, context: context) + settle(context, profile: profile)
             }
-            return [.press(towardStart ? .left : .right, count: 1)] + settle(context, profile: profile)
+            let settled = towardStart && context.arrowsSelect && target > 0 ? outside : []
+            return [.press(towardStart ? .left : .right, count: 1)] + settled + settle(context, profile: profile)
         }
         if context.selectionOpaque {
             context.selectionOpaque = false
