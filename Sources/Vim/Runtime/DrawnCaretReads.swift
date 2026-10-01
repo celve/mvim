@@ -4,10 +4,10 @@ import Core
 
 /// Linear's caret drawn at an inline code span's edge, read over AX (LIN-1683); `DrawnCaret` has the rules.
 extension Snapshotter {
-    /// The marker selection, with a caret Chromium reads at a paragraph's end moved to the caret Linear draws there.
+    /// The marker selection, with a caret Chromium misreads beside a code span moved to the caret Linear draws there.
     static func markedSelection(of element: AXUIElement, selected: AnyObject? = nil) -> AX.MarkedSelection? {
         guard let marked = AX.markedSelection(of: element, selected: selected) else { return nil }
-        return misread(marked, in: element) ?? marked
+        return misread(marked, in: element) ?? pastEnd(marked, in: element) ?? marked
     }
 
     /// The `AXValue` units a caret drawn at a collapsed read adds, which a settle leaves out of the length.
@@ -36,6 +36,17 @@ extension Snapshotter {
                                       next: index + 1 < children.count ? subroles[index + 1] : nil)
         }
         return caret.flatMap { AX.markedSelection(at: children[$0], in: element) }
+    }
+
+    /// The drawn caret inside a code span starting the field reads past the field's end, where its code group reads right.
+    private static func pastEnd(_ marked: AX.MarkedSelection, in element: AXUIElement) -> AX.MarkedSelection? {
+        guard marked.isCollapsed, let length = AX.attributes([kAXNumberOfCharactersAttribute], of: element).int(0),
+              marked.range.lowerBound > length, let leaf = marked.node(upper: false), let group = AX.parent(of: leaf),
+              DrawnCaret.isEmptyGroup(subrole: AX.attributes([kAXSubroleAttribute], of: leaf).string(0),
+                                      children: AX.childCount(of: leaf) ?? 1),
+              DrawnCaret.isCode(AX.attributes([kAXSubroleAttribute], of: group).string(0)),
+              let first = AX.children(of: group)?.first, CFEqual(first, leaf) else { return nil }
+        return AX.markedSelection(at: group, in: element)
     }
 
     /// `reading`, read `again` once Linear has drawn a caret it is about to and removed one it drew for a caret that left.
