@@ -163,7 +163,12 @@ public enum Snapshotter {
         let reads = AX.attributes(names, of: element)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
-        let marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        var marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        // Stepped inside a code span that starts the field, Chromium reads the marker past the field's end (LIN-1683).
+        if let range = marked?.range, range.upperBound > (reads.int(2) ?? .max),
+           range.upperBound > (AX.markerText(of: element).map { FieldReads.withoutAttachments($0).utf16.count } ?? .max) {
+            marked = nil
+        }
         let side = marked.map { sides(of: $0) }
         var snapshotReads = FieldSnapshot.Reads(
             field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),

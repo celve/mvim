@@ -4798,6 +4798,14 @@ for (text, span, caret, left) in [("aa\ncode x", 3..<7, 3, "aa\n"), ("code x\nzz
     }
 }
 
+// A caret read past the text's end, as stepping inside a field's first code span gives, is no caret to plan from.
+let pastEnd = FieldSnapshot.Step.run(taking: { _ in }) {
+    FieldSnapshot.build(FieldSnapshot.Reads(field: FieldReads(text: "code x\nzz", plain: 94..<94), length: 9, webContent: true),
+                        capabilities: keyProfile, answer: .value, anchor: nil, cursor: nil, memo: nil)
+}.snapshot
+precondition(pastEnd.selection == nil)
+_ = PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand("D"), state: .initial), snapshot: pastEnd)
+
 // No write-lane plan has a counted ← run, whose first ← a caret the last plan wrote at a code span's end can take.
 for caret in listCodeSpans.flatMap({ [$0.lowerBound, $0.upperBound] }) + listCodeStarts {
     for keys in ["h", "3h", "b", "2b", "x", "X", "3X", "dw", "db", "d3h", "c2h", "D", "A", "I", "0", "$", "j", "k", "dd",

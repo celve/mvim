@@ -243,7 +243,8 @@ public extension FieldSnapshot {
         let snapshot = FieldSnapshot(
             capabilities: capabilities,
             text: text,
-            selection: selection,
+            // Past the text's end a selection is no read at all, and planning from it would trap.
+            selection: selection.flatMap { $0.upperBound <= (text?.utf16.count ?? .max) ? $0 : nil },
             length: capabilities.has(.readLength) ? reads.length : nil,
             anchor: anchor,
             cursor: stampedCursor,
