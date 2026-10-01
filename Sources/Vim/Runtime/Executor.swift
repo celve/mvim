@@ -64,7 +64,10 @@ public final class Executor {
     /// This run's last register paste, which only the settle straight after it can confirm.
     private var pastedAt: Int?
 
-    /// Where that paste began in Chromium's rich text, for a settle after it that predicts nothing.
+    /// That paste was in Chromium's rich text, where a settle after it that predicts nothing waits for it to land.
+    private var pasteWaits = false
+
+    /// The caret the paste began at, when it read as one.
     private var pastedFrom: (range: Range<Int>, side: ParagraphBreaks.Side?)?
 
     /// The field selects in text content (Chromium rich text).
@@ -98,11 +101,13 @@ public final class Executor {
 
     /// Pastes land up to 250 ms late: a settle after one that predicts nothing waits for the caret to leave its start.
     private func awaitPaste(_ expectation: Expectation, at index: Int, on element: AXUIElement) {
-        guard pastedAt == index - 1, let from = pastedFrom, expectation.landing == nil, expectation.length == nil,
+        guard pastedAt == index - 1, pasteWaits, expectation.landing == nil, expectation.length == nil,
               expectation.selectedText == nil else { return }
         let deadline = Date().addingTimeInterval(0.25)
-        while Date() < deadline, let marked = Snapshotter.markedSelection(of: element), marked.range == from.range,
-              Snapshotter.paragraphSide(of: marked, upper: true) == from.side {
+        while Date() < deadline {
+            // A caret Linear draws beside code reads as a selection for a moment, which is no landing.
+            if let from = pastedFrom, let marked = Snapshotter.markedSelection(of: element), marked.isCollapsed,
+               marked.range != from.range || Snapshotter.paragraphSide(of: marked, upper: true) != from.side { return }
             Thread.sleep(forTimeInterval: 0.01)
         }
     }
@@ -120,6 +125,7 @@ public final class Executor {
     ) -> Bool {
         captures = [:]
         pastedAt = nil
+        pasteWaits = false
         pastedFrom = nil
         lastRun = RunEvidence()
         lastWriteError = nil
@@ -208,8 +214,9 @@ public final class Executor {
                 // No sleep before ⌘V: the app reads the pasteboard only as it handles the ⌘V, queued after the write.
                 PasteboardLoan.shared.put(content)
                 pastedAt = index
-                pastedFrom = paragraphs ? Snapshotter.markedSelection(of: element).map {
-                    ($0.range, Snapshotter.paragraphSide(of: $0, upper: true))
+                pasteWaits = paragraphs
+                pastedFrom = paragraphs ? Snapshotter.markedSelection(of: element).flatMap {
+                    $0.isCollapsed ? ($0.range, Snapshotter.paragraphSide(of: $0, upper: true)) : nil
                 } : nil
                 Synth.commandV()
             } else {
