@@ -2,6 +2,11 @@
 public struct Strikes: Equatable, Sendable {
     public static let limit = 3
 
+    /// The opt-in app keys (`nativeMotions`) keep the one-miss rule.
+    public static func limit(for capability: Capability) -> Int {
+        capability == .wordKeys || capability == .paragraphKeys ? 1 : limit
+    }
+
     private struct Count: Equatable, Sendable {
         var judgedUnder: OffsetsAnswer
         var app: String?

@@ -35,7 +35,7 @@ public enum Learning {
     public enum Skip: String, Equatable, Sendable {
         case userOverride = "user-override"
         case alreadyCommitted = "already-committed"
-        /// Fewer than `Strikes.limit` refuted runs in a row.
+        /// Fewer refuted runs in a row than `Strikes.limit` asks for.
         case strike
     }
 
@@ -94,7 +94,7 @@ public enum Learning {
                 return lesson
             }
             lesson.strikes = strikes.strike(capability, judgedUnder: snapshot.after, app: versions.app)
-            guard lesson.strikes >= Strikes.limit else {
+            guard lesson.strikes >= Strikes.limit(for: capability) else {
                 lesson.skip = .strike
                 return lesson
             }
@@ -122,7 +122,9 @@ extension Learning.Lesson {
         if let refuted {
             let fields = "q=\(refuted.question.rawValue) why=\(refuted.why.rawValue)"
             switch skip {
-            case .strike?: lines.append("strike \(strikes)/\(Strikes.limit) \(fields) rung=\(rung)")
+            case .strike?:
+                let limit = refuted.question.capability.map { Strikes.limit(for: $0) } ?? Strikes.limit
+                lines.append("strike \(strikes)/\(limit) \(fields) rung=\(rung)")
             case let skip?: lines.append("skip=\(skip.rawValue) \(fields)")
             case nil: lines.append("commit \(fields) rung=\(rung) ver=\(versions.app ?? "nil")")
             }

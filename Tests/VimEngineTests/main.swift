@@ -2714,6 +2714,11 @@ let reread = strikesAfter([miss, miss, (struck.evidence, .textContent, "1.49.1")
 precondition(reread.0.runs(.writeSelection) == 1 && reread.1.beliefs.isEmpty, "a new offsets answer starts it over")
 let updated = strikesAfter([miss, miss, (struck.evidence, .value, "1.50")])
 precondition(updated.0.runs(.writeSelection) == 1 && updated.1.beliefs.isEmpty, "so does an app update")
+var appKeyStore = BeliefStore()
+var appKeyStrikes = Strikes()
+let appKeyMiss = Evidence(.key(.wordKeys), .refutes, why: .unmoved, seen: .settle(1))
+precondition(learned(&appKeyStore, &appKeyStrikes, [appKeyMiss]).committed == .wordKeys && Strikes.limit(for: .lineEndKey) == 3,
+             "the opt-in app keys keep the one-miss rule")
 
 
 // MARK: - The recorder's renderers
@@ -4386,7 +4391,9 @@ let dia1End = dia1Planning("$", caret: 0, profile: writeKeys)
 precondition(dia1End.traceShape == "P!C" && chords(dia1End) == [.paragraphEnd], "where ⌃E lands it alone, no write goes first")
 precondition(chords(dia1Planning("A", caret: 4, profile: writeKeys)) == [.paragraphEnd])
 func dia1Line(_ index: Int) -> Int { dia1Lines.prefix(index).map { $0.utf16.count + 1 }.reduce(0, +) }
-precondition(chords(dia1Planning("0", caret: dia1Line(6) + 3, profile: writeKeys)) == [.paragraphStart])
+let heading = dia1Line(12)
+precondition(chords(dia1Planning("0", caret: heading + 3, profile: writeKeys)) == [.paragraphStart], "the heading's leaves fold there")
+precondition(chords(dia1Planning("0", caret: dia1Line(6) + 3, profile: writeKeys)).isEmpty, "a plain paragraph's start takes a write")
 precondition(dia1Planning("0", caret: dia1Line(1) + 3, profile: writeKeys).steps.first == .setSelection(54..<54),
              "past a list marker a write lands alone")
 precondition(dia1Planning("0", caret: 4, profile: writeKeys).steps.first == .setSelection(0..<0), "a write that lands alone stays")
@@ -4403,11 +4410,13 @@ precondition(chords(dia1Planning("dd", caret: 4, profile: writeKeys)) == [Chord.
 precondition(chords(dia1Planning("2dd", caret: 4, profile: writeKeys))
              == [Chord.paragraphEnd.shifted, .selectRight, Chord.paragraphEnd.shifted, .selectRight])
 
-// At a paragraph's start a write takes arrows after it, so a caret already there is not written again, and a collapse is ←.
+// Where a write at a paragraph's start takes arrows after it, a caret already there is not written again, and a collapse is ←.
 func writes(_ plan: PhysicalPlan) -> Bool { plan.steps.contains { if case .setSelection = $0 { true } else { false } } }
+let headingYank = dia1Planning("yw", caret: heading, profile: writeKeys)
+precondition(!writes(headingYank) && chords(headingYank) == Array(repeating: .selectRight, count: 8) + [.left])
 let middle = dia1Line(6)
 let middleYank = dia1Planning("yw", caret: middle, profile: writeKeys)
-precondition(!writes(middleYank) && chords(middleYank) == Array(repeating: .selectRight, count: 7) + [.left])
+precondition(writes(middleYank) && chords(middleYank).isEmpty, "a plain paragraph's start takes writes alone")
 func dia1Cursor(_ keys: String, gap: Int) -> PhysicalPlan {
     let snapshot = FieldSnapshot(
         capabilities: adding([.drawCursor], to: writeKeys), text: dia1Model.text, selection: gap..<(gap + 1),
@@ -4416,16 +4425,18 @@ func dia1Cursor(_ keys: String, gap: Int) -> PhysicalPlan {
     )
     return PhysicalPlanner.plan(LogicalPlanner.plan(RawCommand(keys), state: .initial), snapshot: snapshot)
 }
-let cursorX = dia1Cursor("x", gap: middle)
+let cursorX = dia1Cursor("x", gap: heading)
 precondition(!writes(cursorX) && cursorX.steps.prefix(2) == [.press(.left, count: 1), .press(.selectRight, count: 1)],
              "the drawn cursor collapses by ←")
-precondition(writes(dia1Cursor("x", gap: middle + 2)), "inside a paragraph the write stays")
-let cursorJ = dia1Cursor("j", gap: middle)
+precondition(writes(dia1Cursor("x", gap: heading + 2)), "inside a paragraph the write stays")
+precondition(chords(dia1Cursor("x", gap: middle)).isEmpty, "at a plain paragraph's start too, and the cursor is drawn by a write")
+let cursorJ = dia1Cursor("j", gap: heading)
 precondition(cursorJ.steps.first == .press(.left, count: 1) && writes(cursorJ))
 if case .settle = cursorJ.steps[1] {} else { preconditionFailure("a write after the ← waits for it to settle") }
 precondition(chords(dia1Cursor("$", gap: middle + 2)) == [.paragraphEnd]
-             && chords(dia1Cursor("0", gap: middle + 2)) == [.paragraphStart, .selectRight],
+             && chords(dia1Cursor("0", gap: heading + 2)) == [.paragraphStart, .selectRight],
              "⌃A and ⌃E land alike from the cursor, which needs no collapse first; ⇧→ draws it again at the start")
+precondition(chords(dia1Cursor("0", gap: middle + 2)).isEmpty, "a plain paragraph's start is written, cursor and all")
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,
@@ -4440,9 +4451,9 @@ precondition(dia6Planning("0", caret: 80, profile: removing([.lineStartKey], fro
 precondition(chords(dia6Planning("0", caret: 80, profile: writeKeys).plan) == [.paragraphStart], "⌃A crosses the chip")
 precondition(dia6Planning("$", caret: 60, profile: writeKeys).plan.steps.first == .setSelection(222..<222),
              "after a chip that ends its paragraph, the write goes before the <br>")
-precondition(dia6Planning("j", caret: 30, profile: writeKeys).plan.steps.prefix(3) == [
-    .setSelection(111..<111), .press(.selectLeft, count: 1), .press(.left, count: 1),
-], "a paragraph's start sharing an offset with the line above's end is reached from inside it")
+let dia6j = dia6Planning("j", caret: 30, profile: writeKeys).plan
+precondition(dia6j.steps.first == .setSelection(110..<110) && chords(dia6j).isEmpty,
+             "a plain paragraph's start sharing an offset with the line above's end takes the write, which lands downstream")
 precondition(checkedTexts(dia6Planning("x", caret: 37).plan) == [chipA], "x takes the chip whole")
 precondition(dia6Planning("yy", caret: 60).plan.steps.contains(
     .commit(.yanked(into: nil, content: .literal("Text then a chip " + chipB + "\n"), wise: .line))

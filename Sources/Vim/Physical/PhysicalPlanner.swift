@@ -250,6 +250,11 @@ private extension PhysicalPlanner {
         /// The model holds folded text, where Linear lands a write by where the caret came from (LIN-1652).
         var folded: Bool { !(breaks?.hidden.isEmpty ?? true) }
 
+        /// A non-empty line's start with nothing folded at or beside it, where a write lands as where nothing is folded.
+        func plainStart(_ offset: Int, in model: TextModel) -> Bool {
+            model.lineEnd(of: offset) > offset && !(breaks?.hidden.contains { (offset - 1...offset + 1).contains($0.at) } ?? false)
+        }
+
         /// Chromium rich text, where a plain arrow at a Linear code span's edge can stay put (LIN-1683).
         var arrowsSelect: Bool { breaks != nil }
 
@@ -451,14 +456,17 @@ private extension PhysicalPlanner {
         return context.arrowsSelect ? [.press(.selectLeft, count: 1), .press(.left, count: 1)] : [.press(.left, count: 1)]
     }
 
-    /// Linear lands a write at a marker, checkbox or chip by where the caret was, so boundaries are reached by keys (LIN-1652).
+    /// Linear lands a write at a marker, checkbox or chip by where the caret was, so those boundaries are reached by keys (LIN-1652).
     static func foldedWrite(
         _ range: Range<Int>, from current: Int? = nil, model: TextModel, context: Context
     ) -> [PhysicalStep] {
         guard range.isEmpty else {
             let ends = [range.lowerBound, range.upperBound]
-            guard ends.contains(where: { context.isAtom($0) || model.lineStart(of: $0) == $0 || model.lineEnd(of: $0) == $0 })
-            else { return [.setSelection(context.written(range))] }
+            let needsKeys = { (end: Int) in
+                context.isAtom(end) || model.lineEnd(of: end) == end
+                    || model.lineStart(of: end) == end && !context.plainStart(end, in: model)
+            }
+            guard ends.contains(where: needsKeys) else { return [.setSelection(context.written(range))] }
             let placed = foldedWrite(range.lowerBound..<range.lowerBound, model: model, context: context)
             // A caret already at the start needs no write that takes arrows after it.
             return (current == range.lowerBound ? keyed(placed, or: [], context: context) : placed)
@@ -485,7 +493,7 @@ private extension PhysicalPlanner {
                 + run(.right, count: 1, selecting: context.arrowsSelect, normalizing: false)
         }
         // A line's start sharing its offset with the line above's end, as a to-do's does, takes a write from below there.
-        if context.edge(caret) == .paragraphStart, field.lowerBound > 0 {
+        if context.edge(caret) == .paragraphStart, field.lowerBound > 0, !context.plainStart(caret, in: model) {
             let inside = model.advance(caret, byGraphemes: 1)
             guard inside < end, !context.isAtom(inside) else {
                 if context.caret == caret { return [] }
@@ -504,25 +512,30 @@ private extension PhysicalPlanner {
 
     /// From a caret at `range`'s start to all of it, by ⇧⌃E over each line's rest it holds whole and ⇧→ elsewhere (LIN-1685).
     static func extending(_ range: Range<Int>, model: TextModel, context: Context) -> [PhysicalStep] {
-        let count: [PhysicalStep] = [.press(.selectRight, count: model.graphemes(in: range))]
-        guard context.lineEndKey else { return count }
-        var chords: [Chord] = []
+        guard context.lineEndKey else { return [.press(.selectRight, count: model.graphemes(in: range))] }
+        let atoms = context.atoms
+        var steps: [PhysicalStep] = []
+        func press(_ chord: Chord, _ count: Int) {
+            guard count > 0 else { return }
+            guard case .press(chord, let earlier)? = steps.last else { return steps.append(.press(chord, count: count)) }
+            steps[steps.count - 1] = .press(chord, count: earlier + count)
+        }
         var at = range.lowerBound
         while at < range.upperBound {
             let end = model.lineEnd(of: at)
+            let stop = min(end, range.upperBound)
+            let graphemes = model.graphemes(in: at..<stop)
             // ⇧⌃E stops at a chip (LIN-1652), and over one character saves nothing.
-            let whole = end <= range.upperBound && model.graphemes(in: at..<end) > 1
-            if whole, !context.atoms.contains(where: { (at..<end).contains($0) }) {
-                chords.append(Chord.paragraphEnd.shifted)
-                at = end
+            if stop == end, graphemes > 1, !atoms.contains(where: { (at..<end).contains($0) }) {
+                press(Chord.paragraphEnd.shifted, 1)
             } else {
-                chords.append(.selectRight)
-                at = model.advance(at, byGraphemes: 1)
+                press(.selectRight, graphemes)
             }
+            guard stop < range.upperBound else { break }
+            press(.selectRight, 1)
+            at = model.advance(stop, byGraphemes: 1)
         }
-        var keys = KeyModel(text: model.text, anchor: range.lowerBound, focus: range.lowerBound, atoms: context.atoms)
-        guard chords.allSatisfy({ keys.press($0) }), keys.selection == range else { return count }
-        return counted(chords)
+        return steps
     }
 
     /// The last letter of the nearest line above `offset`'s with two or more, strictly inside it.
