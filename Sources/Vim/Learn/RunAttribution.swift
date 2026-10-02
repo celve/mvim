@@ -95,6 +95,7 @@ extension Expectation {
         if blame.leavesCaret && !observed.isEmpty { return .leftSelection }
         if let longest, observed.count > longest { return .tooLong }
         if blame.offTarget && landing?.matches(observed) == false { return .offTarget }
+        if blame.way?.turned(observed) == true { return .wrongWay }
         return nil
     }
 }

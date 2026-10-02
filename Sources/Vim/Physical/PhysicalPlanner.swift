@@ -1022,12 +1022,25 @@ private extension PhysicalPlanner {
             var exemptions: [Expectation.Exemption] = []
             if emptyParagraph { exemptions.append(.init(.emptyParagraph, unmoved: [context.field(before)])) }
             if !offTarget { exemptions.append(.init(.paragraphLines, offTarget: true)) }
-            guard !unmoved.isEmpty || leavesCaret || offTarget || !exemptions.isEmpty else { return nil }
+            let way = chords.count == 1 && before.isEmpty && !emptyParagraph ? forward(chords[0]).map {
+                Expectation.Blame.Way(from: context.field(before).lowerBound, forward: $0, selects: !leavesCaret)
+            } : nil
+            guard !unmoved.isEmpty || leavesCaret || offTarget || !exemptions.isEmpty || way != nil else { return nil }
             return Expectation.Blame(
-                capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget, exemptions: exemptions
+                capability: atom, unmoved: unmoved, leavesCaret: leavesCaret, offTarget: offTarget, exemptions: exemptions,
+                way: way
             )
         }
         return counted(chords) + settle(context, profile: profile, blame: blame)
+    }
+
+    /// Which way a line or document key moves, shifted or not.
+    static func forward(_ chord: Chord) -> Bool? {
+        switch Chord(chord.key, chord.modifiers.subtracting(.shift)) {
+        case .paragraphStart, .documentStart: return false
+        case .paragraphEnd, .documentEnd: return true
+        default: return nil
+        }
     }
 
     /// Whether the keys may rightly leave the caret where it was: they had nowhere to go from it.
@@ -1088,7 +1101,7 @@ private extension PhysicalPlanner {
     static func wordBlame(_ blame: Expectation.Blame?, context: Context) -> Expectation.Blame? {
         guard context.webContent, let blame else { return blame }
         return Expectation.Blame(capability: blame.capability, unmoved: blame.unmoved, leavesCaret: blame.leavesCaret,
-                                 offTarget: blame.offTarget, exemptions: [.init(.webContent, all: true)])
+                                 offTarget: blame.offTarget, exemptions: [.init(.webContent, all: true)], way: blame.way)
     }
 
     /// `j`/`k` press ↓/↑ only where neither a write nor ⌃E/⌃A can land a line.

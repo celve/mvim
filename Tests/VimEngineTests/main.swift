@@ -2878,11 +2878,13 @@ precondition(Array(keyedDD.steps[0...6]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
         landing: .exact(4..<4), length: 13,
-        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true, offTarget: true)
+        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true, offTarget: true,
+                     way: .init(from: 5, forward: false, selects: false))
     )),
     .press(Chord.paragraphEnd.shifted, count: 1),
     .settle(Expectation(
-        landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4], offTarget: true)
+        landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4], offTarget: true,
+                                                          way: .init(from: 4, forward: true, selects: true))
     )),
     .press(.selectRight, count: 1),
     .settle(Expectation(selection: 4..<8, length: 13)),
@@ -3336,8 +3338,14 @@ precondition(neutralRun.evidence == [Evidence(.key(.lineStartKey), .neutral, why
 let chipLine = webPhysical("0", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: chromiumBreak)
 precondition(chipLine.steps.contains {
     guard case .settle(let expectation) = $0 else { return false }
-    return judged(expectation, 5..<5) == key(.lineStartKey, .neutral, .paragraphLines)
-}, "an off-target line key in Chromium rich text is neutral")
+    return judged(expectation, 0..<0) == key(.lineStartKey, .neutral, .paragraphLines)
+        && judged(expectation, 4..<4) == key(.lineStartKey, .refutes, .wrongWay)
+}, "an off-target line key in Chromium rich text is neutral, unless it went the other way")
+let anchoredEnd = Expectation(landing: .exact(2..<5), blame: .init(
+    capability: .lineEndKey, unmoved: [2..<2], exemptions: [.init(.paragraphLines, offTarget: true)],
+    way: .init(from: 2, forward: true, selects: true)))
+precondition(judged(anchoredEnd, 2..<4) == key(.lineEndKey, .neutral, .paragraphLines)
+             && judged(anchoredEnd, 0..<2) == key(.lineEndKey, .refutes, .wrongWay) && judged(anchoredEnd, 0..<7) == key(.lineEndKey, .refutes, .wrongWay))
 func writeStrike(_ expectation: Expectation, selection: Range<Int>?, length: Int?) -> Evidence.Why? {
     var run = RunAttribution()
     run.record(.replaceSelection("x"))
@@ -3640,7 +3648,7 @@ ignored.type("ciw")
 precondition(ignored.learner!.lessons.last?.committed == .insertText && !ignored.profile.has(.insertText))
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
-chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
+chipKey.reboundChords = [.paragraphStart: .documentStart]
 chipKey.type("0")
 precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)
 precondition(chipKey.attribution.evidence.contains { $0.question == .key(.lineStartKey) && $0.outcome == .neutral && $0.why == .paragraphLines })
@@ -4845,7 +4853,8 @@ precondition(chords(physical("j", text: tenTwice, caret: 5, profile: keyProfile)
 let nearEnd = physical("j", text: tenTwice, caret: 8, profile: keyProfile)
 precondition(nearEnd.traceShape == "P!PP!P2!C" && nearEnd.steps[1] == .settle(Expectation(
     landing: .exact(10..<10), length: 21,
-    blame: .init(capability: .lineEndKey, unmoved: [8..<8], leavesCaret: true, offTarget: true)
+    blame: .init(capability: .lineEndKey, unmoved: [8..<8], leavesCaret: true, offTarget: true,
+                 way: .init(from: 8, forward: true, selects: false))
 )), "the extra ⌃E rides the unblamed hops")
 let tenBreak = ParagraphBreaks(offsets: [10])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 8, profile: keyProfile, breaks: tenBreak))
@@ -4860,7 +4869,8 @@ let farFind = physical("t.", text: twenty, caret: 0, profile: keyProfile)
 precondition(Array(farFind.steps.prefix(4)) == [
     .press(.paragraphEnd, count: 1),
     .settle(Expectation(landing: .exact(104..<104), length: 104,
-                        blame: .init(capability: .lineEndKey, unmoved: [0..<0], leavesCaret: true, offTarget: true))),
+                        blame: .init(capability: .lineEndKey, unmoved: [0..<0], leavesCaret: true, offTarget: true,
+                                     way: .init(from: 0, forward: true, selects: false)))),
     .press(.left, count: 2), .settle(Expectation(landing: .exact(102..<102), length: 104)),
 ], "⌃E is blamed in a settle of its own")
 precondition(chords(physical("t.", text: twenty, caret: 90, profile: keyProfile)) == [.paragraphEnd, .left, .left])
@@ -4922,17 +4932,25 @@ for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
         precondition(host.settleFailures == 1 && host.text == left && host.caret == landing, "\(keys) \(rebound)")
     }
 }
-for (keys, caret, ignored, blamed) in [("t.", 0, Chord.paragraphEnd, Capability.lineEndKey),
-                                       ("d^", 60, Chord.paragraphStart.shifted, .lineStartKey)] {
-    var host = Sim(text: twenty + "\nnext", caret: caret, profile: keyProfile)
-    host.emulatesKeys = true
-    host.emptyParagraphs = true
-    host.readModel = .textContent
-    host.ignoredChords = [ignored]
-    host.learn(with: Sim.Learner(chromium: true, probed: keyProfile))
-    host.type(keys)
-    host.type(keys)
-    precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) in rich text")
+// In Chromium rich text, where a landing elsewhere can be a chip's, a key that did nothing or went the other way still strikes.
+for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
+    (twenty, "t.", 0, Chord.paragraphEnd, Chord.paragraphStart, Capability.lineEndKey, twenty, 102),
+    (wordFirst, "Fw", 101, .paragraphStart, .paragraphEnd, .lineStartKey, wordFirst, 1),
+    (twenty, "d^", 60, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted, .lineStartKey, String(twenty.dropFirst(60)), 0),
+    (twenty, "dt.", 0, Chord.paragraphEnd.shifted, Chord.paragraphStart.shifted, .lineEndKey, ".", 0),
+] {
+    for rebound in [false, true] {
+        var host = Sim(text: text + "\nnext", caret: caret, profile: keyProfile)
+        host.emulatesKeys = true
+        host.emptyParagraphs = true
+        host.readModel = .textContent
+        if rebound { host.reboundChords = [ignored: opposite] } else { host.ignoredChords = [ignored] }
+        host.learn(with: Sim.Learner(chromium: true, probed: keyProfile))
+        host.type(keys)
+        precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) \(rebound) in rich text")
+        host.type(keys)
+        precondition(host.settleFailures == 1 && host.text == left + "\nnext" && host.caret == landing, "\(keys) \(rebound) in rich text")
+    }
 }
 
 let paste = webPhysical("\"+p", text: "x", caret: 0, profile: keyProfile, breaks: ParagraphBreaks())

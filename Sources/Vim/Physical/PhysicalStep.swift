@@ -221,16 +221,37 @@ public struct Expectation: Equatable, Sendable {
         public let offTarget: Bool
         /// Failures left unblamed on purpose, logged as neutral evidence.
         public let exemptions: [Exemption]
+        /// The caret the key started from and the way it moves, which a field's lines can cut short but never turn.
+        public let way: Way?
 
         public init(
             capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false, offTarget: Bool = false,
-            exemptions: [Exemption] = []
+            exemptions: [Exemption] = [], way: Way? = nil
         ) {
             self.capability = capability
             self.unmoved = unmoved
             self.leavesCaret = leavesCaret
             self.offTarget = offTarget
             self.exemptions = exemptions
+            self.way = way
+        }
+
+        public struct Way: Equatable, Sendable {
+            public let from: Int
+            public let forward: Bool
+            public let selects: Bool
+
+            public init(from: Int, forward: Bool, selects: Bool) {
+                self.from = from
+                self.forward = forward
+                self.selects = selects
+            }
+
+            /// A caret back past where the key started, or a selection no longer anchored there.
+            public func turned(_ observed: Range<Int>) -> Bool {
+                if selects { return (forward ? observed.lowerBound : observed.upperBound) != from }
+                return observed.isEmpty && (forward ? observed.lowerBound < from : observed.lowerBound > from)
+            }
         }
     }
 
@@ -321,7 +342,7 @@ public struct Expectation: Equatable, Sendable {
         }
         let widened = blame.map {
             Blame(capability: $0.capability, unmoved: $0.unmoved + [lower..<lower, upper..<upper], leavesCaret: $0.leavesCaret,
-                  exemptions: $0.exemptions)
+                  exemptions: $0.exemptions, way: $0.way)
         }
         var resolved = Expectation(landing: .exact(lower..<upper), length: length, edge: edge, blame: widened, selectedText: selectedText)
         resolved.longest = longest
