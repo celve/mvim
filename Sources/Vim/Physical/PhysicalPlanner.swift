@@ -822,8 +822,10 @@ private extension PhysicalPlanner {
         let gaps = context.gaps
         let marked = context.marked
         // Past a list's end ⇧→ → crosses into a marked item, which Dia reads right ~150 ms before a stop's → → (LIN-1686).
-        func hops(into starts: [Int]) -> [[Chord]] {
-            starts.map { !gaps.contains($0) ? [.right] : marked.contains($0) ? [.selectRight, .right] : [.right, .right] }
+        func hops(_ count: Int) -> [[Chord]] {
+            let starts = gaps.isEmpty ? [] : lineStarts(after: line, count: count, in: model)
+            return starts.map { !gaps.contains($0) ? [.right] : marked.contains($0) ? [.selectRight, .right] : [.right, .right] }
+                + Array(repeating: [.right], count: count - starts.count)
         }
         // The way to the target's line, and for `j`/`k` one landing at its end; the column is counted from where each lands.
         var way: [KeyGroup]
@@ -834,9 +836,7 @@ private extension PhysicalPlanner {
             way = [([.paragraphStart], .lineStartKey)]
         case .motion(.lineEnd, let count)?:
             guard profile.has(.lineEndKey) else { return .next }
-            let crossing = hops(into: lineStarts(after: line, count: count - 1, in: model))
-            let past = Array(repeating: [Chord.right], count: max(0, count - 1 - crossing.count))
-            way = [([.paragraphEnd], .lineEndKey), ((crossing + past).flatMap { $0 + [.paragraphEnd] }, nil)]
+            way = [([.paragraphEnd], .lineEndKey), (hops(count - 1).flatMap { $0 + [.paragraphEnd] }, nil)]
         case .motion(.fileStart, _)?:
             guard profile.has(.documentStartKey) else { return .next }
             way = [([.documentStart], .documentStartKey)]
@@ -851,8 +851,7 @@ private extension PhysicalPlanner {
             if targetLine > line || vertical == .down {
                 guard profile.has(.lineEndKey) else { return .next }
                 let lines = model.newlineCount(in: line..<targetLine)
-                let crossing = hops(into: lineStarts(after: line, count: lines, in: model))
-                let down = crossing.enumerated().flatMap { ($0.offset > 0 ? [Chord.paragraphEnd] : []) + $0.element }
+                let down = hops(lines).enumerated().flatMap { ($0.offset > 0 ? [Chord.paragraphEnd] : []) + $0.element }
                 way = [([.paragraphEnd], .lineEndKey), (down, nil)]
                 if lines > 0 { end = [([.paragraphEnd], .lineEndKey), (down + [.paragraphEnd], nil)] }
             } else {
