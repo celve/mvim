@@ -4922,6 +4922,18 @@ for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
         precondition(host.settleFailures == 1 && host.text == left && host.caret == landing, "\(keys) \(rebound)")
     }
 }
+for (keys, caret, ignored, blamed) in [("t.", 0, Chord.paragraphEnd, Capability.lineEndKey),
+                                       ("d^", 60, Chord.paragraphStart.shifted, .lineStartKey)] {
+    var host = Sim(text: twenty + "\nnext", caret: caret, profile: keyProfile)
+    host.emulatesKeys = true
+    host.emptyParagraphs = true
+    host.readModel = .textContent
+    host.ignoredChords = [ignored]
+    host.learn(with: Sim.Learner(chromium: true, probed: keyProfile))
+    host.type(keys)
+    host.type(keys)
+    precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) in rich text")
+}
 
 let paste = webPhysical("\"+p", text: "x", caret: 0, profile: keyProfile, breaks: ParagraphBreaks())
 precondition(chords(paste) == [.selectRight, .right] && paste.traceShape.hasPrefix("PPV"), "a put's keys go before ⌘V unsettled")
