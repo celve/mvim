@@ -93,12 +93,15 @@ struct KeyModel {
 
     /// → from a line's end, or ↓ from its last row, before a line that starts a list right after another.
     private func entersGap(_ chord: Chord, in model: TextModel) -> Bool {
-        let end = model.lineEnd(of: focus)
-        guard end < model.length, gaps.contains(end + 1) else { return false }
+        guard !gaps.isEmpty else { return false }
         switch chord {
-        case .right: return focus == end
-        case .down: return row(of: focus, in: model).end == end
-        default: return false
+        case .right:
+            return gaps.contains(focus + 1) && focus < model.length && model.graphemes(from: focus, toLineEnd: true, atMost: 0) == 0
+        case .down:
+            let end = model.lineEnd(of: focus)
+            return end < model.length && gaps.contains(end + 1) && row(of: focus, in: model).end == end
+        default:
+            return false
         }
     }
 

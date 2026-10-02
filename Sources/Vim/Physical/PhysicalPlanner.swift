@@ -928,7 +928,7 @@ private extension PhysicalPlanner {
         var end = model.lineEnd(of: line)
         while starts.count < count, end < model.length {
             starts.append(end + 1)
-            end = model.lineEnd(of: end + 1)
+            if starts.count < count { end = model.lineEnd(of: end + 1) }
         }
         return starts
     }
