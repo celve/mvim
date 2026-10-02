@@ -256,11 +256,11 @@ public enum UnreachableLines {
         shift[units.count] = units.count - kept.count
         var hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
         let offsets = (breaks.offsets + converted).sorted().filter { !dropped.contains($0) }.map { $0 - shift[$0] }
-        let folded = ParagraphBreaks(offsets: offsets, hidden: hidden)
-        let starts = [0] + kept.indices.filter { kept[$0] == 10 }.map { $0 + 1 }
-        // A join's list starts at the first line at or past it.
+        let starts = lines(of: text).map(\.start)
+        // A join's list starts at the first line at or past it, in the offsets discovery read, as markers are matched.
         for join in found.joins {
-            guard let start = starts.first(where: { folded.fieldOffset($0) >= join }), start > 0 else { continue }
+            guard let line = starts.first(where: { breaks.fieldOffset($0) >= join }), line > 0 else { continue }
+            let start = line - shift[line]
             hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: .gap),
                           at: hidden.lastIndex { $0.at <= start }.map { $0 + 1 } ?? 0)
         }

@@ -4983,6 +4983,15 @@ func joinedSim(_ profile: CapabilityProfile, caret: Int = 0) -> Sim {
     host.readModel = .textContent
     return host
 }
+var afterCode = Sim(text: "ab\ncd ef\ngh", caret: 4, profile: keyProfile)
+afterCode.emptyParagraphs = true
+afterCode.listLines = [Sim.ListLine(marker: "\u{2022}"), Sim.ListLine(marker: "\u{2022}"),
+                       Sim.ListLine(leaves: 2, checkbox: true, joinsList: true)]
+afterCode.codeSpans = [6..<8]
+afterCode.emulatesKeys = true
+afterCode.readModel = .textContent
+afterCode.type("$j")
+precondition(afterCode.caret == 11 && afterCode.settleFailures == 0, "the stop holds while a caret drawn at code ends the item above")
 var stopped = joinedSim(keyProfile, caret: 27)
 stopped.perform([.press(.paragraphEnd, count: 1), .press(.right, count: 1)])
 precondition(stopped.caret == 39, "one → from a list's end stops between the lists")
