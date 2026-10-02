@@ -629,6 +629,7 @@ public extension Sim {
         public var config: [Capability: ConfigChoice] = [:]
         public var sampling = OffsetsSampling()
         public var tally = Tally()
+        public var strikes = Strikes()
         public internal(set) var resolved: ResolvedBeliefs?
         /// What each snapshot's reads said.
         public internal(set) var evidence: [Evidence] = []
@@ -759,8 +760,8 @@ extension Sim {
         }
         let config = learner.config
         let lesson = Learning.learn(
-            store: &learner.store, rung: learner.rung, versions: learner.versions, model: learner.model,
-            observed: observed, run: attribution.evidence,
+            store: &learner.store, strikes: &learner.strikes, rung: learner.rung, versions: learner.versions,
+            model: learner.model, observed: observed, run: attribution.evidence,
             overridden: { config[$0]?.override != nil }, provenance: Provenance(), tally: learner.tally
         )
         learner.lessons.append(lesson)
