@@ -108,9 +108,9 @@ public enum PhysicalPlanner {
                 context.unmoved = false
             }
         }
-        // ⌃A, ⌃E and undo land alike from the cursor's one character, so a plan they start leaves it be.
+        // ⌃A and ⌃E land alike from the cursor's one character, so a plan they start leaves it be.
         if foldedWrites, let first = steps.first(where: moves), case .press(let chord, _) = first,
-           [.paragraphStart, .paragraphEnd, .undo, .redo].contains(chord) {
+           [.paragraphStart, .paragraphEnd].contains(chord) {
             uncover = []
         }
         return Planning(plan: PhysicalPlan(steps: uncover + steps), rejection: nil, operand: context.operand)
