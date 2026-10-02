@@ -146,7 +146,8 @@ is a separate field.
 mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
 check (it lands wrong, or not within a quarter of a second) three commands in a row, mvim switches that
 capability off for fields like the one it failed in until the app updates. A command where it works
-starts the count over, and so does relaunching mvim. **Capabilities** then lists it first, under
+starts the count over, and so does relaunching mvim; the app's own word and paragraph keys go off after
+one failure. **Capabilities** then lists it first, under
 **Learned for …** with the day it failed, and **Try Again** forgets it so mvim tries it afresh.
 Some failures only stop the command: a key landing elsewhere in Chromium's rich text, a word key
 doing nothing in web content, anything under **Force**, and any capability you set yourself. mvim
@@ -558,7 +559,8 @@ or in one app natively — and keeps them in the [beliefs file](#the-beliefs-fil
 - **Writes** (`writeSelection`, `insertText`) and **native keys**: the probe claims them, and three
   settle failures in a row blamed on one set it off for that kind of field until the app updates. A
   pass in between starts the count over, as do a new offsets answer and a new app version, and the
-  count lasts only while mvim runs.
+  count lasts only while mvim runs. The app's word and paragraph keys (`wordKeys`, `paragraphKeys`)
+  still go off after one.
 - **Offsets**: how the field counts caret and selection offsets. `value` is `AXValue`'s count,
   `textContent` is Chromium's without the paragraph breaks it generates (the text-marker path),
   and `untrusted` withholds the caret, so commands take the blind lane (`ciw` is ⌥← ⇧⌥→ ⌘X
