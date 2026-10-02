@@ -261,6 +261,8 @@ public enum UnreachableLines {
         for join in found.joins {
             guard let line = starts.first(where: { breaks.fieldOffset($0) >= join }), line > 0 else { continue }
             let start = line - shift[line]
+            // Chromium's own lists, whose marker starts the line, have no stop: Linear's ProseMirror makes it.
+            guard !hidden.contains(where: { $0.at == start && $0.kind == .prefix }) else { continue }
             hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: .gap),
                           at: hidden.lastIndex { $0.at <= start }.map { $0 + 1 } ?? 0)
         }

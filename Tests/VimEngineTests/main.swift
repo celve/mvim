@@ -4950,6 +4950,10 @@ precondition((1...400).contains { budget in
 }, "running out of reads on the lists loses only the joins")
 precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
              "nothing that starts a list, no joins read")
+let ownLists = fakeTree("0/G/0/3 0.0/T/0/3 1/L/3/6 1.0/G/3/6 1.0.0/M/3/5 1.0.1/T/5/6 2/L/6/10 2.0/G/6/10 2.0.0/M/6/9 2.0.1/T/9/10")
+let ownCandidates = UnreachableLines.candidates(text: "Top\n\u{2022} a\n1. b", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "Top\u{2022} a1. b")
+precondition(unreachableScanned(ownLists, ownCandidates)?.joins == [6]
+             && folded("Top\n\u{2022} a\n1. b", "Top\u{2022} a1. b", ownLists).breaks.gaps.isEmpty, "Chromium's own lists have no stop")
 let todosModel = folded("Top\n\n\nTodo a\n\n\nTodo b\nEnd", "Top\u{FFFC}\u{FFFC}Todo a\u{FFFC}\u{FFFC}Todo bEnd", fakeTree("""
 0/G/0/3 0.0/T/0/3 1/L/3/9 1.0/G/3/9 1.0.0/G/3/3 1.0.0.0/I/3/3 1.0.0.1/C/3/3 1.0.1/G/3/9 1.0.1.0/T/3/9 2/L/9/15 2.0/G/9/15
 2.0.0/G/9/9 2.0.0.0/I/9/9 2.0.0.1/C/9/9 2.0.1/G/9/15 2.0.1.0/T/9/15 3/G/15/18 3.0/T/15/18
@@ -4960,6 +4964,9 @@ precondition(!UnreachableLines.candidates(text: "Top\nEnd", breaks: ParagraphBre
 let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .gap)])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphEnd, .right, .right])
+let markedGap = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "\u{2022}"), .init(at: 11, text: "", kind: .gap)])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: markedGap))
+             == [.paragraphEnd, .selectRight, .right], "a marked item is crossed into by ⇧→ →, which Dia reads right sooner")
 precondition(chords(webPhysical("w", text: tenTwice, caret: 3, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphEnd, .right, .right])
 precondition(chords(webPhysical("2$", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))

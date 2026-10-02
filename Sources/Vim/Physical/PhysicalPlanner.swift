@@ -243,6 +243,9 @@ private extension PhysicalPlanner {
         /// Starts of lines right after a list's end, where a plain → or ↓ from above stops first.
         var gaps: Set<Int> { breaks?.gaps ?? [] }
 
+        /// Starts of lines whose list marker the model folds out.
+        var marked: Set<Int> { Set(breaks?.hidden.filter(\.isMarker).map(\.at) ?? []) }
+
         func isAtom(_ offset: Int) -> Bool { breaks?.isAtom(offset) ?? false }
 
         /// A register's text for `range`, each chip's label whole.
@@ -817,8 +820,11 @@ private extension PhysicalPlanner {
         let line = model.lineStart(of: position)
         let targetLine = model.lineStart(of: target)
         let gaps = context.gaps
-        // Into a line right after a list, the first → stops between the lists.
-        func hops(into starts: [Int]) -> [[Chord]] { starts.map { gaps.contains($0) ? [.right, .right] : [.right] } }
+        let marked = context.marked
+        // Past a list's end ⇧→ → crosses into a marked item, which Dia reads right ~150 ms before a stop's → → (LIN-1686).
+        func hops(into starts: [Int]) -> [[Chord]] {
+            starts.map { !gaps.contains($0) ? [.right] : marked.contains($0) ? [.selectRight, .right] : [.right, .right] }
+        }
         // Each way to the target's line; the column is counted from where it lands, and the fewest keys win.
         var ways: [[KeyGroup]]
         switch destination {
