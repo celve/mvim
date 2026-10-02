@@ -4857,10 +4857,17 @@ precondition(chords(webPhysical("j", text: tenTwice, caret: 6, profile: keyProfi
 let twenty = String(repeating: "word ", count: 20) + "end."
 precondition(chords(physical("fd", text: twenty, caret: 0, profile: keyProfile)) == [.right, .right, .right])
 let farFind = physical("t.", text: twenty, caret: 0, profile: keyProfile)
-precondition(farFind.steps.prefix(3) == [
-    .press(.paragraphEnd, count: 1), .press(.left, count: 2), .settle(Expectation(landing: .exact(102..<102), length: 104)),
-])
-precondition(chords(physical("0fw;;;;;;;;;;;;;;;;;", text: twenty, caret: 0, profile: keyProfile)).count < 20)
+precondition(Array(farFind.steps.prefix(4)) == [
+    .press(.paragraphEnd, count: 1),
+    .settle(Expectation(landing: .exact(104..<104), length: 104,
+                        blame: .init(capability: .lineEndKey, unmoved: [0..<0], leavesCaret: true, offTarget: true))),
+    .press(.left, count: 2), .settle(Expectation(landing: .exact(102..<102), length: 104)),
+], "⌃E is blamed in a settle of its own")
+precondition(chords(physical("t.", text: twenty, caret: 90, profile: keyProfile)) == [.paragraphEnd, .left, .left])
+precondition(chords(physical("t.", text: twenty, caret: 91, profile: keyProfile)) == Array(repeating: .right, count: 11),
+             "short of a settle's worth of presses it counts from the caret")
+let wordFirst = "aw" + String(repeating: "x", count: 100)
+precondition(chords(physical("Fw", text: wordFirst, caret: 101, profile: keyProfile)) == [.paragraphStart, .right])
 precondition(chords(physical("Fw", text: twenty, caret: 99, profile: keyProfile)) == Array(repeating: .left, count: 4))
 precondition(chords(physical("Fw", text: twenty, caret: 102, profile: removing([.lineStartKey, .lineEndKey], from: keyProfile)))
              == Array(repeating: .left, count: 7), "without the line keys it counts from the caret")
@@ -4878,8 +4885,11 @@ precondition(chords(physical("dt.", text: twenty, caret: 0, profile: keyProfile)
              == [Chord.paragraphEnd.shifted, .selectLeft, .deleteBack])
 precondition(chords(physical("x", text: twenty, caret: 3, profile: keyProfile)) == [.selectRight, .deleteBack])
 let chipInLine = ParagraphBreaks(hidden: [.init(at: 3, text: "LIN-1 chip", kind: .atom)])
-precondition(chords(webPhysical("dt.", text: "ab\u{2060}cd. and more", caret: 0, profile: keyProfile, breaks: chipInLine))
-             == Array(repeating: .selectRight, count: 5) + [.deleteBack], "⇧⌃E would stop at the chip")
+let chipFar = "ab\u{2060}" + String(repeating: "c", count: 30) + ". and more"
+precondition(chords(webPhysical("dt.", text: chipFar, caret: 0, profile: keyProfile, breaks: chipInLine))
+             == Array(repeating: .selectRight, count: 33) + [.deleteBack], "⇧⌃E would stop at the chip")
+precondition(chords(webPhysical("dt.", text: chipFar, caret: 0, profile: keyProfile, breaks: ParagraphBreaks()))
+             == [.paragraphStart, Chord.paragraphEnd.shifted] + Array(repeating: .selectLeft, count: 10) + [.deleteBack])
 for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirst(50))), ("dF ", 99, String(twenty.prefix(95) + twenty.dropFirst(99))),
                             ("d^", 60, String(twenty.dropFirst(60))), ("dt.", 0, ".")] {
     var host = Sim(text: twenty, caret: caret, profile: keyProfile)
@@ -4887,9 +4897,32 @@ for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirs
     host.type(keys)
     precondition(host.text == left && host.settleFailures == 0, keys)
 }
-precondition(chords(webPhysical("de", text: "ab\ncd", caret: 0, profile: removing([.lineStartKey], from: keyProfile),
-                                breaks: ParagraphBreaks(offsets: [2])))
-             == [.selectRight, .selectRight, .deleteBack], "⇧⌃E's ⇧→ ← at a paragraph's start would cost more")
+let elevenLetters = "abcdefghijk\ncd"
+precondition(chords(webPhysical("de", text: elevenLetters, caret: 0, profile: removing([.lineStartKey], from: keyProfile),
+                                breaks: ParagraphBreaks(offsets: [11])))
+             == Array(repeating: .selectRight, count: 11) + [.deleteBack], "⇧⌃E's ⇧→ ← at a paragraph's start would cost more")
+precondition(chords(webPhysical("de", text: elevenLetters, caret: 0, profile: keyProfile, breaks: ParagraphBreaks(offsets: [11])))
+             == [.paragraphStart, Chord.paragraphEnd.shifted, .deleteBack])
+// A field that ignores or rebinds a line key fails the first command pressing it, which strikes the key, and then counts.
+for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
+    (twenty, "t.", 0, Chord.paragraphEnd, Chord.paragraphStart, Capability.lineEndKey, twenty, 102),
+    (wordFirst, "Fw", 101, .paragraphStart, .paragraphEnd, .lineStartKey, wordFirst, 1),
+    (twenty, "d^", 60, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted, .lineStartKey, String(twenty.dropFirst(60)), 0),
+    (twenty, "dt.", 0, Chord.paragraphEnd.shifted, Chord.paragraphStart.shifted, .lineEndKey, ".", 0),
+] {
+    for rebound in [false, true] {
+        var host = Sim(text: text, caret: caret, profile: keyProfile)
+        host.emulatesKeys = true
+        if rebound { host.reboundChords = [ignored: opposite] } else { host.ignoredChords = [ignored] }
+        host.learn(with: Sim.Learner(probed: keyProfile))
+        host.type(keys)
+        precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) \(rebound)")
+        guard !rebound else { continue }
+        host.type(keys)
+        precondition(host.settleFailures == 1 && host.text == left && host.caret == landing, "\(keys) \(rebound)")
+    }
+}
+
 let paste = webPhysical("\"+p", text: "x", caret: 0, profile: keyProfile, breaks: ParagraphBreaks())
 precondition(chords(paste) == [.selectRight, .right] && paste.traceShape.hasPrefix("PPV"), "a put's keys go before ⌘V unsettled")
 var yankedBack = Sim(text: twenty, caret: 52, profile: keyProfile)

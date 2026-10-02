@@ -41,6 +41,19 @@ public struct TextModel: Equatable, Sendable {
         text.distance(from: index(range.lowerBound), to: index(range.upperBound))
     }
 
+    /// `graphemes(in:)` from `offset` to its line's end, or its start, where that is at most `limit`; walks no further.
+    public func graphemes(from offset: Int, toLineEnd: Bool, atMost limit: Int) -> Int? {
+        guard limit >= 0 else { return nil }
+        var i = index(offset)
+        for count in 0...limit {
+            if toLineEnd ? i == text.endIndex || text[i] == "\n" : i == text.startIndex || text[text.index(before: i)] == "\n" {
+                return count
+            }
+            i = toLineEnd ? text.index(after: i) : text.index(before: i)
+        }
+        return nil
+    }
+
     public func substring(_ range: Range<Int>) -> String {
         String(text[index(range.lowerBound)..<index(range.upperBound)])
     }

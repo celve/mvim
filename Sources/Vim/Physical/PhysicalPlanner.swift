@@ -825,23 +825,24 @@ private extension PhysicalPlanner {
         func hops(into starts: [Int]) -> [[Chord]] {
             starts.map { !gaps.contains($0) ? [.right] : marked.contains($0) ? [.selectRight, .right] : [.right, .right] }
         }
-        // Each way to the target's line; the column is counted from where it lands, and the fewest keys win.
-        var ways: [[KeyGroup]]
+        // The way to the target's line, and for `j`/`k` one landing at its end; the column is counted from where each lands.
+        var way: [KeyGroup]
+        var end: [KeyGroup]?
         switch destination {
         case .motion(.lineStart, _)?:
             guard profile.has(.lineStartKey) else { return .next }
-            ways = [[([.paragraphStart], .lineStartKey)]]
+            way = [([.paragraphStart], .lineStartKey)]
         case .motion(.lineEnd, let count)?:
             guard profile.has(.lineEndKey) else { return .next }
             let crossing = hops(into: lineStarts(after: line, count: count - 1, in: model))
             let past = Array(repeating: [Chord.right], count: max(0, count - 1 - crossing.count))
-            ways = [[([.paragraphEnd], .lineEndKey), ((crossing + past).flatMap { $0 + [.paragraphEnd] }, nil)]]
+            way = [([.paragraphEnd], .lineEndKey), ((crossing + past).flatMap { $0 + [.paragraphEnd] }, nil)]
         case .motion(.fileStart, _)?:
             guard profile.has(.documentStartKey) else { return .next }
-            ways = [[([.documentStart], .documentStartKey)]]
+            way = [([.documentStart], .documentStartKey)]
         case .motion(.fileEnd, _)?:
             guard profile.has(.documentEndKey), profile.has(.lineStartKey) else { return .next }
-            ways = [[([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]]
+            way = [([.documentEnd], .documentEndKey), ([.paragraphStart], .lineStartKey)]
         default:
             // `j`/`k` press their key even where the caret stays put, so a settle checks the line they start from.
             var vertical: Direction?
@@ -852,50 +853,68 @@ private extension PhysicalPlanner {
                 let lines = model.newlineCount(in: line..<targetLine)
                 let crossing = hops(into: lineStarts(after: line, count: lines, in: model))
                 let down = crossing.enumerated().flatMap { ($0.offset > 0 ? [Chord.paragraphEnd] : []) + $0.element }
-                ways = [[([.paragraphEnd], .lineEndKey), (down, nil)]]
-                if lines > 0 { ways.append([([.paragraphEnd], .lineEndKey), (down + [.paragraphEnd], nil)]) }
+                way = [([.paragraphEnd], .lineEndKey), (down, nil)]
+                if lines > 0 { end = [([.paragraphEnd], .lineEndKey), (down + [.paragraphEnd], nil)] }
             } else {
                 guard profile.has(.lineStartKey) else { return .next }
                 let lines = model.newlineCount(in: targetLine..<line)
                 let up = repeated([.left, .paragraphStart], lines)
-                ways = [[([.paragraphStart], .lineStartKey), (up, nil)]]
+                way = [([.paragraphStart], .lineStartKey), (up, nil)]
                 // The last ← already lands at the line's end.
-                if lines > 0 { ways.append([([.paragraphStart], .lineStartKey), (Array(up.dropLast()), nil)]) }
+                if lines > 0 { end = [([.paragraphStart], .lineStartKey), (Array(up.dropLast()), nil)] }
             }
         }
+        let atoms = context.atoms
+        let selecting = context.arrowsSelect
+        let normalizing = context.normalizes(target)
         // Only the column is counted, in its own settle so the line the field reports decides it.
-        let counted = ways.compactMap { way -> [KeyGroup]? in
-            var landing = KeyModel(text: model.text, anchor: position, focus: position, atoms: context.atoms, gaps: gaps)
+        func counted(_ way: [KeyGroup]) -> [KeyGroup]? {
+            var landing = KeyModel(text: model.text, anchor: position, focus: position, atoms: atoms, gaps: gaps)
             guard way.flatMap(\.chords).allSatisfy({ landing.press($0) }),
                   model.lineStart(of: landing.focus) == targetLine else { return nil }
             let reached = landing.focus
             let column = model.graphemes(in: min(reached, target)..<max(reached, target))
-            return way + [(column > 0 ? arrows(target > reached ? .right : .left, count: column, selecting: context.arrowsSelect,
-                                               normalizing: context.normalizes(target)) : [], nil)]
+            return way + [(column > 0 ? arrows(target > reached ? .right : .left, count: column, selecting: selecting,
+                                               normalizing: normalizing) : [], nil)]
         }
-        guard let groups = counted.min(by: { $0.flatMap(\.chords).count < $1.flatMap(\.chords).count }) else { return .next }
+        guard var groups = counted(way) else { return .next }
+        // From the line's end only where that presses fewer keys, which a walk from the target no longer than them shows.
+        let presses = groups.flatMap(\.chords).count
+        if let end, model.graphemes(from: target, toLineEnd: true, atMost: presses - end.flatMap(\.chords).count - 1) != nil,
+           let fromEnd = counted(end), fromEnd.flatMap(\.chords).count < presses {
+            groups = fromEnd
+        }
         return pressing(groups, to: target..<target, context: &context, profile: profile)
     }
 
-    /// From ⌃A or ⌃E where that presses fewer keys than lane B's count from the caret; unblamed, as `0` `$` `j` `k` judge them.
+    /// ⌃A or ⌃E, blamed in a settle of its own, then arrows to a target on the caret's line, where the settle pays for itself.
     static func sameLine(to target: Int, model: TextModel, context: inout Context, profile: CapabilityProfile) -> Lane {
-        guard !profile.has(.writeSelection), let position = context.position,
-              model.lineStart(of: position) == model.lineStart(of: target) else { return .next }
+        guard !profile.has(.writeSelection), let position = context.position else { return .next }
+        let low = min(position, target), high = max(position, target)
+        guard model.newlineCount(in: low..<high) == 0 else { return .next }
         let selecting = context.arrowsSelect
         let normalizing = context.normalizes(target)
-        func run(from reached: Int) -> [Chord] {
-            let count = model.graphemes(in: min(reached, target)..<max(reached, target))
-            return count > 0 ? arrows(target > reached ? .right : .left, count: count, selecting: selecting, normalizing: normalizing) : []
+        func presses(_ arrow: Chord, _ count: Int) -> Int {
+            count > 0 ? count + arrows(arrow, count: 0, selecting: selecting, normalizing: normalizing).count : 0
         }
-        let counting = run(from: position)
-        let ends: [(Capability, Chord, Int)] = [
-            (.lineStartKey, .paragraphStart, model.lineStart(of: position)), (.lineEndKey, .paragraphEnd, model.lineEnd(of: position)),
-        ]
-        guard let keys = ends.filter({ profile.has($0.0) }).map({ [$0.1] + run(from: $0.2) }).min(by: { $0.count < $1.count }),
-              keys.count < counting.count + (counting.first.map { prefixCount($0, context: context, profile: profile) } ?? 0)
-        else { return .next }
-        return pressing([(keys, nil)], to: target..<target, context: &context, profile: profile)
+        let toward: Chord = target > position ? .right : .left
+        let counting = presses(toward, model.graphemes(in: low..<high))
+            + prefixCount(selecting ? toward.shifted : toward, context: context, profile: profile)
+        let limit = counting - 1 - settlePresses - 1
+        var best: (key: Chord, blame: Capability, back: Chord, count: Int)?
+        for (key, blame, back) in [(Chord.paragraphStart, Capability.lineStartKey, Chord.right), (.paragraphEnd, .lineEndKey, .left)] {
+            guard profile.has(blame), let count = model.graphemes(from: target, toLineEnd: back == .left, atMost: limit),
+                  presses(back, count) <= limit, best.map({ presses(back, count) < presses($0.back, $0.count) }) ?? true
+            else { continue }
+            best = (key, blame, back, count)
+        }
+        guard let best else { return .next }
+        let run = best.count > 0 ? arrows(best.back, count: best.count, selecting: selecting, normalizing: normalizing) : []
+        return pressing([([best.key], best.blame), (run, nil)], to: target..<target, context: &context, profile: profile)
     }
+
+    /// A settle in presses: a line key and its settle took ~20 ms in Linear on Dia, a key alone ~2 ms (LIN-1686).
+    static let settlePresses = 8
 
     /// How many keys `planning` puts before `chord` when it is the plan's first actuation, from the caret the snapshot saw.
     static func prefixCount(_ chord: Chord, context: Context, profile: CapabilityProfile) -> Int {
@@ -1465,36 +1484,37 @@ private extension PhysicalPlanner {
                 context.selection = range
                 return .steps(write(range, context: context) + settle(context, profile: profile))
             }
-            let presses = selectKeys(range, from: selection, model: model, context: context, profile: profile)
-            context.selection = range
-            return .steps(presses + settle(context, profile: profile))
+            return lineSelect(range, model: model, context: &context, profile: profile).or {
+                let presses = selectKeys(range, from: selection, model: model, context: context)
+                context.selection = range
+                return .steps(presses + settle(context, profile: profile))
+            }
         }
     }
 
-    /// From a caret at either end of a range within its line: ⇧ arrows across, or the shifted line key and ⇧ arrows back.
-    static func selectKeys(
-        _ range: Range<Int>, from selection: Range<Int>, model: TextModel, context: Context, profile: CapabilityProfile
-    ) -> [PhysicalStep] {
-        let count = model.graphemes(in: range)
-        guard selection.isEmpty, count > 0, [range.lowerBound, range.upperBound].contains(selection.lowerBound),
-              model.lineStart(of: range.lowerBound) == model.lineStart(of: range.upperBound) else {
-            return keyPath(from: selection, to: range.lowerBound, model: model, context: context)
-                + (count > 0 ? [.press(.selectRight, count: count)] : [])
-        }
-        let caret = selection.lowerBound
+    /// ⇧⌃E or ⇧⌃A, blamed in a settle of its own, then ⇧ arrows back to a range from the caret at either end on its line.
+    static func lineSelect(_ range: Range<Int>, model: TextModel, context: inout Context, profile: CapabilityProfile) -> Lane {
+        guard let caret = context.caret, !range.isEmpty, [range.lowerBound, range.upperBound].contains(caret),
+              model.newlineCount(in: range) == 0 else { return .next }
         let forward = caret == range.lowerBound
-        let (key, back, needs): (Chord, Chord, Capability) = forward
+        let (key, back, blame): (Chord, Chord, Capability) = forward
             ? (Chord.paragraphEnd.shifted, .selectLeft, .lineEndKey) : (Chord.paragraphStart.shifted, .selectRight, .lineStartKey)
-        let far = forward ? model.lineEnd(of: caret) : model.lineStart(of: caret)
-        let across: Chord = forward ? .selectRight : .selectLeft
-        let fromKey = [key] + Array(repeating: back, count: model.graphemes(in: forward ? range.upperBound..<far : far..<range.lowerBound))
-        var landing = KeyModel(text: model.text, anchor: caret, focus: caret, atoms: context.atoms, gaps: context.gaps)
-        guard profile.has(needs), fromKey.count + prefixCount(key, context: context, profile: profile)
-                < count + prefixCount(across, context: context, profile: profile),
-              fromKey.allSatisfy({ landing.press($0) }), landing.selection == range else {
-            return [.press(across, count: count)]
+        let across = model.graphemes(in: range) + prefixCount(forward ? .selectRight : .selectLeft, context: context, profile: profile)
+        let limit = across - 1 - prefixCount(key, context: context, profile: profile) - settlePresses - 1
+        guard profile.has(blame), let count = model.graphemes(
+            from: forward ? range.upperBound : range.lowerBound, toLineEnd: forward, atMost: limit
+        ) else { return .next }
+        return pressing([([key], blame), (Array(repeating: back, count: count), nil)], to: range, context: &context, profile: profile)
+    }
+
+    /// ⇧← across a range ending at the caret on its line, else ⇧→ across it from its start.
+    static func selectKeys(_ range: Range<Int>, from selection: Range<Int>, model: TextModel, context: Context) -> [PhysicalStep] {
+        let count = model.graphemes(in: range)
+        if selection.isEmpty, count > 0, selection.lowerBound == range.upperBound, model.newlineCount(in: range) == 0 {
+            return [.press(.selectLeft, count: count)]
         }
-        return counted(fromKey)
+        return keyPath(from: selection, to: range.lowerBound, model: model, context: context)
+            + (count > 0 ? [.press(.selectRight, count: count)] : [])
     }
 
     static func blindSelect(_ target: LogicalStep.SelectionTarget, context: inout Context) -> Lane {
