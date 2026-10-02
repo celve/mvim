@@ -925,6 +925,7 @@ private extension PhysicalPlanner {
     /// The starts of the `count` lines after `line`'s, as far as the text goes.
     static func lineStarts(after line: Int, count: Int, in model: TextModel) -> [Int] {
         var starts: [Int] = []
+        guard count > 0 else { return starts }
         var end = model.lineEnd(of: line)
         while starts.count < count, end < model.length {
             starts.append(end + 1)
