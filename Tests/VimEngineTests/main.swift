@@ -4437,6 +4437,8 @@ precondition(chords(dia1Cursor("$", gap: middle + 2)) == [.paragraphEnd]
              && chords(dia1Cursor("0", gap: heading + 2)) == [.paragraphStart, .selectRight],
              "⌃A and ⌃E land alike from the cursor, which needs no collapse first; ⇧→ draws it again at the start")
 precondition(chords(dia1Cursor("0", gap: middle + 2)).isEmpty, "a plain paragraph's start is written, cursor and all")
+precondition(chords(dia1Cursor("u", gap: heading)) == [.undo] && !writes(dia1Cursor("u", gap: middle + 2))
+             && chords(dia1Cursor("<C-r>", gap: heading)) == [.redo])
 
 func dia6Planning(_ keys: String, caret: Int, profile: CapabilityProfile = keyProfile) -> PhysicalPlanner.Planning {
     let snapshot = FieldSnapshot(capabilities: profile, text: dia6Model.text, selection: caret..<caret, webContent: true,
