@@ -382,7 +382,7 @@ public final class Executor {
                 }
             }
             guard Date() < deadline else { return outcome(false) }
-            // A missed poll costs even Chromium rich text only ~0.5 ms of the host's CPU (LIN-1727).
+            // In the rich-text fields measured, a missed poll cost the host ~0.5 ms of CPU on average (LIN-1727).
             Thread.sleep(forTimeInterval: 0.003)
         }
     }
