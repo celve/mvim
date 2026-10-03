@@ -4,7 +4,8 @@ import Core
 /// `TypingTarget` over the accessibility tree (LIN-1742).
 enum TypingTargetReads {
     static func field(for reported: AXUIElement) -> AXUIElement? {
-        TypingTarget.field(for: reported, read: read, caretField: caretField)
+        // A failed count answers that it has children, which leaves the field unbound.
+        TypingTarget.field(for: reported, read: read, caret: AX.caretNode) { AX.childCount(of: $0) != 0 }
     }
 
     private static func read(_ node: AXUIElement) -> TypingTarget.Reading<AXUIElement> {
@@ -17,10 +18,5 @@ enum TypingTargetReads {
         return TypingTarget.Reading(
             role: reads.string(0), parent: reads.element(1), owns: reads.elements(2) ?? [], isChromium: reads.string(3) != nil
         )
-    }
-
-    /// `AXEditableAncestor` is Chromium's nearest text field at or above a node, whatever the depth between them.
-    private static func caretField(of reported: AXUIElement) -> AXUIElement? {
-        AX.caretNode(of: reported).flatMap { AX.attributes(["AXEditableAncestor"], of: $0).element(0) }
     }
 }

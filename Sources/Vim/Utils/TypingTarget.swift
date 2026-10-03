@@ -9,6 +9,9 @@ public enum TypingTarget {
     /// A row and its list lie in their field's page, so nothing at or above one is looked at.
     private static let page = "AXWebArea"
 
+    /// Chromium gives a button or a link no selection container, so one reported as focused has the real focus.
+    private static let notRows: Set<String> = ["AXButton", "AXLink"]
+
     /// One node's batched read; a failed one leaves `role` nil.
     public struct Reading<Node> {
         public var role: String?
@@ -36,16 +39,18 @@ public enum TypingTarget {
         return current == bound || field(current) == bound ? bound : reported
     }
 
-    /// The field holding the caret, when it owns `reported` or an ancestor of it; nil for a text field and outside Chromium.
+    /// The `<input>` or `<textarea>` holding the caret, when it owns `reported` or an ancestor of it; nil outside Chromium.
     public static func field<Node: Equatable>(
-        for reported: Node, read: (Node) -> Reading<Node>, caretField: (Node) -> Node?
+        for reported: Node, read: (Node) -> Reading<Node>, caret: (Node) -> Node?, hasChildren: (Node) -> Bool
     ) -> Node? {
         let focus = read(reported)
-        guard focus.isChromium, let role = focus.role, !textRoles.contains(role), role != page,
-              let field = caretField(reported) else { return nil }
+        guard focus.isChromium, let role = focus.role, !textRoles.contains(role), !notRows.contains(role), role != page,
+              let field = caret(reported) else { return nil }
         let held = read(field)
-        // Chromium leaves the caret in a field that focus has left, and such a field owns nothing of the new focus.
+        // The caret's node is a control only while that control has the real focus: left behind, it reads on the text inside.
         guard let heldRole = held.role, textRoles.contains(heldRole), !held.owns.isEmpty else { return nil }
+        // A rich editor's caret reads the same with the focus or without, and unlike a control the editor has children.
+        guard !hasChildren(field) else { return nil }
         var ancestor = reported
         var reading: Reading<Node>? = focus
         for _ in 0..<ownerHops {
