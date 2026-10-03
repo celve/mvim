@@ -498,6 +498,20 @@ delete first and join lines at a line end. Where a field is written but a write 
 start or end alone, as beside Linear's list markers and chips, mvim presses ⌃A or ⌃E instead, and a
 selection it wrote reaches a line's end by ⇧⌃E where no chip is in the way.
 
+Where mvim still counts arrows, it takes the way with fewer presses. `j` and `k` count the column from
+the nearer end of the new line: `j` adds a ⌃E to start from its end, and `k`'s last ← already lands
+there. A move within a line goes by ⌃A or ⌃E and arrows back when that is fewer keys than counting
+from the caret, a selection from the caret by ⇧⌃A or ⇧⌃E and ⇧ arrows back, and a selection that ends
+at the caret by ⇧← from it. Each of these is an optional route: counting from the caret reaches the same
+place without it. So the first time a route's settle fails, mvim plans without that route in fields like
+that one and counts again, until mvim is relaunched or the app updates. The failed settle names the
+route in its `want` (`route=line-start`, `route=line-end` or `route=select-back`), and the key itself
+is not blamed. Arrows, ⌃A and ⌃E are posted with no pause between key down and key up; every other key
+keeps 2 ms.
+
+In Linear, → or ↓ from a list's last item stops once before a list that follows it directly. mvim
+marks that list's first line, so `j`, `w`, a counted `$` and the like press through the stop.
+
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
 and caret mvim can read. A key that lands anywhere but where it

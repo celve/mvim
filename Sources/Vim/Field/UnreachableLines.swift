@@ -41,14 +41,17 @@ public enum UnreachableLines {
         public let chips: [Range<Int>]
         /// Plain offsets of empty lines after a generated break holding one text-less leaf, and the caret's by any leaf.
         public let carets: [Int]
+        /// A marker or a to-do's checkbox may start a list, so which lists follow another is worth reading.
+        public let lists: Bool
 
-        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = []) {
+        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], lists: Bool = false) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
+            self.lists = lists
         }
 
-        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty }
+        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !lists }
     }
 
     /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
@@ -74,11 +77,14 @@ public enum UnreachableLines {
         public let markers: [Int]
         public let chips: [Chip]
         public let carets: [Caret]
+        /// Plain starts of lists right after another list, where a plain → or ↓ stops between them first (LIN-1686).
+        public let joins: [Int]
 
-        public init(markers: [Int], chips: [Chip], carets: [Caret] = []) {
+        public init(markers: [Int], chips: [Chip], carets: [Caret] = [], joins: [Int] = []) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
+            self.joins = joins
         }
     }
 
@@ -113,8 +119,11 @@ public enum UnreachableLines {
         var markers: [Range<Int>] = []
         var chips: [Range<Int>] = []
         var carets: [Int] = []
+        var leafLines = false
         for line in lines(of: text) {
             let start = breaks.fieldOffset(line.start)
+            let end = line.start + line.units.count
+            if line.units.isEmpty, end < length, generated.contains(end), leaves[start, default: 0] > 0 { leafLines = true }
             if isMarkerShaped(line.units) {
                 markers.append(start..<(start + line.units.count))
             } else if let count = prefixLength(line.units) {
@@ -127,7 +136,7 @@ public enum UnreachableLines {
         }
         // One can share its offset with a to-do's checkbox, or have no line after a `<br>`.
         if let caret, leaves[caret] != nil, !carets.contains(caret) { carets.append(caret) }
-        return Candidates(markers: markers, chips: chips, carets: carets)
+        return Candidates(markers: markers, chips: chips, carets: carets, lists: !markers.isEmpty || leafLines)
     }
 
     /// How many U+FFFCs the marker text has at each plain offset: one per text-less leaf.
@@ -245,8 +254,18 @@ public enum UnreachableLines {
             if !dropped.contains(index) { kept.append(unit) }
         }
         shift[units.count] = units.count - kept.count
-        let hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
+        var hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
         let offsets = (breaks.offsets + converted).sorted().filter { !dropped.contains($0) }.map { $0 - shift[$0] }
+        let starts = lines(of: text).map(\.start)
+        // A join's list starts at the first line at or past it, in the offsets discovery read, as markers are matched.
+        for join in found.joins {
+            guard let line = starts.first(where: { breaks.fieldOffset($0) >= join }), line > 0 else { continue }
+            let start = line - shift[line]
+            // Chromium's own lists, whose marker starts the line, have no stop: Linear's ProseMirror makes it.
+            guard !hidden.contains(where: { $0.at == start && $0.kind == .prefix }) else { continue }
+            hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: .gap),
+                          at: hidden.lastIndex { $0.at <= start }.map { $0 + 1 } ?? 0)
+        }
         return Model(
             text: String(decoding: kept, as: UTF16.self), breaks: ParagraphBreaks(offsets: offsets, hidden: hidden),
             folded: dropped.count, drawnBreak: drawnBreak

@@ -37,7 +37,25 @@ public struct UnreachableScan<Node> {
             guard let hit = caret(at: candidate, in: roots, path: [], ancestors: []) else { return nil }
             if let found = hit { carets.append(found) }
         }
-        return UnreachableLines.Found(markers: markers, chips: chips, carets: carets)
+        // Last, so running out of reads here loses only these.
+        let joins = candidates.lists ? listJoins(in: roots) ?? [] : []
+        return UnreachableLines.Found(markers: markers, chips: chips, carets: carets, joins: joins)
+    }
+
+    /// Plain starts of root lists that follow another root list; nil on a failed read or past the budget.
+    private mutating func listJoins(in roots: [Node]) -> [Int]? {
+        var joins: [Int] = []
+        var afterList = false
+        for (index, root) in roots.enumerated() {
+            guard let read = read(root, at: [index]) else { return nil }
+            let list = read.role == "AXList"
+            if list, afterList {
+                guard let start = start(of: root, at: [index]) else { return nil }
+                joins.append(start)
+            }
+            afterList = list
+        }
+        return joins
     }
 
     private enum Hit {

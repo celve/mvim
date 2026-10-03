@@ -159,6 +159,16 @@ public extension Chord {
 
 // MARK: - Expectations
 
+/// A way with fewer presses to a landing that counting reaches without it, so one miss sends plans back to counting (LIN-1686).
+public enum Route: String, CaseIterable, Hashable, Sendable {
+    /// ⌃A or ⇧⌃A, then arrows from the line's start.
+    case lineStart = "line-start"
+    /// ⌃E or ⇧⌃E, then arrows from the line's end.
+    case lineEnd = "line-end"
+    /// ⇧← from the caret across a selection that ends there.
+    case selectBack = "select-back"
+}
+
 /// Where a settle expects the selection: a prediction, or a relation to a read for keys the app lands.
 public enum Landing: Equatable, Sendable {
     case exact(Range<Int>)
@@ -210,6 +220,9 @@ public struct Expectation: Equatable, Sendable {
 
     /// Where a `.between` span must lie.
     public var within: Range<Int>?
+
+    /// The optional route this settle checks, which a miss ends.
+    public var route: Route?
 
     /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
     /// nothing), when a key that only ever leaves a caret left a selection, or with `offTarget` when it landed elsewhere.
@@ -327,6 +340,7 @@ public struct Expectation: Equatable, Sendable {
         resolved.longest = longest
         resolved.keeps = keeps
         resolved.within = within
+        resolved.route = route
         return resolved
     }
 }
@@ -348,6 +362,7 @@ extension Expectation {
         if let longest { fields += " max=\(longest)" }
         if let keeps { fields += " keep=\(keeps)" }
         if let within { fields += " in=\(within.lowerBound)..\(within.upperBound)" }
+        if let route { fields += " route=\(route.rawValue)" }
         return fields
     }
 }
