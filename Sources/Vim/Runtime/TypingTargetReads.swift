@@ -3,7 +3,6 @@ import Core
 
 /// `TypingTarget` over the accessibility tree (LIN-1742).
 enum TypingTargetReads {
-    /// The field typing reaches when `reported` is its highlighted popup row; nil where `reported` stands for itself.
     static func field(for reported: AXUIElement) -> AXUIElement? {
         TypingTarget.field(for: reported, read: read, caretField: caretField)
     }

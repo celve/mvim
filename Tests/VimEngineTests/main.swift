@@ -2689,6 +2689,27 @@ precondition(typingTarget(of: FakeElement("AXLink", in: FakeElement("AXGroup", i
 precondition(typingTarget(of: FakeElement("AXStaticText", in: FakeElement("AXList", in: menuPage)), caretIn: nil) == nil,
              "a list no field owns")
 
+// A row destroyed mid-read misses once; a bound field is looked up again on a fresh focus read.
+var targetLookups = 0
+func target(of reported: FakeElement, bound: FakeElement?, refocus: FakeElement?) -> FakeElement {
+    targetLookups = 0
+    return TypingTarget.target(of: reported, bound: bound, field: { node in
+        targetLookups += 1
+        return typingTarget(of: node, caretIn: menuInput)
+    }, refocus: { refocus })
+}
+let deadRow = FakeElement(nil, in: menuList)
+precondition(target(of: menuInput, bound: menuInput, refocus: nil) == menuInput && targetLookups == 0)
+precondition(target(of: menuRow, bound: nil, refocus: nil) == menuInput && targetLookups == 1)
+precondition(target(of: menuRow, bound: menuInput, refocus: nil) == menuInput && targetLookups == 1)
+precondition(target(of: deadRow, bound: nil, refocus: menuRow) == deadRow && targetLookups == 1, "nothing bound to keep")
+precondition(target(of: deadRow, bound: menuInput, refocus: menuRow) == menuInput && targetLookups == 2)
+precondition(target(of: deadRow, bound: menuInput, refocus: menuInput) == menuInput && targetLookups == 1)
+precondition(target(of: deadRow, bound: menuInput, refocus: deadRow) == deadRow && targetLookups == 1, "focus did not move")
+precondition(target(of: deadRow, bound: menuInput, refocus: nil) == deadRow)
+precondition(target(of: pageButton, bound: menuInput, refocus: pageButton) == pageButton && targetLookups == 1)
+precondition(target(of: deadRow, bound: leftEditor, refocus: menuRow) == deadRow && targetLookups == 2, "another field's row")
+
 // MARK: - The learner's commit rule
 
 // The learner writes at the ROLE learnRung, never the identifier rung: a key per

@@ -25,6 +25,17 @@ public enum TypingTarget {
         }
     }
 
+    /// What typing reaches: `reported`, or the field that `field` finds for it.
+    public static func target<Node: Equatable>(
+        of reported: Node, bound: Node?, field: (Node) -> Node?, refocus: () -> Node?
+    ) -> Node {
+        if reported == bound { return reported }
+        if let owner = field(reported) { return owner }
+        // A menu replacing its rows can destroy the reported one mid-read, and a miss would cost the bound field its mode.
+        guard let bound, let current = refocus(), current != reported else { return reported }
+        return current == bound || field(current) == bound ? bound : reported
+    }
+
     /// The field holding the caret, when it owns `reported` or an ancestor of it; nil for a text field and outside Chromium.
     public static func field<Node: Equatable>(
         for reported: Node, read: (Node) -> Reading<Node>, caretField: (Node) -> Node?

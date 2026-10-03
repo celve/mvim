@@ -329,10 +329,11 @@ public final class FocusTracker {
         AX.focusedElement().map(typingTarget)
     }
 
-    /// No read while focus is on the bound element.
     private func typingTarget(of reported: AXUIElement) -> AXUIElement {
-        if let bound = binding, CFEqual(bound.element, reported) { return reported }
-        return TypingTargetReads.field(for: reported) ?? reported
+        TypingTarget.target(
+            of: reported, bound: binding.flatMap { $0.isForced ? nil : $0.element },
+            field: TypingTargetReads.field, refocus: AX.focusedElement
+        )
     }
 
     /// Value-typed, so the keydown negative cache allocates nothing.
