@@ -146,8 +146,8 @@ is a separate field.
 An input or a plain text area keeps mvim while a row of its popup list is highlighted, as in Linear's
 ⌘K menu or a search box's suggestions, though Chromium then calls that row, not the field, the focused
 element. Pick the row from Insert mode: in Normal mode the arrow keys and ⏎ are Vim's motions. A
-rich-text editor still loses mvim while such a row is highlighted, because nothing there tells mvim
-whether the editor has the focus.
+rich-text editor with anything in it still loses mvim while such a row is highlighted, because
+nothing there tells mvim whether the editor has the focus.
 
 mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
 check (it lands wrong, or not within a quarter of a second) three commands in a row, mvim switches that
