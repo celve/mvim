@@ -62,6 +62,9 @@ public final class Controller {
     /// Per-rung evidence this process, stored with the read model.
     private var tallies: [String: Tally] = [:]
 
+    /// Per-rung refuted runs in a row this process; not stored, so a relaunch starts each count over.
+    private var strikes: [String: Strikes] = [:]
+
     /// Mirror of the tracker's binding, held for unbind hygiene.
     private var binding: FocusTracker.Binding?
 
@@ -463,14 +466,20 @@ public final class Controller {
         if observed.source.observes {
             for item in items { tallies[rung, default: Tally()].count(item) }
         }
+        strikes[rung]?.pass(run)
         guard !teaching.isEmpty || observed.after != model.answer else { return }
         var lesson = Learning.Lesson()
+        let before = strikes[rung] ?? Strikes()
+        var after = before
         do {
             try Beliefs.shared.update { contents in
                 var store = contents.store
                 let overrides = contents.overrides
+                // `update` reapplies this to a file saved meanwhile, so each try counts from the same strikes.
+                after = before
                 lesson = Learning.learn(
-                    store: &store, rung: rung, versions: binding.versions, model: model, observed: observed, run: run,
+                    store: &store, strikes: &after, rung: rung, versions: binding.versions, model: model,
+                    observed: observed, run: run,
                     // The user has the last word: once they set an atom, stop inferring about it.
                     overridden: {
                         CapabilityConfig.resolve(binding.surface, capability: $0.rawValue, overrides: overrides).override != nil
@@ -484,6 +493,7 @@ public final class Controller {
             Diag.notLearned(epoch, seq, reason: "beliefs-file", teaching)
             return
         }
+        strikes[rung] = after.isEmpty ? nil : after
         Diag.learned(epoch, seq, lesson, rung: rung, versions: binding.versions)
         if lesson.republish { tracker.reresolveCapabilities() }
     }
