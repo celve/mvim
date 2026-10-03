@@ -2613,6 +2613,82 @@ let spent = WebAreaWalk.walk(from: 0, clock: { walkClock += 1; return walkClock 
 }
 precondition(spent.stop == .budget && spent.hops == 1 && walkReads == 1, "the field itself is always read")
 
+// MARK: - The typing target (LIN-1742)
+
+final class FakeElement: Equatable {
+    let role: String?
+    let parent: FakeElement?
+    var owns: [FakeElement] = []
+    var chromium = true
+
+    init(_ role: String?, in parent: FakeElement? = nil) {
+        self.role = role
+        self.parent = parent
+    }
+
+    static func == (a: FakeElement, b: FakeElement) -> Bool { a === b }
+}
+func nested(_ role: String, _ depth: Int, in parent: FakeElement) -> FakeElement {
+    (0..<depth).reduce(parent) { node, _ in FakeElement(role, in: node) }
+}
+var typingReads = 0
+var caretReads = 0
+func typingTarget(of reported: FakeElement, caretIn field: FakeElement?) -> FakeElement? {
+    typingReads = 0
+    caretReads = 0
+    return TypingTarget.field(for: reported, read: { node in
+        typingReads += 1
+        return TypingTarget.Reading(role: node.role, parent: node.parent, owns: node.owns, isChromium: node.chromium)
+    }, caretField: { _ in
+        caretReads += 1
+        return field
+    })
+}
+
+let menuPage = FakeElement("AXWebArea")
+let menuInput = FakeElement("AXComboBox", in: menuPage)
+let menuList = FakeElement("AXList", in: menuPage)
+let menuRow = FakeElement("AXStaticText", in: menuList)
+menuInput.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretIn: menuInput) == menuInput && typingReads == 2)
+precondition(typingTarget(of: menuList, caretIn: menuInput) == menuInput, "the owned container itself")
+precondition(typingTarget(of: menuRow, caretIn: nil) == nil && typingReads == 1, "no field holds the caret")
+precondition(typingTarget(of: menuInput, caretIn: menuInput) == nil && typingReads == 1 && caretReads == 0,
+             "a text field stands for itself")
+menuRow.chromium = false
+precondition(typingTarget(of: menuRow, caretIn: menuInput) == nil && typingReads == 1 && caretReads == 0,
+             "only Chromium defines AXOwns this way")
+menuRow.chromium = true
+precondition(typingTarget(of: FakeElement(nil, in: menuList), caretIn: menuInput) == nil && caretReads == 0, "a failed read")
+precondition(typingTarget(of: menuPage, caretIn: menuInput) == nil && typingReads == 1 && caretReads == 0, "the page itself")
+
+let groupedRow = FakeElement("AXStaticText", in: FakeElement("AXGroup", in: menuList))
+precondition(typingTarget(of: groupedRow, caretIn: menuInput) == menuInput && typingReads == 3, "a row in a group, as Linear's")
+precondition(typingTarget(of: nested("AXRow", TypingTarget.ownerHops, in: menuList), caretIn: menuInput) == menuInput)
+precondition(typingTarget(of: nested("AXRow", TypingTarget.ownerHops + 1, in: menuList), caretIn: menuInput) == nil)
+
+let ownerEditor = FakeElement("AXTextArea", in: menuPage)
+ownerEditor.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretIn: ownerEditor) == ownerEditor)
+let editableGroup = FakeElement("AXGroup", in: menuPage)
+editableGroup.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretIn: editableGroup) == nil, "an editable region mvim does not engage on")
+let unread = FakeElement(nil, in: menuPage)
+unread.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretIn: unread) == nil, "a failed read of the field")
+
+// Focus really elsewhere: Chromium leaves the caret in the field it left.
+let pageButton = FakeElement("AXButton", in: menuPage)
+precondition(typingTarget(of: pageButton, caretIn: menuInput) == nil && typingReads == 3, "the field's list does not hold the button")
+let framed = FakeElement("AXStaticText", in: FakeElement("AXWebArea", in: menuList))
+precondition(typingTarget(of: framed, caretIn: menuInput) == nil, "a frame's row is not the outer field's")
+let leftEditor = FakeElement("AXTextArea", in: menuPage)
+precondition(typingTarget(of: pageButton, caretIn: leftEditor) == nil && typingReads == 2)
+precondition(typingTarget(of: FakeElement("AXLink", in: FakeElement("AXGroup", in: leftEditor)), caretIn: leftEditor) == nil,
+             "a link inside the editor")
+precondition(typingTarget(of: FakeElement("AXStaticText", in: FakeElement("AXList", in: menuPage)), caretIn: nil) == nil,
+             "a list no field owns")
+
 // MARK: - The learner's commit rule
 
 // The learner writes at the ROLE learnRung, never the identifier rung: a key per

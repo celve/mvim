@@ -267,7 +267,7 @@ public final class FocusTracker {
             publish(nil)
             return
         }
-        guard let element = AX.focusedElement(), let pid = AX.ownerPID(of: element) else {
+        guard let reported = AX.focusedElement(), let pid = AX.ownerPID(of: reported) else {
             publishForcedOrNil()   // nothing resolves — the forced fallback's home turf
             return
         }
@@ -279,6 +279,7 @@ public final class FocusTracker {
             teardownObserver()
             return
         }
+        let element = typingTarget(of: reported)
         if let bound = binding, !bound.isForced, CFEqual(bound.element, element) {
             guard revalidateGate else {
                 Diag.shortCircuited(epoch)
@@ -321,6 +322,17 @@ public final class FocusTracker {
         ))
         // After the publish, so it carries its own binding's epoch, not the outgoing one.
         if let walk { Diag.origin(epoch, role: gate.role, walk: walk) }
+    }
+
+    /// The focused element, or the field typing reaches where Chromium reports that field's highlighted popup row instead.
+    public func focusedField() -> AXUIElement? {
+        AX.focusedElement().map(typingTarget)
+    }
+
+    /// No read while focus is on the bound element.
+    private func typingTarget(of reported: AXUIElement) -> AXUIElement {
+        if let bound = binding, CFEqual(bound.element, reported) { return reported }
+        return TypingTargetReads.field(for: reported) ?? reported
     }
 
     /// Value-typed, so the keydown negative cache allocates nothing.

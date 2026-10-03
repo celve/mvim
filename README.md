@@ -143,6 +143,10 @@ approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the 
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
 
+A field keeps mvim while a row of its popup list is highlighted, as in Linear's ⌘K menu or a search
+box's suggestions, though Chromium then calls that row, not the field, the focused element. Pick the
+row from Insert mode: in Normal mode the arrow keys and ⏎ are Vim's motions.
+
 mvim also learns. When one of the field's writes, or one of the app's keys mvim relies on, fails its
 check (it lands wrong, or not within a quarter of a second) three commands in a row, mvim switches that
 capability off for fields like the one it failed in until the app updates. A command where it works

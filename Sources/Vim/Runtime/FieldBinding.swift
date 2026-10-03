@@ -73,11 +73,7 @@ public enum FieldProber {
     /// itself only in the subrole.
     public static func gate(_ element: AXUIElement) -> FieldGate {
         let attributes = AX.gateAttributes(of: element)
-        let textual: Bool
-        switch attributes.role {
-        case "AXTextField", "AXTextArea", "AXComboBox": textual = true
-        default: textual = false
-        }
+        let textual = attributes.role.map(TypingTarget.textRoles.contains) ?? false
         let secure = attributes.role == "AXSecureTextField"
             || attributes.subrole == "AXSecureTextField"
         return FieldGate(
