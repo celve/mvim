@@ -306,7 +306,7 @@ public final class Executor {
     /// reads length. `kAXValue` deliberately stays OUT of the batch — it is
     /// the rare fallback for an element that claimed `readLength` and then
     /// answered nil, and fetching it every poll would marshal the entire
-    /// document 25 times per settle.
+    /// document dozens of times per settle.
     nonisolated static func settle(
         _ expectation: Expectation, on element: AXUIElement, paragraphs: Bool, presses: Int = 0
     ) -> SettleOutcome {
@@ -382,7 +382,8 @@ public final class Executor {
                 }
             }
             guard Date() < deadline else { return outcome(false) }
-            Thread.sleep(forTimeInterval: 0.01)
+            // In the rich-text fields measured, a missed poll cost the host ~0.5 ms of CPU on average (LIN-1727).
+            Thread.sleep(forTimeInterval: 0.003)
         }
     }
 
