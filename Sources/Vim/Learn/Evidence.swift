@@ -41,8 +41,6 @@ public struct Evidence: Equatable, Sendable {
         case leftSelection = "left-selection"
         case tooLong = "too-long"
         case offTarget = "off-target"
-        /// A line or document key went the other way, which no field's lines explain.
-        case wrongWay = "wrong-way"
         case paragraphLines = "paragraph-lines"
         case emptyParagraph = "empty-paragraph"
         case webContent = "web-content"

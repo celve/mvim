@@ -357,7 +357,9 @@ public final class Controller {
         let snapshot = reading.snapshot
         fieldBreaks = snapshot.breaks
         let paragraphs = snapshot.breaks != nil
-        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let planned = PhysicalPlanner.planning(
+            logical, snapshot: snapshot, missed: missedRoutes(on: binding, under: reading.observed.after)
+        )
         let physical = planned.plan
         let epoch = tracker.epoch
         let before = state.field.mode
@@ -445,6 +447,12 @@ public final class Controller {
         return nil
     }
 
+    /// The optional routes to plan without: those that missed at the rung, or all where no rung remembers a miss.
+    private func missedRoutes(on binding: FocusTracker.Binding, under offsets: OffsetsAnswer) -> Set<Route> {
+        guard binding.beliefs != nil, let rung = binding.surface.roleRung else { return Set(Route.allCases) }
+        return strikes[rung]?.missed(judgedUnder: offsets, app: binding.versions.app) ?? []
+    }
+
     /// A change applies at once, keeping the session (`.sameElement`), so the next command routes around it.
     private func learn(
         from evidence: Executor.RunEvidence, reading: Snapshotter.Reading, on binding: FocusTracker.Binding,
@@ -467,6 +475,9 @@ public final class Controller {
             for item in items { tallies[rung, default: Tally()].count(item) }
         }
         strikes[rung]?.pass(run)
+        if let route = evidence.attribution.missedRoute {
+            strikes[rung, default: Strikes()].miss(route, judgedUnder: observed.after, app: binding.versions.app)
+        }
         guard !teaching.isEmpty || observed.after != model.answer else { return }
         var lesson = Learning.Lesson()
         let before = strikes[rung] ?? Strikes()

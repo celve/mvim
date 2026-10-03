@@ -278,7 +278,8 @@ private extension Sim {
         foundUnreachable = built.unreachable
         let snapshot = built.snapshot
         fieldBreaks = snapshot.breaks
-        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot)
+        let missed = learner.map { $0.strikes.missed(judgedUnder: observed.after, app: $0.versions.app) } ?? []
+        let planned = PhysicalPlanner.planning(logical, snapshot: snapshot, missed: missed)
         let physical = planned.plan
         let before = state.field.mode
 
@@ -769,6 +770,9 @@ extension Sim {
         guard var learner else { return }
         if observed.source.observes {
             for item in attribution.evidence { learner.tally.count(item) }
+        }
+        if let route = attribution.missedRoute {
+            learner.strikes.miss(route, judgedUnder: observed.after, app: learner.versions.app)
         }
         let config = learner.config
         let lesson = Learning.learn(

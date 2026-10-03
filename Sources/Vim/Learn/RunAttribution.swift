@@ -1,6 +1,8 @@
 /// Turns a run's settles into evidence: on the write just before each, on the native key it names, or on offsets.
 public struct RunAttribution: Equatable, Sendable {
     public private(set) var evidence: [Evidence] = []
+    /// The optional route whose settle failed, which is no evidence on any key.
+    public private(set) var missedRoute: Route?
     private var pending: Question?
     /// The next step's plan index: the Executor and the Sim record every step, in order.
     private var index = 0
@@ -22,6 +24,8 @@ public struct RunAttribution: Equatable, Sendable {
                 ? passing(expectation)
                 : failing(expectation, selection: selection, length: length, selectedText: selectedText)
             if let item { evidence.append(item) }
+            // A read that went dark fails any plan alike.
+            if !passed, selection != nil, let route = expectation.route { missedRoute = route }
             pending = nil
         default:
             pending = nil
@@ -95,7 +99,6 @@ extension Expectation {
         if blame.leavesCaret && !observed.isEmpty { return .leftSelection }
         if let longest, observed.count > longest { return .tooLong }
         if blame.offTarget && landing?.matches(observed) == false { return .offTarget }
-        if blame.way?.turned(observed) == true { return .wrongWay }
         return nil
     }
 }

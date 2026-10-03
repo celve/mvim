@@ -159,6 +159,16 @@ public extension Chord {
 
 // MARK: - Expectations
 
+/// A way with fewer presses to a landing that counting reaches without it, so one miss sends plans back to counting (LIN-1686).
+public enum Route: String, CaseIterable, Hashable, Sendable {
+    /// ⌃A or ⇧⌃A, then arrows from the line's start.
+    case lineStart = "line-start"
+    /// ⌃E or ⇧⌃E, then arrows from the line's end.
+    case lineEnd = "line-end"
+    /// ⇧← from the caret across a selection that ends there.
+    case selectBack = "select-back"
+}
+
 /// Where a settle expects the selection: a prediction, or a relation to a read for keys the app lands.
 public enum Landing: Equatable, Sendable {
     case exact(Range<Int>)
@@ -211,6 +221,9 @@ public struct Expectation: Equatable, Sendable {
     /// Where a `.between` span must lie.
     public var within: Range<Int>?
 
+    /// The optional route this settle checks, which a miss ends.
+    public var route: Route?
+
     /// A failed settle demotes `capability` when the field still reads as one of `unmoved` (the key did
     /// nothing), when a key that only ever leaves a caret left a selection, or with `offTarget` when it landed elsewhere.
     public struct Blame: Equatable, Sendable {
@@ -221,37 +234,16 @@ public struct Expectation: Equatable, Sendable {
         public let offTarget: Bool
         /// Failures left unblamed on purpose, logged as neutral evidence.
         public let exemptions: [Exemption]
-        /// The caret the key started from and the way it moves, which a field's lines can cut short but never turn.
-        public let way: Way?
 
         public init(
             capability: Capability, unmoved: [Range<Int>], leavesCaret: Bool = false, offTarget: Bool = false,
-            exemptions: [Exemption] = [], way: Way? = nil
+            exemptions: [Exemption] = []
         ) {
             self.capability = capability
             self.unmoved = unmoved
             self.leavesCaret = leavesCaret
             self.offTarget = offTarget
             self.exemptions = exemptions
-            self.way = way
-        }
-
-        public struct Way: Equatable, Sendable {
-            public let from: Int
-            public let forward: Bool
-            public let selects: Bool
-
-            public init(from: Int, forward: Bool, selects: Bool) {
-                self.from = from
-                self.forward = forward
-                self.selects = selects
-            }
-
-            /// A caret back past where the key started, or a selection no longer anchored there.
-            public func turned(_ observed: Range<Int>) -> Bool {
-                if selects { return (forward ? observed.lowerBound : observed.upperBound) != from }
-                return observed.isEmpty && (forward ? observed.lowerBound < from : observed.lowerBound > from)
-            }
         }
     }
 
@@ -342,12 +334,13 @@ public struct Expectation: Equatable, Sendable {
         }
         let widened = blame.map {
             Blame(capability: $0.capability, unmoved: $0.unmoved + [lower..<lower, upper..<upper], leavesCaret: $0.leavesCaret,
-                  exemptions: $0.exemptions, way: $0.way)
+                  exemptions: $0.exemptions)
         }
         var resolved = Expectation(landing: .exact(lower..<upper), length: length, edge: edge, blame: widened, selectedText: selectedText)
         resolved.longest = longest
         resolved.keeps = keeps
         resolved.within = within
+        resolved.route = route
         return resolved
     }
 }
@@ -369,6 +362,7 @@ extension Expectation {
         if let longest { fields += " max=\(longest)" }
         if let keeps { fields += " keep=\(keeps)" }
         if let within { fields += " in=\(within.lowerBound)..\(within.upperBound)" }
+        if let route { fields += " route=\(route.rawValue)" }
         return fields
     }
 }

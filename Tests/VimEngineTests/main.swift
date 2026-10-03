@@ -2913,13 +2913,11 @@ precondition(Array(keyedDD.steps[0...6]) == [
     .press(.paragraphStart, count: 1),
     .settle(Expectation(
         landing: .exact(4..<4), length: 13,
-        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true, offTarget: true,
-                     way: .init(from: 5, forward: false, selects: false))
+        blame: .init(capability: .lineStartKey, unmoved: [5..<5], leavesCaret: true, offTarget: true)
     )),
     .press(Chord.paragraphEnd.shifted, count: 1),
     .settle(Expectation(
-        landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4], offTarget: true,
-                                                          way: .init(from: 4, forward: true, selects: true))
+        landing: .exact(4..<7), length: 13, blame: .init(capability: .lineEndKey, unmoved: [4..<4], offTarget: true)
     )),
     .press(.selectRight, count: 1),
     .settle(Expectation(selection: 4..<8, length: 13)),
@@ -3375,14 +3373,8 @@ precondition(neutralRun.evidence == [Evidence(.key(.lineStartKey), .neutral, why
 let chipLine = webPhysical("0", text: "ab\ncd", caret: 4, profile: keyProfile, breaks: chromiumBreak)
 precondition(chipLine.steps.contains {
     guard case .settle(let expectation) = $0 else { return false }
-    return judged(expectation, 0..<0) == key(.lineStartKey, .neutral, .paragraphLines)
-        && judged(expectation, 4..<4) == key(.lineStartKey, .refutes, .wrongWay)
-}, "an off-target line key in Chromium rich text is neutral, unless it went the other way")
-let anchoredEnd = Expectation(landing: .exact(2..<5), blame: .init(
-    capability: .lineEndKey, unmoved: [2..<2], exemptions: [.init(.paragraphLines, offTarget: true)],
-    way: .init(from: 2, forward: true, selects: true)))
-precondition(judged(anchoredEnd, 2..<4) == key(.lineEndKey, .neutral, .paragraphLines)
-             && judged(anchoredEnd, 0..<2) == key(.lineEndKey, .refutes, .wrongWay) && judged(anchoredEnd, 0..<7) == key(.lineEndKey, .refutes, .wrongWay))
+    return judged(expectation, 5..<5) == key(.lineStartKey, .neutral, .paragraphLines)
+}, "an off-target line key in Chromium rich text is neutral")
 func writeStrike(_ expectation: Expectation, selection: Range<Int>?, length: Int?) -> Evidence.Why? {
     var run = RunAttribution()
     run.record(.replaceSelection("x"))
@@ -3702,7 +3694,7 @@ swallowedWrites.type("l")
 precondition(swallowedWrites.caret == 7, "then keys move the caret")
 precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
-chipKey.reboundChords = [.paragraphStart: .documentStart]
+chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
 chipKey.type("0")
 precondition(chipKey.settleFailures == 1 && chipKey.blamed.isEmpty)
 precondition(chipKey.attribution.evidence.contains { $0.question == .key(.lineStartKey) && $0.outcome == .neutral && $0.why == .paragraphLines })
@@ -4971,9 +4963,26 @@ precondition(chords(physical("j", text: tenTwice, caret: 5, profile: keyProfile)
 let nearEnd = physical("j", text: tenTwice, caret: 8, profile: keyProfile)
 precondition(nearEnd.traceShape == "P!PP!P2!C" && nearEnd.steps[1] == .settle(Expectation(
     landing: .exact(10..<10), length: 21,
-    blame: .init(capability: .lineEndKey, unmoved: [8..<8], leavesCaret: true, offTarget: true,
-                 way: .init(from: 8, forward: true, selects: false))
+    blame: .init(capability: .lineEndKey, unmoved: [8..<8], leavesCaret: true, offTarget: true)
 )), "the extra ⌃E rides the unblamed hops")
+func routes(_ plan: PhysicalPlan) -> [Route?] {
+    plan.steps.compactMap { step -> Route?? in
+        guard case .settle(let expectation) = step else { return nil }
+        return .some(expectation.route)
+    }
+}
+precondition(routes(nearEnd) == [nil, .lineEnd, .lineEnd], "the settles past the extra ⌃E are an optional route's")
+precondition(routes(physical("k", text: tenTwice, caret: 19, profile: keyProfile)) == [nil, .lineStart, .lineStart])
+precondition(routes(physical("j", text: tenTwice, caret: 2, profile: keyProfile)) == [nil, nil, nil])
+func without(_ missed: Set<Route>, _ keys: String, text: String, caret: Int) -> PhysicalPlan {
+    PhysicalPlanner.planning(LogicalPlanner.plan(RawCommand(keys), state: .initial),
+                             snapshot: FieldSnapshot(capabilities: keyProfile, text: text, selection: caret..<caret), missed: missed).plan
+}
+precondition(chords(without([.lineEnd], "j", text: tenTwice, caret: 8))
+             == [.paragraphEnd, .right] + Array(repeating: .right, count: 8), "a route that missed leaves `j` its start way")
+precondition(chords(without([.lineStart], "k", text: tenTwice, caret: 19))
+             == [.paragraphStart, .left, .paragraphStart] + Array(repeating: .right, count: 8))
+precondition(chords(without([.lineStart, .selectBack], "j", text: tenTwice, caret: 8)).count == 5, "other routes' misses leave this one")
 let tenBreak = ParagraphBreaks(offsets: [10])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 8, profile: keyProfile, breaks: tenBreak))
              == [.paragraphEnd, .right, .paragraphEnd, .selectLeft, .selectLeft, .left, .selectLeft, .right])
@@ -4984,16 +4993,16 @@ precondition(chords(webPhysical("j", text: tenTwice, caret: 6, profile: keyProfi
 let twenty = String(repeating: "word ", count: 20) + "end."
 precondition(chords(physical("fd", text: twenty, caret: 0, profile: keyProfile)) == [.right, .right, .right])
 let farFind = physical("t.", text: twenty, caret: 0, profile: keyProfile)
-precondition(Array(farFind.steps.prefix(4)) == [
-    .press(.paragraphEnd, count: 1),
-    .settle(Expectation(landing: .exact(104..<104), length: 104,
-                        blame: .init(capability: .lineEndKey, unmoved: [0..<0], leavesCaret: true, offTarget: true,
-                                     way: .init(from: 0, forward: true, selects: false)))),
-    .press(.left, count: 2), .settle(Expectation(landing: .exact(102..<102), length: 104)),
-], "⌃E is blamed in a settle of its own")
-precondition(chords(physical("t.", text: twenty, caret: 90, profile: keyProfile)) == [.paragraphEnd, .left, .left])
-precondition(chords(physical("t.", text: twenty, caret: 91, profile: keyProfile)) == Array(repeating: .right, count: 11),
-             "short of a settle's worth of presses it counts from the caret")
+var routedEnd = Expectation(landing: .exact(102..<102), length: 104)
+routedEnd.route = .lineEnd
+precondition(Array(farFind.steps.prefix(3)) == [.press(.paragraphEnd, count: 1), .press(.left, count: 2), .settle(routedEnd)],
+             "one settle, marked as an optional route's")
+precondition(routedEnd.traceFields == "sel=102..102 len=104 route=line-end")
+precondition(chords(physical("t.", text: twenty, caret: 98, profile: keyProfile)) == [.paragraphEnd, .left, .left])
+precondition(chords(physical("t.", text: twenty, caret: 99, profile: keyProfile)) == Array(repeating: .right, count: 3),
+             "a tie counts from the caret")
+precondition(chords(without([.lineEnd], "t.", text: twenty, caret: 0)) == Array(repeating: .right, count: 102))
+precondition(chords(without([.lineStart], "t.", text: twenty, caret: 0)) == [.paragraphEnd, .left, .left])
 let wordFirst = "aw" + String(repeating: "x", count: 100)
 precondition(chords(physical("Fw", text: wordFirst, caret: 101, profile: keyProfile)) == [.paragraphStart, .right])
 precondition(chords(physical("Fw", text: twenty, caret: 99, profile: keyProfile)) == Array(repeating: .left, count: 4))
@@ -5013,11 +5022,14 @@ precondition(chords(physical("dt.", text: twenty, caret: 0, profile: keyProfile)
              == [Chord.paragraphEnd.shifted, .selectLeft, .deleteBack])
 precondition(chords(physical("x", text: twenty, caret: 3, profile: keyProfile)) == [.selectRight, .deleteBack])
 let chipInLine = ParagraphBreaks(hidden: [.init(at: 3, text: "LIN-1 chip", kind: .atom)])
-let chipFar = "ab\u{2060}" + String(repeating: "c", count: 30) + ". and more"
-precondition(chords(webPhysical("dt.", text: chipFar, caret: 0, profile: keyProfile, breaks: chipInLine))
-             == Array(repeating: .selectRight, count: 33) + [.deleteBack], "⇧⌃E would stop at the chip")
-precondition(chords(webPhysical("dt.", text: chipFar, caret: 0, profile: keyProfile, breaks: ParagraphBreaks()))
-             == [.paragraphStart, Chord.paragraphEnd.shifted] + Array(repeating: .selectLeft, count: 10) + [.deleteBack])
+precondition(chords(webPhysical("dt.", text: "ab\u{2060}cd. and more", caret: 0, profile: keyProfile, breaks: chipInLine))
+             == Array(repeating: .selectRight, count: 5) + [.deleteBack], "⇧⌃E would stop at the chip")
+precondition(chords(without([.lineStart], "d^", text: twenty, caret: 60)) == Array(repeating: .selectLeft, count: 60) + [.deleteBack])
+precondition(chords(without([.lineEnd], "dt.", text: twenty, caret: 0)) == Array(repeating: .selectRight, count: 103) + [.deleteBack])
+precondition(chords(without([.selectBack], "X", text: twenty, caret: 50)) == [.left, .selectRight, .deleteBack])
+precondition(routes(physical("d^", text: twenty, caret: 60, profile: keyProfile)).first == .some(.lineStart)
+             && routes(physical("X", text: twenty, caret: 50, profile: keyProfile)).first == .some(.selectBack)
+             && routes(physical("x", text: twenty, caret: 3, profile: keyProfile)).first == .some(nil))
 for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirst(50))), ("dF ", 99, String(twenty.prefix(95) + twenty.dropFirst(99))),
                             ("d^", 60, String(twenty.dropFirst(60))), ("dt.", 0, ".")] {
     var host = Sim(text: twenty, caret: caret, profile: keyProfile)
@@ -5025,51 +5037,73 @@ for (keys, caret, left) in [("X", 50, String(twenty.prefix(49) + twenty.dropFirs
     host.type(keys)
     precondition(host.text == left && host.settleFailures == 0, keys)
 }
-let elevenLetters = "abcdefghijk\ncd"
-precondition(chords(webPhysical("de", text: elevenLetters, caret: 0, profile: removing([.lineStartKey], from: keyProfile),
-                                breaks: ParagraphBreaks(offsets: [11])))
-             == Array(repeating: .selectRight, count: 11) + [.deleteBack], "⇧⌃E's ⇧→ ← at a paragraph's start would cost more")
-precondition(chords(webPhysical("de", text: elevenLetters, caret: 0, profile: keyProfile, breaks: ParagraphBreaks(offsets: [11])))
+precondition(chords(webPhysical("de", text: "ab\ncd", caret: 0, profile: removing([.lineStartKey], from: keyProfile),
+                                breaks: ParagraphBreaks(offsets: [2])))
+             == [.selectRight, .selectRight, .deleteBack], "⇧⌃E's ⇧→ ← at a paragraph's start would cost more")
+precondition(chords(webPhysical("de", text: "abcd\ncd", caret: 0, profile: keyProfile, breaks: ParagraphBreaks(offsets: [4])))
              == [.paragraphStart, Chord.paragraphEnd.shifted, .deleteBack])
-// A field that ignores or rebinds a line key fails the first command pressing it, which strikes the key, and then counts.
-for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
-    (twenty, "t.", 0, Chord.paragraphEnd, Chord.paragraphStart, Capability.lineEndKey, twenty, 102),
-    (wordFirst, "Fw", 101, .paragraphStart, .paragraphEnd, .lineStartKey, wordFirst, 1),
-    (twenty, "d^", 60, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted, .lineStartKey, String(twenty.dropFirst(60)), 0),
-    (twenty, "dt.", 0, Chord.paragraphEnd.shifted, Chord.paragraphStart.shifted, .lineEndKey, ".", 0),
-] {
-    for rebound in [false, true] {
-        var host = Sim(text: text, caret: caret, profile: keyProfile)
-        host.emulatesKeys = true
-        if rebound { host.reboundChords = [ignored: opposite] } else { host.ignoredChords = [ignored] }
-        host.learn(with: Sim.Learner(probed: keyProfile))
-        host.type(keys)
-        precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) \(rebound)")
-        guard !rebound else { continue }
-        host.type(keys)
-        precondition(host.settleFailures == 1 && host.text == left && host.caret == landing, "\(keys) \(rebound)")
+
+var strayed = RunAttribution()
+strayed.record(.press(.paragraphEnd, count: 1))
+strayed.record(.settle(routedEnd), passed: false, selection: 0..<0, length: 104)
+precondition(strayed.missedRoute == .lineEnd && strayed.evidence.isEmpty, "a route's miss is no evidence on its key")
+var dark = RunAttribution()
+dark.record(.settle(routedEnd), passed: false, selection: nil, length: 104)
+var landed = RunAttribution()
+landed.record(.settle(routedEnd), passed: true, selection: 102..<102, length: 104)
+precondition(dark.missedRoute == nil && landed.missedRoute == nil, "a read that went dark is not the route's miss")
+var missedRoutes = Strikes()
+missedRoutes.miss(.lineEnd, judgedUnder: .value, app: "1")
+missedRoutes.pass([Evidence(.key(.lineEndKey), .supports(nil), why: .settled, seen: .settle(0))])
+precondition(missedRoutes.missed(judgedUnder: .value, app: "1") == [.lineEnd] && !missedRoutes.isEmpty, "no pass brings it back")
+precondition(missedRoutes.missed(judgedUnder: .textContent, app: "1").isEmpty && missedRoutes.missed(judgedUnder: .value, app: "2").isEmpty)
+
+// softlash/LIN-1686 scripts/route-faults runs these against `main`, which counts and never fails them.
+for rich in [false, true] {
+    for (line, keys, caret, key, opposite, further, left, landing) in [
+        (twenty, "t.", 0, Chord.paragraphEnd, Chord.paragraphStart, Chord.documentEnd, twenty, 102),
+        (wordFirst, "Fw", 101, .paragraphStart, .paragraphEnd, .documentStart, wordFirst, 1),
+        (twenty, "d^", 60, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted, Chord.documentStart.shifted,
+         String(twenty.dropFirst(60)), 0),
+        (twenty, "dt.", 0, Chord.paragraphEnd.shifted, Chord.paragraphStart.shifted, Chord.documentEnd.shifted, ".", 0),
+    ] {
+        for acts in [nil, opposite, further] {
+            var host = Sim(text: "prefix\n" + line + "\nnext", caret: caret + 7, profile: keyProfile)
+            host.emulatesKeys = true
+            if rich {
+                host.emptyParagraphs = true
+                host.readModel = .textContent
+            }
+            if let acts { host.reboundChords = [key: acts] } else { host.ignoredChords = [key] }
+            host.learn(with: Sim.Learner(chromium: rich, probed: keyProfile))
+            let fault = "\(keys) rich \(rich) as \(acts.map { "\($0)" } ?? "nothing")"
+            host.type(keys)
+            precondition(host.settleFailures == 1 && host.blamed.isEmpty && !host.learner!.strikes.isEmpty, fault)
+            for _ in 0..<2 {
+                host.refocus(.sameElement, text: "prefix\n" + line + "\nnext", caret: caret + 7)
+                host.type(keys)
+                precondition(host.settleFailures == 1 && host.text == "prefix\n" + left + "\nnext" && host.caret == landing + 7, fault)
+            }
+        }
     }
 }
-// In Chromium rich text, where a landing elsewhere can be a chip's, a key that did nothing or went the other way still strikes.
-for (text, keys, caret, ignored, opposite, blamed, left, landing) in [
-    (twenty, "t.", 0, Chord.paragraphEnd, Chord.paragraphStart, Capability.lineEndKey, twenty, 102),
-    (wordFirst, "Fw", 101, .paragraphStart, .paragraphEnd, .lineStartKey, wordFirst, 1),
-    (twenty, "d^", 60, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted, .lineStartKey, String(twenty.dropFirst(60)), 0),
-    (twenty, "dt.", 0, Chord.paragraphEnd.shifted, Chord.paragraphStart.shifted, .lineEndKey, ".", 0),
-] {
-    for rebound in [false, true] {
-        var host = Sim(text: text + "\nnext", caret: caret, profile: keyProfile)
-        host.emulatesKeys = true
-        host.emptyParagraphs = true
-        host.readModel = .textContent
-        if rebound { host.reboundChords = [ignored: opposite] } else { host.ignoredChords = [ignored] }
-        host.learn(with: Sim.Learner(chromium: true, probed: keyProfile))
-        host.type(keys)
-        precondition(host.settleFailures == 1 && host.blamed == [blamed] && !host.profile.has(blamed), "\(keys) \(rebound) in rich text")
-        host.type(keys)
-        precondition(host.settleFailures == 1 && host.text == left + "\nnext" && host.caret == landing, "\(keys) \(rebound) in rich text")
-    }
-}
+var lineEnd = Sim(text: tenTwice, caret: 10, profile: keyProfile)
+lineEnd.emulatesKeys = true
+lineEnd.ignoredChords = [.paragraphEnd]
+lineEnd.learn(with: Sim.Learner(probed: keyProfile))
+lineEnd.type("j")
+precondition(lineEnd.settleFailures == 1 && lineEnd.caret == 11, "`j`'s way by the line's end misses where ⌃E does nothing")
+lineEnd.refocus(.sameElement, text: tenTwice, caret: 10)
+lineEnd.type("j")
+precondition(lineEnd.settleFailures == 1 && lineEnd.caret == 21)
+var noShiftLeft = Sim(text: twenty, caret: 50, profile: keyProfile)
+noShiftLeft.emulatesKeys = true
+noShiftLeft.ignoredChords = [.selectLeft]
+noShiftLeft.learn(with: Sim.Learner(probed: keyProfile))
+noShiftLeft.type("X")
+precondition(noShiftLeft.settleFailures == 1 && noShiftLeft.text == twenty)
+noShiftLeft.type("X")
+precondition(noShiftLeft.settleFailures == 1 && noShiftLeft.text == String(twenty.prefix(49) + twenty.dropFirst(50)))
 
 let paste = webPhysical("\"+p", text: "x", caret: 0, profile: keyProfile, breaks: ParagraphBreaks())
 precondition(chords(paste) == [.selectRight, .right] && paste.traceShape.hasPrefix("PPV"), "a put's keys go before ⌘V unsettled")
