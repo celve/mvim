@@ -2678,6 +2678,9 @@ precondition(typingTarget(of: menuRow, caretOn: textArea) == nil, "a rich editor
 let unread = FakeElement(nil, in: menuPage)
 unread.owns = [menuList]
 precondition(typingTarget(of: menuRow, caretOn: unread) == nil, "a failed read of the field")
+let owningGroup = FakeElement("AXGroup", in: menuPage)
+owningGroup.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretOn: owningGroup) == nil, "the caret's node is no text field")
 
 // Focus really elsewhere: Chromium leaves the caret on the text inside the field it left.
 let leftBehind = FakeElement("AXStaticText", in: FakeElement("AXGroup", in: menuInput))
