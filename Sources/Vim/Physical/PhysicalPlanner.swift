@@ -17,8 +17,8 @@
 ///    adding arrow keys at a Chromium paragraph end, where a write lands on
 ///    the next paragraph. Or **B** (read, no write): the same exact math,
 ///    actuated as counted keystrokes and verified by read-back — reads
-///    turn key synthesis into a dumb actuator. Where a `Route` presses
-///    fewer keys than counting, B takes it until it misses once.
+///    turn key synthesis into a dumb actuator. Lanes 2 and B take a
+///    `Route` where it presses fewer keys than counting, until it misses.
 /// 4. **C** (blind): Cocoa-approximate chords plus clipboard captures for
 ///    anything needing content.
 ///
