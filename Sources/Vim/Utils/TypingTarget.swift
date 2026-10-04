@@ -49,7 +49,7 @@ public enum TypingTarget {
         let held = read(field)
         // The caret's node is a control only while that control has the real focus: left behind, it reads on the text inside.
         guard let heldRole = held.role, textRoles.contains(heldRole), !held.owns.isEmpty else { return nil }
-        // A rich editor's caret reads the same with the focus or without, and unlike a control the editor has children.
+        // An editor's caret says nothing of focus: with children it is refused; empty, it passes, a known limit (LIN-1742).
         guard !hasChildren(field) else { return nil }
         var ancestor = reported
         var reading: Reading<Node>? = focus
