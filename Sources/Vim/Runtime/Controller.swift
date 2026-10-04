@@ -225,7 +225,7 @@ public final class Controller {
                         return false
                     }
                 } else {
-                    guard let focused = AX.focusedElement() else {
+                    guard let focused = tracker.focusedField() else {
                         drop(completed, commandSeq, "no-focused-element")
                         return false
                     }

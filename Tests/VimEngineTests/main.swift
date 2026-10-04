@@ -2613,6 +2613,115 @@ let spent = WebAreaWalk.walk(from: 0, clock: { walkClock += 1; return walkClock 
 }
 precondition(spent.stop == .budget && spent.hops == 1 && walkReads == 1, "the field itself is always read")
 
+// MARK: - The typing target (LIN-1742)
+
+final class FakeElement: Equatable {
+    let role: String?
+    let parent: FakeElement?
+    var owns: [FakeElement] = []
+    var chromium = true
+    var hasChildren = false
+
+    init(_ role: String?, in parent: FakeElement? = nil) {
+        self.role = role
+        self.parent = parent
+    }
+
+    static func == (a: FakeElement, b: FakeElement) -> Bool { a === b }
+}
+func nested(_ role: String, _ depth: Int, in parent: FakeElement) -> FakeElement {
+    (0..<depth).reduce(parent) { node, _ in FakeElement(role, in: node) }
+}
+var typingReads = 0
+var caretReads = 0
+func typingTarget(of reported: FakeElement, caretOn node: FakeElement?) -> FakeElement? {
+    typingReads = 0
+    caretReads = 0
+    return TypingTarget.field(for: reported, read: { node in
+        typingReads += 1
+        return TypingTarget.Reading(role: node.role, parent: node.parent, owns: node.owns, isChromium: node.chromium)
+    }, caret: { _ in
+        caretReads += 1
+        return node
+    }, hasChildren: { $0.hasChildren })
+}
+
+let menuPage = FakeElement("AXWebArea")
+let menuInput = FakeElement("AXComboBox", in: menuPage)
+let menuList = FakeElement("AXList", in: menuPage)
+let menuRow = FakeElement("AXStaticText", in: menuList)
+menuInput.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretOn: menuInput) == menuInput && typingReads == 2)
+precondition(typingTarget(of: menuList, caretOn: menuInput) == menuInput, "the owned container itself")
+precondition(typingTarget(of: menuRow, caretOn: nil) == nil && typingReads == 1, "no caret in the page")
+precondition(typingTarget(of: menuInput, caretOn: menuInput) == nil && typingReads == 1 && caretReads == 0,
+             "a text field stands for itself")
+menuRow.chromium = false
+precondition(typingTarget(of: menuRow, caretOn: menuInput) == nil && typingReads == 1 && caretReads == 0,
+             "only Chromium defines AXOwns this way")
+menuRow.chromium = true
+precondition(typingTarget(of: FakeElement(nil, in: menuList), caretOn: menuInput) == nil && caretReads == 0, "a failed read")
+precondition(typingTarget(of: menuPage, caretOn: menuInput) == nil && typingReads == 1 && caretReads == 0, "the page itself")
+
+let groupedRow = FakeElement("AXStaticText", in: FakeElement("AXGroup", in: menuList))
+precondition(typingTarget(of: groupedRow, caretOn: menuInput) == menuInput && typingReads == 3, "a row in a group, as Linear's")
+precondition(typingTarget(of: nested("AXRow", TypingTarget.ownerHops, in: menuList), caretOn: menuInput) == menuInput)
+precondition(typingTarget(of: nested("AXRow", TypingTarget.ownerHops + 1, in: menuList), caretOn: menuInput) == nil)
+let framed = FakeElement("AXStaticText", in: FakeElement("AXWebArea", in: menuList))
+precondition(typingTarget(of: framed, caretOn: menuInput) == nil, "a frame's row is not the outer field's")
+
+let textArea = FakeElement("AXTextArea", in: menuPage)
+textArea.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretOn: textArea) == textArea)
+textArea.hasChildren = true
+precondition(typingTarget(of: menuRow, caretOn: textArea) == nil, "a rich editor's caret does not say whether it has the focus")
+let unread = FakeElement(nil, in: menuPage)
+unread.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretOn: unread) == nil, "a failed read of the field")
+let owningGroup = FakeElement("AXGroup", in: menuPage)
+owningGroup.owns = [menuList]
+precondition(typingTarget(of: menuRow, caretOn: owningGroup) == nil, "the caret's node is no text field")
+
+// Focus really elsewhere: Chromium leaves the caret on the text inside the field it left.
+let leftBehind = FakeElement("AXStaticText", in: FakeElement("AXGroup", in: menuInput))
+let pageButton = FakeElement("AXButton", in: menuPage)
+precondition(typingTarget(of: pageButton, caretOn: leftBehind) == nil && typingReads == 1 && caretReads == 0)
+precondition(typingTarget(of: FakeElement("AXStaticText", in: menuList), caretOn: leftBehind) == nil && typingReads == 2,
+             "a row of the field's own list with the real focus")
+precondition(typingTarget(of: FakeElement("AXCell", in: menuList), caretOn: FakeElement("AXGroup", in: menuInput)) == nil,
+             "and an empty field's left-behind caret")
+for role in ["AXButton", "AXLink"] {
+    precondition(typingTarget(of: FakeElement(role, in: menuList), caretOn: menuInput) == nil && caretReads == 0,
+                 "a button or a link is never a highlighted row")
+}
+let checkbox = FakeElement("AXCheckBox", in: menuPage)
+precondition(typingTarget(of: checkbox, caretOn: menuInput) == nil && typingReads == 3, "the field's list does not hold it")
+let plainInput = FakeElement("AXTextField", in: menuPage)
+precondition(typingTarget(of: checkbox, caretOn: plainInput) == nil && typingReads == 2, "a field that owns nothing")
+precondition(typingTarget(of: FakeElement("AXStaticText", in: FakeElement("AXList", in: menuPage)), caretOn: menuPage) == nil,
+             "a list no field owns")
+
+// A row destroyed mid-read misses once; a bound field is looked up again on a fresh focus read.
+var targetLookups = 0
+func target(of reported: FakeElement, bound: FakeElement?, refocus: FakeElement?) -> FakeElement {
+    targetLookups = 0
+    return TypingTarget.target(of: reported, bound: bound, field: { node in
+        targetLookups += 1
+        return typingTarget(of: node, caretOn: menuInput)
+    }, refocus: { refocus })
+}
+let deadRow = FakeElement(nil, in: menuList)
+precondition(target(of: menuInput, bound: menuInput, refocus: nil) == menuInput && targetLookups == 0)
+precondition(target(of: menuRow, bound: nil, refocus: nil) == menuInput && targetLookups == 1)
+precondition(target(of: menuRow, bound: menuInput, refocus: nil) == menuInput && targetLookups == 1)
+precondition(target(of: deadRow, bound: nil, refocus: menuRow) == deadRow && targetLookups == 1, "nothing bound to keep")
+precondition(target(of: deadRow, bound: menuInput, refocus: menuRow) == menuInput && targetLookups == 2)
+precondition(target(of: deadRow, bound: menuInput, refocus: menuInput) == menuInput && targetLookups == 1)
+precondition(target(of: deadRow, bound: menuInput, refocus: deadRow) == deadRow && targetLookups == 1, "focus did not move")
+precondition(target(of: deadRow, bound: menuInput, refocus: nil) == deadRow)
+precondition(target(of: pageButton, bound: menuInput, refocus: pageButton) == pageButton && targetLookups == 1)
+precondition(target(of: deadRow, bound: plainInput, refocus: menuRow) == deadRow && targetLookups == 2, "another field's row")
+
 // MARK: - The learner's commit rule
 
 // The learner writes at the ROLE learnRung, never the identifier rung: a key per

@@ -376,6 +376,12 @@ public enum AX {
         copyElement(node, kAXParentAttribute)
     }
 
+    /// The node holding the selection's start in `element`'s page, which Chromium answers from any element of the page.
+    public static func caretNode(of element: AXUIElement) -> AXUIElement? {
+        guard let selection = textMarkerRange(copyAttribute(element, kAXSelectedTextMarkerRangeAttribute)) else { return nil }
+        return node(at: AXTextMarkerRangeCopyStartMarker(selection), in: element)
+    }
+
     /// The field's start marker, from which `markerLength(from:to:end:in:)` measures.
     public static func fieldStart(of element: AXUIElement) -> AXTextMarker? {
         fieldMarkers(of: element)?.start
