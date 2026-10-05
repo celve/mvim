@@ -529,7 +529,12 @@ public final class Controller {
         let collapse = PhysicalPlanner.collapse(
             read.range, side: side, paragraphs: paragraphs, snapshot: snapshot, profile: binding.capabilities
         )
-        executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
+        // Keys the field ignored fail their settle, and a write lane then writes the start as it was read.
+        if !executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs),
+           binding.capabilities.has(.writeSelection) {
+            let asRead = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
+            executor.execute(asRead, on: binding.element, state: &state, paragraphs: paragraphs)
+        }
         // The write that stranded this may be the one that lies, so confirm.
         return becomesCaret(binding.element, paragraphs: paragraphs)
     }

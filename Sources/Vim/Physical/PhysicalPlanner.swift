@@ -155,7 +155,7 @@ public extension PhysicalPlanner {
         var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil)
         // A `<br>` Linear drew for its caret leaves in its own time, and every offset behind it moves then.
         let held = snapshot.flatMap { $0.drawnBreak == nil ? $0 : nil }
-        // In `AXValue` offsets a boundary's two sides differ, so the write steps back and the settle checks as a command's do.
+        // In `AXValue` offsets a paragraph's end and the next one's start differ, as they do in a command's plan.
         if let held, let breaks = held.breaks, let resolved = breaks.valueRange(start..<start, side: { _ in side }),
            resolved.upperBound <= (held.text?.utf16.count ?? .max) {
             start = resolved.lowerBound
@@ -163,13 +163,13 @@ public extension PhysicalPlanner {
         }
         var context = Context(snapshot: field)
         context.unknown.insert(.length)
+        let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
+        guard profile.has(.writeSelection) else { return PhysicalPlan(steps: keys) }
         // A folded write plans nothing where the caret is already placed, which a selection there is not.
-        var stranded = context
-        stranded.selection = nil
-        var steps = collapse(to: start, context: context, from: stranded, profile: profile)
-        // Settled, so neither the caller's read nor the next command's write overtakes keys pressed after a write.
-        if case .press? = steps.last { steps += settle(context, profile: profile) }
-        return PhysicalPlan(steps: steps)
+        context.selection = nil
+        let written = write(start..<start, context: context)
+        // Where a write needs keys to finish, as at a paragraph's end, ← lands the selection's start itself (LIN-1532).
+        return PhysicalPlan(steps: presses(written) ? keys : written)
     }
 
     /// Takes the drawn cursor off a field focus has left, by a write alone: a key would reach the field focus went to.
@@ -578,13 +578,11 @@ private extension PhysicalPlanner {
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
-    static func collapse(
-        to start: Int, context: Context, from origin: Context? = nil, profile: CapabilityProfile
-    ) -> [PhysicalStep] {
+    static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
         let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : [])
         // Settled, so a later AX write cannot overtake the ←; in a write lane `planning` settles before the next write.
         guard profile.has(.writeSelection) else { return keys + settle(context, profile: profile) }
-        return keyed(write(start..<start, context: origin ?? context), or: keys, context: context)
+        return keyed(write(start..<start, context: context), or: keys, context: context)
     }
 
     /// A folded field's write that needs arrows after it gives way to the key lane's `keys` where they press no more (LIN-1685).

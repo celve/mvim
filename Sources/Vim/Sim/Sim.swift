@@ -322,12 +322,16 @@ private extension Sim {
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
         let paragraphs = snapshot.breaks != nil
+        let read = readSelection
         // As the Controller: the markers must answer the read, and `AXValue` still read as the snapshot's did.
         let current = paragraphs && (markers || emptyParagraphs) && shownValue == value
-        executeAside(PhysicalPlanner.collapse(
-            readSelection, side: current ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
+        let collapse = PhysicalPlanner.collapse(
+            read, side: current ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
             snapshot: current ? snapshot : nil, profile: profile
-        ))
+        )
+        if !executeAside(collapse), profile.has(.writeSelection) {
+            executeAside(PhysicalPlanner.collapse(read, paragraphs: paragraphs, profile: profile))
+        }
         return readSelection.isEmpty
     }
 
@@ -605,11 +609,13 @@ private extension Sim {
         }
     }
 
-    /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them.
-    mutating func executeAside(_ plan: PhysicalPlan) {
+    /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them; false when a step failed.
+    @discardableResult
+    mutating func executeAside(_ plan: PhysicalPlan) -> Bool {
         let evidence = attribution
-        _ = execute(plan.steps)
+        let aborted = execute(plan.steps)
         attribution = evidence
+        return aborted == nil
     }
 
     /// The twin of the real executor's surviving-commit scan.
