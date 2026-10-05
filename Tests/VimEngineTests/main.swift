@@ -1325,7 +1325,7 @@ precondition(listItems.valueRange(0..<0) { _ in .start(skipping: 2) } == 2..<2, 
 precondition(listItems.valueRange(0..<0) { _ in nil } == nil, "a field's start nothing resolves is unknown too")
 precondition(listItems.valueRange(0..<4) { $0 == .lower ? .start(skipping: 2) : .end } == 2..<4)
 
-// LIN-1643: a stranded selection's start resolves through its side, so its collapse is planned as a command's caret is.
+// LIN-1643: a stranded selection's start resolves through its side, and ← collapses it where a write would need keys.
 func strandedPlan(
     _ selection: Range<Int>, _ side: ParagraphBreaks.Side?, text: String = "ab\ncd\nef", breaks: ParagraphBreaks = paras,
     profile: CapabilityProfile
@@ -3891,7 +3891,8 @@ strandedMarkers.reboundChords = [.selectRight: .selectWordRight]
 strandedMarkers.type("cw")
 strandedMarkers.reboundChords = [:]
 strandedMarkers.type("X")
-precondition(strandedMarkers.text == "ab cdX\nef gh", "LIN-1643: a repair reads its start's side from the markers, and steps back")
+precondition(strandedMarkers.text == "ab cdX\nef gh",
+             "LIN-1643: a repair reads its start's side from the markers, and collapses onto that paragraph's end")
 
 // MARK: - Empty paragraphs (LIN-1612)
 
@@ -4102,7 +4103,7 @@ let atStart = strandedChange(["ab cd", "ef gh"], caret: 6, profile: keyProfile, 
 precondition(atStart.text == "ab cd\nXef gh" && atStart.settleFailures == 1, "and presses no ⇧← above a paragraph's start")
 let numbered = [Sim.ListLine(marker: "1."), Sim.ListLine(marker: "2."), Sim.ListLine()]
 precondition(strandedChange(["one", "two three", "four"], caret: 3, profile: writeKeys, lines: numbered).text
-             == "oneX\ntwo three\nfour", "a list item's end is reached from inside it, as a command's write reaches it")
+             == "oneX\ntwo three\nfour", "the snapshot's text tells that a write to a list item's end needs keys, so ← collapses there too")
 precondition(strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4]).text
              == "ab x\nXcd ef\ngh", "the caret Linear drew at the code span ended its paragraph with a <br>, so the snapshot is not used")
 let afterChip = strandedChange(["ab \u{2060}", "ef gh"], caret: 4, profile: keyProfile, lines: [Sim.ListLine(), Sim.ListLine()])
