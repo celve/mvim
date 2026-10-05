@@ -1342,12 +1342,15 @@ precondition(strandedPlan(2..<4, .end, profile: axProfile) == PhysicalPlan(
 precondition(strandedPlan(2..<4, .start(skipping: 0), profile: axProfile) == PhysicalPlan(.setSelection(2..<2)))
 precondition(strandedPlan(2..<2, .end, profile: axProfile).steps.count == 4, "a selected break alone starts at the end too")
 precondition(strandedPlan(1..<4, .end, profile: axProfile) == PhysicalPlan(.setSelection(1..<1)), "off a boundary the side says nothing")
+let drawnAhead = FieldSnapshot(capabilities: axProfile, text: "ab\ncd\nef", breaks: paras, drawnBreak: 4)
 for unresolved in [
     strandedPlan(2..<4, nil, profile: axProfile),
     PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, profile: axProfile),
     strandedPlan(2..<4, .end, text: "a", profile: axProfile),
+    PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, snapshot: drawnAhead, profile: axProfile),
 ] {
-    precondition(unresolved == PhysicalPlan(.setSelection(2..<2)), "no side, no snapshot or a start past its text: written as read")
+    precondition(unresolved == PhysicalPlan(.setSelection(2..<2)),
+                 "no side, no snapshot, a start past its text or a <br> drawn for the caret: written as read")
 }
 precondition(strandedPlan(2..<4, .end, profile: readProfile) == PhysicalPlan(
     .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1),
@@ -3875,6 +3878,17 @@ appended.type("A")
 precondition(appended.caret == 2 && appended.settleFailures == 0 && appended.state.field.mode == .insert)
 misplaced.type("A")
 precondition(misplaced.caret == 3 && misplaced.settleFailures == 1, "the next paragraph's start reads the same offset")
+var strandedMarkers = Sim(text: "ab cd\nef gh", caret: 5, profile: axProfile)
+strandedMarkers.reads = omitsBreaks
+strandedMarkers.markers = true
+strandedMarkers.writesInReadOffsets = true
+strandedMarkers.emulatesKeys = true
+strandedMarkers.readModel = .textContent
+strandedMarkers.reboundChords = [.selectRight: .selectWordRight]
+strandedMarkers.type("cw")
+strandedMarkers.reboundChords = [:]
+strandedMarkers.type("X")
+precondition(strandedMarkers.text == "ab cdX\nef gh", "LIN-1643: a repair reads its start's side from the markers, and steps back")
 
 // MARK: - Empty paragraphs (LIN-1612)
 
@@ -4083,7 +4097,10 @@ let numbered = [Sim.ListLine(marker: "1."), Sim.ListLine(marker: "2."), Sim.List
 precondition(strandedChange(["one", "two three", "four"], caret: 3, profile: writeKeys, lines: numbered).text
              == "oneX\ntwo three\nfour", "a list item's end is reached from inside it, as a command's write reaches it")
 precondition(strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4]).text
-             == "ab x\nXcd ef\ngh", "the caret Linear drew at the code span left AXValue with it, so the snapshot is not used")
+             == "ab x\nXcd ef\ngh", "the caret Linear drew at the code span ended its paragraph with a <br>, so the snapshot is not used")
+let afterChip = strandedChange(["ab \u{2060}", "ef gh"], caret: 4, profile: keyProfile, lines: [Sim.ListLine(), Sim.ListLine()])
+precondition(afterChip.text == "ab \u{2060}X\nef gh" && afterChip.settleFailures == 2,
+             "nor once AXValue has changed, here by the chip's image: the settle expects the selection's offset, short of the chip's <br>")
 var strandedToDo = blankSim(["one", "", "two"], caret: 4, profile: writeKeys)
 strandedToDo.listLines = [Sim.ListLine(), Sim.ListLine(leaves: 2, checkbox: true), Sim.ListLine()]
 strandedToDo.swallowsReplace = true

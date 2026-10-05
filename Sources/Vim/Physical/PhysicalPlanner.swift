@@ -153,11 +153,13 @@ public extension PhysicalPlanner {
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
         var start = selection.lowerBound
         var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil)
+        // A `<br>` Linear drew for its caret leaves in its own time, and every offset behind it moves then.
+        let held = snapshot.flatMap { $0.drawnBreak == nil ? $0 : nil }
         // In `AXValue` offsets a boundary's two sides differ, so the write steps back and the settle checks as a command's do.
-        if let breaks = snapshot?.breaks, let resolved = breaks.valueRange(start..<start, side: { _ in side }),
-           resolved.upperBound <= (snapshot?.text?.utf16.count ?? .max) {
+        if let held, let breaks = held.breaks, let resolved = breaks.valueRange(start..<start, side: { _ in side }),
+           resolved.upperBound <= (held.text?.utf16.count ?? .max) {
             start = resolved.lowerBound
-            field = FieldSnapshot(capabilities: profile, text: snapshot?.text, selection: resolved, breaks: breaks)
+            field = FieldSnapshot(capabilities: profile, text: held.text, selection: resolved, breaks: breaks)
         }
         var context = Context(snapshot: field)
         context.unknown.insert(.length)
