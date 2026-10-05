@@ -72,10 +72,12 @@ public struct UnreachableScan<Node> {
             if read.classes.contains(UnreachableLines.blockClass) {
                 if read.quoteLevel > 0 {
                     closed = true
-                } else if read.children.count > 1, let last = read.children.last {
+                } else if read.children.count > 1, let first = read.children.first, let last = read.children.last {
                     let path = [index, read.children.count - 1]
-                    guard let code = self.read(last, at: path) else { return nil }
-                    if DrawnCaret.isCode(code.subrole) {
+                    guard let lead = self.read(first, at: [index, 0]), let code = self.read(last, at: path) else { return nil }
+                    // A code block: its controls, then its code, which is an empty group once the code is deleted.
+                    if lead.classes.contains(UnreachableLines.controlsClass),
+                       DrawnCaret.isCode(code.subrole) || DrawnCaret.isEmptyGroup(subrole: code.subrole, children: code.children.count) {
                         guard let lower = start(of: root, at: [index]), let upper = start(of: last, at: path) else { return nil }
                         controls.append(lower..<upper)
                         closed = true

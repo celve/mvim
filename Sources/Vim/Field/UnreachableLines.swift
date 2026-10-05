@@ -117,6 +117,9 @@ public enum UnreachableLines {
     /// Linear's own DOM class on a code block, a quote and a collapsible section, which no other editor's quote carries.
     public static let blockClass = "block-node"
 
+    /// Linear's class on the group that holds a code block's language label and buttons, before its code.
+    public static let controlsClass = "node-controls"
+
     /// Lines shaped like a marker or starting with one and a space, lines starting as Linear's chips do, and drawn carets'.
     public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil) -> Candidates {
         let leaves = raw.map(leafCounts) ?? [:]

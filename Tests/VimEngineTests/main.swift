@@ -4118,14 +4118,14 @@ precondition(chipBreaks.withAtoms("Ta\nN", at: 0..<4) == "Tabc\nN" && chipBreaks
 precondition(chipBreaks.replacing(1..<2, with: "") == ParagraphBreaks(offsets: [1]), "deleting the chip takes its <br>")
 
 /// `path/role/start/end` per node, roles abbreviated, as softlash/LIN-1652 scripts/list-probe prints a tree; B is one of
-/// Linear's `block-node` groups and Q one that is a quote, which `linear` false leaves without the class.
+/// Linear's `block-node` groups, Q one that is a quote and N a `node-controls` group; `linear` false leaves their classes out.
 func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
     let roles: [Character: (String, String?)] = [
         "L": ("AXList", "AXContentList"), "G": ("AXGroup", nil), "T": ("AXStaticText", nil), "H": ("AXHeading", nil),
         "E": ("AXGroup", "AXEmptyGroup"), "A": ("AXGroup", "AXApplicationGroup"), "K": ("AXLink", nil),
         "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil), "M": ("AXListMarker", nil),
         "D": ("AXGroup", "AXCodeStyleGroup"), "S": ("AXGroup", "AXStrongStyleGroup"), "F": ("AXGroup", "AXEmphasisStyleGroup"),
-        "B": ("AXGroup", nil), "Q": ("AXGroup", nil),
+        "B": ("AXGroup", nil), "Q": ("AXGroup", nil), "N": ("AXGroup", nil),
     ]
     var nodes: [[Int]: (code: Character, start: Int, end: Int)] = [:]
     for token in spec.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
@@ -4137,6 +4137,7 @@ func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
         let children = (0...).prefix { nodes[path + [$0]] != nil }.map { build(path + [$0]) }
         let built = FakeNode(roles[node.code]!.0, roles[node.code]!.1, node.start, node.end, children)
         if linear, "BQ".contains(node.code) { built.classes = [UnreachableLines.blockClass] }
+        if linear, node.code == "N" { built.classes = [UnreachableLines.controlsClass] }
         if node.code == "Q" { built.quoteLevel = 1 }
         return built
     }
@@ -5377,17 +5378,17 @@ for profile in [keyProfile, writeKeys] {
 let blocksValue = "Boundary probe: plain opening paragraph alpha.\nMarkdown\n\n\ncode after paragraph bravo\n\nsecond code line charlie\nParagraph after code delta.\nQuote after paragraph echo\nParagraph after quote foxtrot.\n\n\nHeading golf\nCSS\n\n\ncode after heading hotel\n\n\nHeading after code india\nQuote after heading juliet\n\n\nHeading after quote kilo\n\u{2022}\nBullet before code lima\nCSS\n\n\ncode after bullet mike\nQuote after code november\nCSS\n\n\ncode after quote oscar\nCSS\n\n\ncode after code papa\n1.\nNumbered after code quebec\nQuote after numbered romeo\n\n\nTodo after quote sierra\nCSS\n\n\ncode after todo tango\n\n\nTodo after code uniform\nQuote after todo victor\nSecond quote paragraph whiskey\n\u{2022}\nBullet after quote xray\nPlain closing paragraph yankee."
 let blocksRaw = "Boundary probe: plain opening paragraph alpha.Markdown\u{FFFC}\u{FFFC}code after paragraph bravo\nsecond code line charlieParagraph after code delta.Quote after paragraph echoParagraph after quote foxtrot.\u{FFFC}\u{FFFC}Heading golfCSS\u{FFFC}\u{FFFC}code after heading hotel\u{FFFC}\u{FFFC}Heading after code indiaQuote after heading juliet\u{FFFC}\u{FFFC}Heading after quote kilo\u{2022}Bullet before code limaCSS\u{FFFC}\u{FFFC}code after bullet mikeQuote after code novemberCSS\u{FFFC}\u{FFFC}code after quote oscarCSS\u{FFFC}\u{FFFC}code after code papa1.Numbered after code quebecQuote after numbered romeo\u{FFFC}\u{FFFC}Todo after quote sierraCSS\u{FFFC}\u{FFFC}code after todo tango\u{FFFC}\u{FFFC}Todo after code uniformQuote after todo victorSecond quote paragraph whiskey\u{2022}Bullet after quote xrayPlain closing paragraph yankee."
 let blocksSpec = """
-0/G/0/46 0.0/T/0/46 1/B/46/105 1.0/G/46/54 1.1/D/54/105 1.1.0/T/54/81 1.1.1/T/81/105 2/G/105/132 2.0/T/105/132
+0/G/0/46 0.0/T/0/46 1/B/46/105 1.0/N/46/54 1.1/D/54/105 1.1.0/T/54/81 1.1.1/T/81/105 2/G/105/132 2.0/T/105/132
 3/Q/132/158 3.0/G/132/158 3.0.0/T/132/158 4/G/158/188 4.0/T/158/188 5/H/188/200 5.0/G/188/188 5.1/T/188/200
-6/B/200/227 6.0/G/200/203 6.1/D/203/227 6.1.0/T/203/207 6.1.1/T/207/227 7/H/227/251 7.0/G/227/227 7.1/T/227/251
+6/B/200/227 6.0/N/200/203 6.1/D/203/227 6.1.0/T/203/207 6.1.1/T/207/227 7/H/227/251 7.0/G/227/227 7.1/T/227/251
 8/Q/251/277 8.0/G/251/277 8.0.0/T/251/277 9/H/277/301 9.0/G/277/277 9.1/T/277/301 10/L/301/325 10.0/G/301/325
-10.0.0/G/301/302 10.0.0.0/T/301/302 10.0.1/G/302/325 10.0.1.0/T/302/325 11/B/325/350 11.0/G/325/328 11.1/D/328/350
-11.1.0/T/328/332 11.1.1/T/332/350 12/Q/350/375 12.0/G/350/375 12.0.0/T/350/375 13/B/375/400 13.0/G/375/378
-13.1/D/378/400 13.1.0/T/378/382 13.1.1/T/382/389 13.1.2/T/389/394 13.1.3/T/394/400 14/B/400/423 14.0/G/400/403
+10.0.0/G/301/302 10.0.0.0/T/301/302 10.0.1/G/302/325 10.0.1.0/T/302/325 11/B/325/350 11.0/N/325/328 11.1/D/328/350
+11.1.0/T/328/332 11.1.1/T/332/350 12/Q/350/375 12.0/G/350/375 12.0.0/T/350/375 13/B/375/400 13.0/N/375/378
+13.1/D/378/400 13.1.0/T/378/382 13.1.1/T/382/389 13.1.2/T/389/394 13.1.3/T/394/400 14/B/400/423 14.0/N/400/403
 14.1/D/403/423 14.1.0/T/403/407 14.1.1/T/407/414 14.1.2/T/414/418 14.1.3/T/418/423 15/L/423/451 15.0/G/423/451
 15.0.0/G/423/425 15.0.0.0/T/423/424 15.0.0.1/T/424/425 15.0.1/G/425/451 15.0.1.0/T/425/451 16/Q/451/477 16.0/G/451/477
 16.0.0/T/451/477 17/L/477/500 17.0/G/477/500 17.0.0/G/477/477 17.0.0.0/I/477/477 17.0.0.1/C/477/477 17.0.1/G/477/500
-17.0.1.0/G/477/500 17.0.1.0.0/T/477/500 18/B/500/524 18.0/G/500/503 18.1/D/503/524 18.1.0/T/503/507 18.1.1/T/507/524
+17.0.1.0/G/477/500 17.0.1.0.0/T/477/500 18/B/500/524 18.0/N/500/503 18.1/D/503/524 18.1.0/T/503/507 18.1.1/T/507/524
 19/L/524/547 19.0/G/524/547 19.0.0/G/524/524 19.0.0.0/I/524/524 19.0.0.1/C/524/524 19.0.1/G/524/547 19.0.1.0/G/524/547
 19.0.1.0.0/T/524/547 20/Q/547/600 20.0/G/547/570 20.0.0/T/547/570 20.1/G/570/600 20.1.0/T/570/600 21/L/600/624
 21.0/G/600/624 21.0.0/G/600/601 21.0.0.0/T/600/601 21.0.1/G/601/624 21.0.1.0/T/601/624 22/G/624/655 22.0/T/624/655
@@ -5422,21 +5423,33 @@ precondition((1...400).contains { budget in
     guard let found = unreachableScanned(fakeTree(blocksSpec), blocksCandidates, budget: budget) else { return false }
     return found.joins.isEmpty && found.controls.isEmpty && found.markers.count == 3
 }, "running out of reads on the roots loses only the stops and labels")
-let listsThenBlocks = fakeTree("0/L/0/2 0.0/G/0/2 1/L/2/4 1.0/G/2/4 2/B/4/8 2.0/G/4/6 2.1/D/6/8 3/Q/8/10 3.0/G/8/10")
+let listsThenBlocks = fakeTree("0/L/0/2 0.0/G/0/2 1/L/2/4 1.0/G/2/4 2/B/4/8 2.0/N/4/6 2.1/D/6/8 3/Q/8/10 3.0/G/8/10")
 let rootsOnly = UnreachableLines.Candidates(markers: [], chips: [], roots: true)
 precondition(unreachableScanned(listsThenBlocks, rootsOnly)
              == UnreachableLines.Found(markers: [], chips: [], joins: [2, 4, 8], controls: [4..<6]))
-// The roots and the second list's start are 6 reads, the code block's last child and three more starts 7.
-precondition((6...12).allSatisfy { budget in
+// The roots and the second list's start are 6 reads, the code block's two children and three more starts 8.
+precondition((6...13).allSatisfy { budget in
     unreachableScanned(listsThenBlocks, rootsOnly, budget: budget) == UnreachableLines.Found(markers: [], chips: [], joins: [2])
-} && unreachableScanned(listsThenBlocks, rootsOnly, budget: 13)?.joins == [2, 4, 8], "the lists' stops are read first, as on main")
+} && unreachableScanned(listsThenBlocks, rootsOnly, budget: 14)?.joins == [2, 4, 8], "the lists' stops are read first, as on main")
 let othersFound = unreachableScanned(fakeTree(blocksSpec, linear: false), blocksCandidates)!
 precondition(othersFound.joins.isEmpty && othersFound.controls.isEmpty && othersFound.markers.count == 3,
              "without Linear's class another editor's quote or code gets no stop")
 precondition(folded(blocksValue, blocksRaw, fakeTree(blocksSpec, linear: false)).text.contains("\nCSS\n"))
-let section = fakeTree("0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8")
+let section = fakeTree("""
+0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8 4/L/8/10 4.0/G/8/10 5/B/10/14 5.0/G/10/12
+5.0.0/T/10/12 5.1/E/12/13 6/L/14/16 6.0/G/14/16 7/B/16/20 7.0/G/16/18 7.0.0/T/16/18 7.1/D/18/20
+""")
 precondition(unreachableScanned(section, rootsOnly) == UnreachableLines.Found(markers: [], chips: []),
-             "a collapsible section, or code with nothing before it, is not closed")
+             "a collapsible section, open or not, and code with no controls before it are not closed, and their text stays")
+// softlash/LIN-1726 evidence/tree-empty-code.jsonl: `D` leaves the label, the two images, and an empty group where the code was.
+let emptiedCode = fakeTree("""
+0/L/0/24 0.0/G/0/24 0.0.0/G/0/1 0.0.0.0/T/0/1 0.0.1/G/1/24 0.0.1.0/T/1/24 1/B/24/34 1.0/N/24/33 1.1/E/33/34 2/Q/34/59 2.0/G/34/59
+2.0.0/T/34/59
+""")
+let emptiedCodeModel = folded("\u{2022}\nBullet before code lima\nPlaintext\n\n\nQuote after code november",
+                          "\u{2022}Bullet before code limaPlaintext\u{FFFC}\u{FFFC}\nQuote after code november", emptiedCode)
+precondition(emptiedCodeModel.text == "Bullet before code lima\n\nQuote after code november" && emptiedCodeModel.breaks.gaps == [24, 25]
+             && roundTrips(emptiedCodeModel), "an emptied code block keeps its label folded and its stops")
 
 let blockDoc: [(String, Sim.ListLine)] = [
     ("Top paragraph", .init()), ("code one", .init(marker: "Markdown", leaves: 2, controls: true)),
