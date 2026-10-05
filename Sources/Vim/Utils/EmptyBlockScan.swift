@@ -1,16 +1,20 @@
 /// Finds a field's empty blocks from the `\n`s of its plain marker text, each a `<br>`: an empty block's, or a soft
 /// break's in a block with text. Pure over its reads, so `make test` drives it with a fake tree (LIN-1612).
 public struct EmptyBlockScan<Node> {
-    /// One node's role, subrole and children, read together.
+    /// One node's role, subrole and children, with its DOM classes and how many quotes it is in, read together.
     public struct Block {
         public let role: String?
         public let subrole: String?
         public let children: [Node]
+        public let classes: [String]
+        public let quoteLevel: Int
 
-        public init(role: String?, subrole: String?, children: [Node]) {
+        public init(role: String?, subrole: String?, children: [Node], classes: [String] = [], quoteLevel: Int = 0) {
             self.role = role
             self.subrole = subrole
             self.children = children
+            self.classes = classes
+            self.quoteLevel = quoteLevel
         }
     }
 

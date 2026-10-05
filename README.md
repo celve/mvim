@@ -136,9 +136,10 @@ commands by pressing keys (arrows, ⌃A and ⌃E, ⌘↑ and ⌘↓) with no blo
 after each step: when the field does not answer as planned, it beeps and stops rather than edit the
 wrong text. In these apps `o` and `O` paste their
 new line, because ⏎ could send a message. Blank lines are lines there as in Vim, except in a document
-of more than about 250 paragraphs, a list's markers and to-do boxes are not, and a mention chip is
-one character on its paragraph's line, so `j` and `k` count the lines Linear shows, and columns start
-after a list item's `• ` or `1. `. In a field mvim cannot read at all, and under **Force**, moves are
+of more than about 250 paragraphs, a list's markers, to-do boxes and a code block's language label are
+not, and a mention chip is one character on its paragraph's line, so `j` and `k` count the lines Linear
+shows, and columns start after a list item's `• ` or `1. `. In a field mvim cannot read at all, and
+under **Force**, moves are
 approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
 search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
 is a separate field.
@@ -518,8 +519,14 @@ route in its `want` (`route=line-start`, `route=line-end` or `route=select-back`
 is not blamed. Arrows, ⌃A and ⌃E are posted with no pause between key down and key up; every other key
 keeps 2 ms.
 
-In Linear, → or ↓ from a list's last item stops once before a list that follows it directly. mvim
-marks that list's first line, so `j`, `w`, a counted `$` and the like press through the stop.
+In Linear, → or ↓ from the last line of a list, a code block or a quote stops once before another of
+the three that follows it directly, and so does ↑ coming back; next to a paragraph or a heading there is
+no stop. mvim marks the first line after each stop, so `j`, `w`, a counted `$` and the like press through
+it: ⇧→ →, or → → into a to-do, which ⇧→ will not extend into. Two quotes side by side show nothing in
+the text, so in a ProseMirror editor mvim reads the document's blocks whenever the text has more than one
+line, and again when a block changes kind, and marks a stop only between blocks that carry Linear's own
+classes: any other editor's quote or list gets no stop it did not get before. A table or a collapsible
+section has the stop too and is not marked, nor is one between blocks inside a quote.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text
@@ -542,8 +549,10 @@ per text and gives each a line. Where it cannot, in a field of more than about 2
 or when a read fails, a key pressed from a caret whose marker sits on an empty paragraph is not
 blamed for seeming to do nothing. In such a field a yank within one line takes its register from
 the text the field selected. A list item's marker (`•`, `1.`) is a line of its own in Linear's
-`AXValue`, and so is each icon, checkbox or heading menu that is a block; no caret stands on any of
-them, so mvim leaves them out of its lines. A page's own list (`<li>`) starts each item's line with
+`AXValue`, and so is each icon, checkbox or heading menu that is a block, and the language label above
+a code block's code; no caret stands on any of them, so mvim leaves them out of its lines. The label of
+a code block inside a list item or a quote stays a line, and `j` or `k` across it beeps. A page's own
+list (`<li>`) starts each item's line with
 its marker and a space, which no caret stands in either, so mvim leaves those out too. A mention
 chip is a line of its own in Linear's `AXValue` too, though it sits inside its paragraph, and the
 caret crosses it in one step: mvim gives it its paragraph's line back and counts it as one

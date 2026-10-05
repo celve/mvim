@@ -705,6 +705,8 @@ extension Sim {
             field: FieldReads(text: text, plain: plain, selectedText: readSelectedText), length: fieldLength,
             webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
+        reads.roots = roots
+        reads.proseMirror = listLines != nil
         if emptyParagraphs {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
@@ -755,9 +757,9 @@ extension Sim {
                     candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
                 },
                 carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? [],
-                joins: candidates.lists ? shown.listJoins : []
+                joins: shown.joins, controls: shown.controls
             ) : nil
-            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
+            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, roots: roots, found: found)
         }
     }
 
@@ -769,6 +771,15 @@ extension Sim {
 
     /// The child count: a block per paragraph.
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
+
+    /// The roots by identity: a line whose block changes kind is a new root, though the text and the count stay.
+    var roots: Int? {
+        listLines.map { lines in
+            var hasher = Hasher()
+            hasher.combine(lines)
+            return hasher.finalize()
+        }
+    }
 
     var chromium: ChromiumParagraphs {
         let caret = selection.isEmpty ? selection.lowerBound : nil
@@ -830,22 +841,28 @@ extension Sim {
 
 public extension Sim {
     /// What Linear draws before a line's text, each a block of its own in `AXValue`: a list marker, then text-less leaves.
-    struct ListLine: Equatable, Sendable {
+    struct ListLine: Hashable, Sendable {
         public var marker: String?
         public var leaves: Int
         /// The leaves are a to-do's checkbox, which a write at its line's start lands beside by where the caret was.
         public var checkbox: Bool
         /// The marker starts its item's line, as Chromium draws its own lists' markers.
         public var inline: Bool
-        /// The item starts a list right after another, so a plain → or ↓ from the line above stops between them first.
-        public var joinsList: Bool
+        /// The line starts a list, code block or quote right after another, so → ↓ from the line above or ↑ from it stops first.
+        public var stop: Bool
+        /// The marker is a code block's language label, which its block tells from text, not its shape.
+        public var controls: Bool
 
-        public init(marker: String? = nil, leaves: Int = 0, checkbox: Bool = false, inline: Bool = false, joinsList: Bool = false) {
+        public init(
+            marker: String? = nil, leaves: Int = 0, checkbox: Bool = false, inline: Bool = false, stop: Bool = false,
+            controls: Bool = false
+        ) {
             self.marker = marker
             self.leaves = leaves
             self.checkbox = checkbox
             self.inline = inline
-            self.joinsList = joinsList
+            self.stop = stop
+            self.controls = controls
         }
 
         /// `lines` once `range` of `text` is `replacement`: the first keeps its own, but a deleted plain line the next's.
@@ -901,9 +918,10 @@ struct ChromiumParagraphs {
     /// Plain starts of the list markers, and the chips.
     let listMarkers: [Int]
     let chips: [UnreachableLines.Chip]
-    /// Plain starts of lists right after another, and the Sim offsets of their first lines.
-    let listJoins: [Int]
+    /// Plain starts of blocks a stop comes before, the Sim offsets of their first lines, and code blocks' labels.
+    let joins: [Int]
     let gaps: Set<Int>
+    let controls: [Range<Int>]
     /// The caret Linear draws at a code span's edge, and the paragraph whose end it ends with a `<br>`.
     let drawnCaret: UnreachableLines.Caret?
     let drawnAtEnd: Int?
@@ -918,8 +936,9 @@ struct ChromiumParagraphs {
             plainMarkers = shown.markers
             listMarkers = []
             chips = []
-            listJoins = []
+            joins = []
             gaps = []
+            controls = []
             drawnCaret = nil
             drawnAtEnd = nil
             return
@@ -933,6 +952,7 @@ struct ChromiumParagraphs {
         var chips: [UnreachableLines.Chip] = []
         var joins: [Int] = []
         var gaps: Set<Int> = []
+        var controls: [Range<Int>] = []
         var plain = 0
         var start = 0
         var afterBreak = false
@@ -946,12 +966,12 @@ struct ChromiumParagraphs {
             let line = lines.indices.contains(index) ? lines[index] : Sim.ListLine()
             let units = Array(paragraph.utf16)
             let prefix = line.inline ? Array((line.marker ?? "").utf16) : []
-            if line.joinsList {
+            if line.stop {
                 joins.append(plain)
                 gaps.insert(start)
             }
             if let marker = line.marker {
-                markers.append(plain)
+                if line.controls { controls.append(plain..<(plain + marker.utf16.count)) } else { markers.append(plain) }
                 if !line.inline {
                     block(Array(marker.utf16))
                     raw += marker
@@ -1044,8 +1064,9 @@ struct ChromiumParagraphs {
         plainMarkers = FieldReads.withoutAttachments(raw)
         listMarkers = markers
         self.chips = chips
-        listJoins = joins
+        self.joins = joins
         self.gaps = gaps
+        self.controls = controls
         self.drawnCaret = drawnCaret
         self.drawnAtEnd = drawnAtEnd
     }

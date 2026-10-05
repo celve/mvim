@@ -268,11 +268,13 @@ private extension PhysicalPlanner {
         }
 
         /// The model holds folded text, where Linear lands a write by where the caret came from (LIN-1652).
-        var folded: Bool { !(breaks?.hidden.isEmpty ?? true) }
+        var folded: Bool { !(breaks?.hidden.allSatisfy(\.isGap) ?? true) }
 
         /// A non-empty line's start with nothing folded at or beside it, where a write lands as where nothing is folded.
         func plainStart(_ offset: Int, in model: TextModel) -> Bool {
-            model.lineEnd(of: offset) > offset && !(breaks?.hidden.contains { (offset - 1...offset + 1).contains($0.at) } ?? false)
+            // A stop folds no text, so a quote's first line after one takes a write as any paragraph's does.
+            let folded = breaks?.hidden.contains { !$0.isGap && (offset - 1...offset + 1).contains($0.at) } ?? false
+            return model.lineEnd(of: offset) > offset && !folded
         }
 
         /// Chromium rich text, where a plain arrow at a Linear code span's edge can stay put (LIN-1683).
@@ -296,11 +298,11 @@ private extension PhysicalPlanner {
         /// Model offsets of the chips, which keys cross in one step.
         var atoms: Set<Int> { breaks?.atoms ?? [] }
 
-        /// Starts of lines right after a list's end, where a plain → or ↓ from above stops first.
+        /// Starts of lines right after a list, code block or quote's end, where a plain → ↓ from above or ↑ from them stops first.
         var gaps: Set<Int> { breaks?.gaps ?? [] }
 
-        /// Starts of lines whose list marker the model folds out.
-        var marked: Set<Int> { Set(breaks?.hidden.filter(\.isMarker).map(\.at) ?? []) }
+        /// Starts of to-dos after a stop, into which ⇧→ does not extend.
+        var boxed: Set<Int> { Set(breaks?.hidden.filter { $0.kind == .boxedGap }.map(\.at) ?? []) }
 
         func isAtom(_ offset: Int) -> Bool { breaks?.isAtom(offset) ?? false }
 
@@ -422,7 +424,9 @@ private extension PhysicalPlanner {
                 // A typed `\n` may have made a paragraph or a line break.
                 if replacement.contains("\n") { unknown.formUnion([.selection, .edge]) }
                 // An item made or merged gains or loses `AXValue` lines, and its list renumbers.
-                if !current.hidden.isEmpty, replacement.contains("\n") || current.covers(range) { unknown.insert(.length) }
+                if current.hidden.contains(where: { !$0.isGap }), replacement.contains("\n") || current.covers(range) {
+                    unknown.insert(.length)
+                }
                 if coversMarker, !plainLine, !ownMarker { unknown.formUnion([.selection, .edge]) }
             }
             let caretAfter = range.lowerBound + replacement.utf16.count
@@ -744,8 +748,8 @@ private extension PhysicalPlanner {
             return presses + run(to > from ? .right : .left, count: count, selecting: selecting, normalizing: context.normalizes(to))
         }
         let lines = model.newlineCount(in: min(fromLine, toLine)..<max(fromLine, toLine))
-        // ↓ into a line right after a list's end stops between the lists first.
-        let stops = toLine > fromLine ? context.gaps.filter { fromLine < $0 && $0 <= toLine }.count : 0
+        // ↓ or ↑ across a line that starts right after a list, code block or quote's end stops between the two first.
+        let stops = context.gaps.filter { min(fromLine, toLine) < $0 && $0 <= max(fromLine, toLine) }.count
         presses.append(.press(toLine > fromLine ? .down : .up, count: lines + stops))
         presses.append(.press(.lineStart, count: 1))
         if context.normalizes(toLine) { presses += outside }
@@ -946,11 +950,11 @@ private extension PhysicalPlanner {
         let line = model.lineStart(of: position)
         let targetLine = model.lineStart(of: target)
         let gaps = context.gaps
-        let marked = context.marked
-        // Past a list's end ⇧→ → crosses into a marked item, which Dia reads right ~150 ms before a stop's → → (LIN-1686).
+        let boxed = context.boxed
+        // ⇧→ → crosses a stop, which Dia reads right ~150 ms before → → (LIN-1686); a to-do takes only → →.
         func hops(_ count: Int) -> [[Chord]] {
             let starts = gaps.isEmpty ? [] : lineStarts(after: line, count: count, in: model)
-            return starts.map { !gaps.contains($0) ? [.right] : marked.contains($0) ? [.selectRight, .right] : [.right, .right] }
+            return starts.map { !gaps.contains($0) ? [.right] : boxed.contains($0) ? [.right, .right] : [.selectRight, .right] }
                 + Array(repeating: [.right], count: count - starts.count)
         }
         // The way to the target's line, and for `j`/`k` an optional one to its end; the column is counted from where each lands.

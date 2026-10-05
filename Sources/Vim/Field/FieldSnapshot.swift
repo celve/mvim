@@ -94,6 +94,10 @@ public extension FieldSnapshot {
         public var webContent: Bool
         /// The child count, which the memo is keyed on.
         public var blocks: Int?
+        /// The root blocks' identities, hashed, which the unreachable lines' memo is keyed on too.
+        public var roots: Int?
+        /// The editor is ProseMirror's, whose roots are read for Linear's stops (LIN-1726).
+        public var proseMirror = false
         /// The marker selection, in plain marker offsets.
         public var marked: Range<Int>?
         /// The raw marker text, U+FFFCs included; nil where `AXValue` has no line.
@@ -196,10 +200,11 @@ public extension FieldSnapshot {
         if answer == .textContent, capabilities.has(.readCaret), let value = field.text, let model = text, let current = breaks,
            let marked = reads.marked, let raw = reads.markerText {
             let candidates = UnreachableLines.candidates(
-                text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil
+                text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil, proseMirror: reads.proseMirror
             )
             if !candidates.isEmpty {
-                guard let knownUnreachable, knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks) else {
+                guard let knownUnreachable,
+                      knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks, roots: reads.roots) else {
                     return .needs(.unreachable(value: value, markers: raw, candidates: candidates))
                 }
                 unreachable = knownUnreachable

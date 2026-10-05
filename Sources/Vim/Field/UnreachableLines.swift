@@ -1,4 +1,4 @@
-/// Folds out of the model what no caret reaches in Linear's editor: markers, text-less blocks and chips' lines (LIN-1652).
+/// Folds out of the model what no caret reaches in Linear's editor: markers, controls, text-less blocks and chips' lines (LIN-1652).
 public enum UnreachableLines {
     /// The model without those lines, and the breaks that map it back to the field.
     public struct Model: Equatable, Sendable {
@@ -41,17 +41,22 @@ public enum UnreachableLines {
         public let chips: [Range<Int>]
         /// Plain offsets of empty lines after a generated break holding one text-less leaf, and the caret's by any leaf.
         public let carets: [Int]
-        /// A marker or a to-do's checkbox may start a list, so which lists follow another is worth reading.
-        public let lists: Bool
+        /// A marker or a text-less leaf may belong to a list or a code block, so the root blocks are worth reading.
+        public let roots: Bool
+        /// A ProseMirror editor's text of more than one line, where Linear's stops show nothing in the text: two quotes side by side.
+        public let stops: Bool
 
-        public init(markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], lists: Bool = false) {
+        public init(
+            markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], roots: Bool = false, stops: Bool = false
+        ) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
-            self.lists = lists
+            self.roots = roots
+            self.stops = stops
         }
 
-        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !lists }
+        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !roots && !stops }
     }
 
     /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
@@ -77,14 +82,17 @@ public enum UnreachableLines {
         public let markers: [Int]
         public let chips: [Chip]
         public let carets: [Caret]
-        /// Plain starts of lists right after another list, where a plain → or ↓ stops between them first (LIN-1686).
+        /// Plain starts of root lists, code blocks and quotes right after another, where a plain → ↓ or ↑ stops between them first.
         public let joins: [Int]
+        /// The plain range before each root code block's code: its language label, which no caret reaches (LIN-1726).
+        public let controls: [Range<Int>]
 
-        public init(markers: [Int], chips: [Chip], carets: [Caret] = [], joins: [Int] = []) {
+        public init(markers: [Int], chips: [Chip], carets: [Caret] = [], joins: [Int] = [], controls: [Range<Int>] = []) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
             self.joins = joins
+            self.controls = controls
         }
     }
 
@@ -93,26 +101,43 @@ public enum UnreachableLines {
         public let value: String
         public let markers: String
         public let blocks: Int?
+        /// The root blocks' identities, hashed, where read: a paragraph made a quote keeps the text and the count.
+        public let roots: Int?
         /// Nil when discovery failed, so markers and chips stay lines.
         public let found: Found?
 
-        public init(value: String, markers: String, blocks: Int?, found: Found?) {
+        public init(value: String, markers: String, blocks: Int?, roots: Int? = nil, found: Found?) {
             self.value = value
             self.markers = markers
             self.blocks = blocks
+            self.roots = roots
             self.found = found
         }
 
-        public func holds(value: String, markers: String, blocks: Int?) -> Bool {
-            self.value == value && self.markers == markers && self.blocks == blocks
+        public func holds(value: String, markers: String, blocks: Int?, roots: Int? = nil) -> Bool {
+            self.value == value && self.markers == markers && self.blocks == blocks && self.roots == roots
         }
     }
 
     /// The most AX reads one discovery may spend; a larger field keeps its markers and chips as lines.
     public static let readBudget = 1024
 
+    /// ProseMirror's class on its editor; its gap cursor, Linear's stop, is a plugin another editor may not have.
+    public static let editorClass = "ProseMirror"
+
+    /// Linear's own DOM class on a list, which no other editor's list carries.
+    public static let listClass = "list-node"
+
+    /// Linear's own DOM class on a code block, a quote and a collapsible section, which no other editor's quote carries.
+    public static let blockClass = "block-node"
+
+    /// Linear's class on the group that holds a code block's language label and buttons, before its code.
+    public static let controlsClass = "node-controls"
+
     /// Lines shaped like a marker or starting with one and a space, lines starting as Linear's chips do, and drawn carets'.
-    public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil) -> Candidates {
+    public static func candidates(
+        text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil, proseMirror: Bool = false
+    ) -> Candidates {
         let leaves = raw.map(leafCounts) ?? [:]
         let generated = Set(breaks.offsets)
         let length = text.utf16.count
@@ -136,7 +161,10 @@ public enum UnreachableLines {
         }
         // One can share its offset with a to-do's checkbox, or have no line after a `<br>`.
         if let caret, leaves[caret] != nil, !carets.contains(caret) { carets.append(caret) }
-        return Candidates(markers: markers, chips: chips, carets: carets, lists: !markers.isEmpty || leafLines)
+        return Candidates(
+            markers: markers, chips: chips, carets: carets, roots: !markers.isEmpty || leafLines,
+            stops: proseMirror && text.utf16.contains(10)
+        )
     }
 
     /// How many U+FFFCs the marker text has at each plain offset: one per text-less leaf.
@@ -153,8 +181,10 @@ public enum UnreachableLines {
     public static func fold(text: String, breaks: ParagraphBreaks, raw: String, found: Found) -> Model {
         let generated = Set(breaks.offsets)
         var leaves = leafCounts(raw)
+        let leafStarts = leaves
         let plain = raw.utf16.count - leaves.values.reduce(0, +)
         let markers = Set(found.markers)
+        let controls = Set(found.controls.joined())
         var carets = Dictionary(found.carets.map { ($0.offset, $0) }) { first, _ in first }
         let chips = Dictionary(found.chips.map { ($0.range.lowerBound, $0) }) { first, _ in first }
         let plainUnits = Array(FieldReads.withoutAttachments(raw).utf16)
@@ -201,7 +231,7 @@ public enum UnreachableLines {
                     runs.append((end + 1, "", .structure))
                     keepsTerminator = false
                 }
-            } else if markers.contains(start), isMarkerShaped(line.units) {
+            } else if controls.contains(start) || markers.contains(start) && isMarkerShaped(line.units) {
                 // An empty item's marker ends in its paragraph's `<br>`, whose line stays.
                 dropped.formUnion(line.start..<(terminated ? end + 1 : end))
                 runs.append((terminated ? end + 1 : end, String(decoding: line.units, as: UTF16.self), .structure))
@@ -246,7 +276,9 @@ public enum UnreachableLines {
                 textSinceBreak = false
             }
         }
-        guard !dropped.isEmpty || !converted.isEmpty else { return Model(text: text, breaks: breaks, folded: 0) }
+        guard !dropped.isEmpty || !converted.isEmpty || !found.joins.isEmpty else {
+            return Model(text: text, breaks: breaks, folded: 0)
+        }
         var kept: [UInt16] = []
         var shift = [Int](repeating: 0, count: units.count + 1)
         for (index, unit) in units.enumerated() {
@@ -257,13 +289,15 @@ public enum UnreachableLines {
         var hidden = runs.map { ParagraphBreaks.Hidden(at: $0.before - shift[$0.before], text: $0.text, kind: $0.kind) }
         let offsets = (breaks.offsets + converted).sorted().filter { !dropped.contains($0) }.map { $0 - shift[$0] }
         let starts = lines(of: text).map(\.start)
-        // A join's list starts at the first line at or past it, in the offsets discovery read, as markers are matched.
+        // A join's block starts at the first line at or past it, in the offsets discovery read, as markers are matched.
         for join in found.joins {
             guard let line = starts.first(where: { breaks.fieldOffset($0) >= join }), line > 0 else { continue }
             let start = line - shift[line]
             // Chromium's own lists, whose marker starts the line, have no stop: Linear's ProseMirror makes it.
             guard !hidden.contains(where: { $0.at == start && $0.kind == .prefix }) else { continue }
-            hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: .gap),
+            // Leaves at the block's own start are a to-do's checkbox, whether or not `AXValue` gives them lines.
+            let kind: ParagraphBreaks.Hidden.Kind = leafStarts[join, default: 0] > 0 ? .boxedGap : .gap
+            hidden.insert(ParagraphBreaks.Hidden(at: start, text: "", kind: kind),
                           at: hidden.lastIndex { $0.at <= start }.map { $0 + 1 } ?? 0)
         }
         return Model(
