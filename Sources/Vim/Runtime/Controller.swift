@@ -523,8 +523,12 @@ public final class Controller {
         var snapshot: FieldSnapshot?
         if let marked = read.marked {
             side = Snapshotter.paragraphSide(of: marked, upper: false)
-            // An edit that landed before the abort leaves the run's snapshot describing other text.
-            if AX.value(of: binding.element) == reading.reads.text { snapshot = reading.snapshot }
+            // An edit, or a caret Linear drew or took away, leaves the run's snapshot describing other text.
+            snapshot = AX.value(of: binding.element) == reading.reads.text ? reading.snapshot : Snapshotter.snapshot(
+                of: binding.element, capabilities: binding.capabilities, anchor: nil, cursor: state.field.cursor,
+                chromium: binding.isChromium, model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
+                sampling: sampling, known: emptyParagraphs, knownUnreachable: unreachable
+            ).snapshot
         }
         let collapse = PhysicalPlanner.collapse(
             read.range, side: side, paragraphs: paragraphs, snapshot: snapshot, profile: binding.capabilities

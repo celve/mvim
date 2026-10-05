@@ -144,7 +144,7 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left to its start, in field offsets; `snapshot` is the run's, while the field reads as it did.
+    /// Collapses a selection an aborted run left to its start, in field offsets; `snapshot` reads the field as it is.
     static func collapse(
         _ selection: Range<Int>, misread: Bool = false, side: ParagraphBreaks.Side? = nil, paragraphs: Bool = false,
         snapshot: FieldSnapshot? = nil, profile: CapabilityProfile
@@ -152,9 +152,7 @@ public extension PhysicalPlanner {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
         var start = selection.lowerBound
-        // With no snapshot to go by, an end side still says that a write here would land on the next paragraph.
-        let lone = side == .end ? ParagraphBreaks(offsets: [start]) : ParagraphBreaks()
-        var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? lone : nil)
+        var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil)
         // A `<br>` Linear drew for its caret leaves in its own time, and every offset behind it moves then.
         let held = snapshot.flatMap { $0.drawnBreak == nil ? $0 : nil }
         // In `AXValue` offsets a paragraph's end and the next one's start differ, as they do in a command's plan.

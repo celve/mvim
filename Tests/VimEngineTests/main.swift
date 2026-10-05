@@ -1353,19 +1353,14 @@ for (profile, asRead) in [
         .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1), .settle(Expectation(selection: 2..<2))
     )),
 ] {
-    for sideAlone in [
+    for unplaced in [
+        strandedPlan(2..<4, nil, profile: profile),
         PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, profile: profile),
         strandedPlan(2..<4, .end, text: "a", profile: profile),
         PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, snapshot: drawnAhead, profile: profile),
     ] {
-        precondition(sideAlone == collapsedToEnd, "no snapshot, a start past its text or a <br> drawn for the caret: the end side alone decides")
-    }
-    for unplaced in [
-        strandedPlan(2..<4, nil, profile: profile),
-        strandedPlan(2..<4, .start(skipping: 0), text: "a", profile: profile),
-        PhysicalPlanner.collapse(2..<4, side: .start(skipping: 2), paragraphs: true, snapshot: drawnAhead, profile: profile),
-    ] {
-        precondition(unplaced == asRead, "no side, or a start side with no snapshot to place it: the plan for the offset as read")
+        precondition(unplaced == asRead,
+                     "a side says nothing without breaks that place it: a code span's end inside a paragraph is an end too")
     }
 }
 precondition(strandedPlan(2..<4, .start(skipping: 0), profile: readProfile) == PhysicalPlan(
@@ -4115,11 +4110,20 @@ precondition(strandedChange(["one", "two three", "four"], caret: 3, profile: wri
              == "oneX\ntwo three\nfour", "the snapshot's text tells that a write to a list item's end needs keys, so ← collapses there too")
 let atDrawn = strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4])
 precondition(atDrawn.text == "ab xX\ncd ef\ngh" && atDrawn.settleFailures == 1,
-             "the snapshot holds the <br> Linear drew for its caret at the code span, and the end side alone still collapses there")
+             "the caret Linear drew at the code span has gone with its <br>, so the repair reads the field again")
+var insideSpan = blankSim(["ab x cd ef", "gh"], caret: 4, profile: writeKeys)
+insideSpan.listLines = [Sim.ListLine(marker: "1."), Sim.ListLine(marker: "2.")]
+insideSpan.codeSpans = [3..<4]
+insideSpan.reboundChords = [.selectRight: .selectWordRight, Chord.paragraphEnd.shifted: .selectWordRight]
+insideSpan.type("C")
+insideSpan.reboundChords = [:]
+insideSpan.type("X")
+precondition(insideSpan.text == "ab xX cd ef\ngh" && insideSpan.settleFailures == 1,
+             "a code span's end inside a paragraph is written as read")
 for profile in [writeKeys, keyProfile] {
     let afterChip = strandedChange(["ab \u{2060}", "ef gh"], caret: 4, profile: profile, lines: [Sim.ListLine(), Sim.ListLine()])
-    precondition(afterChip.text == "ab \u{2060}X\nef gh" && afterChip.settleFailures == 2,
-                 "once AXValue has changed, here by the chip's image, the settle expects the offset as read, short of the chip's <br>")
+    precondition(afterChip.text == "ab \u{2060}X\nef gh" && afterChip.settleFailures == 1,
+                 "once the chip's image has changed AXValue, the field read again puts the caret past the chip's <br>")
 }
 var strandedToDo = blankSim(["one", "", "two"], caret: 4, profile: writeKeys)
 strandedToDo.listLines = [Sim.ListLine(), Sim.ListLine(leaves: 2, checkbox: true), Sim.ListLine()]

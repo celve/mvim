@@ -323,11 +323,11 @@ private extension Sim {
         if state.field.mode.isInserting, readSelection == operand { return true }
         let paragraphs = snapshot.breaks != nil
         let read = readSelection
-        // As the Controller: the markers answer for the side, and the snapshot holds while `AXValue` reads as it did.
+        // As the Controller: the markers answer for the side, and the field is read again once `AXValue` has changed.
         let marked = paragraphs && (markers || emptyParagraphs)
         let collapse = PhysicalPlanner.collapse(
             read, side: marked ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
-            snapshot: marked && shownValue == value ? snapshot : nil, profile: profile
+            snapshot: marked ? (shownValue == value ? snapshot : snapshotAside()) : nil, profile: profile
         )
         if !executeAside(collapse), profile.has(.writeSelection) {
             executeAside(PhysicalPlanner.collapse(read, paragraphs: paragraphs, profile: profile))
@@ -607,6 +607,21 @@ private extension Sim {
             if span.upperBound > start { pieces.append(start..<span.upperBound) }
             return pieces
         }
+    }
+
+    /// The field as it reads now, for a repair: unlike a run's snapshot it teaches nothing and keeps no discovery.
+    mutating func snapshotAside() -> FieldSnapshot {
+        let learned = learner
+        defer { learner = learned }
+        var (reads, observed) = read()
+        var memo = foundEmptyParagraphs
+        var unreachable = foundUnreachable
+        return FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
+            FieldSnapshot.build(
+                reads, capabilities: profile, answer: observed.after, anchor: nil, cursor: state.field.cursor, memo: memo,
+                unreachable: unreachable
+            )
+        }.snapshot
     }
 
     /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them; false when a step failed.
