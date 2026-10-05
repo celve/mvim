@@ -158,6 +158,8 @@ public enum Snapshotter {
             kAXSelectedTextAttribute,        // 4
         ]
         if readsMarkers { names.append(kAXSelectedTextMarkerRangeAttribute) }   // 5
+        let classes = names.count
+        if chromium { names.append("AXDOMClassList") }
         let reads = AX.attributes(names, of: element)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
         let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
@@ -172,7 +174,11 @@ public enum Snapshotter {
             field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
             length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
         )
-        snapshotReads.roots = roots.map { $0.reduce(into: Hasher()) { $0.combine(CFHash($1)) }.finalize() }
+        snapshotReads.proseMirror = chromium && reads.strings(classes)?.contains(UnreachableLines.editorClass) == true
+        // Only where stops are read do the blocks' kinds decide discovery; elsewhere the memo holds as it did.
+        if snapshotReads.proseMirror {
+            snapshotReads.roots = roots.map { $0.reduce(into: Hasher()) { $0.combine(CFHash($1)) }.finalize() }
+        }
         var memo = known
         var unreachable = knownUnreachable
         func take(_ need: FieldSnapshot.Need) {

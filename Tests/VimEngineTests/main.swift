@@ -4118,14 +4118,15 @@ precondition(chipBreaks.withAtoms("Ta\nN", at: 0..<4) == "Tabc\nN" && chipBreaks
 precondition(chipBreaks.replacing(1..<2, with: "") == ParagraphBreaks(offsets: [1]), "deleting the chip takes its <br>")
 
 /// `path/role/start/end` per node, roles abbreviated, as softlash/LIN-1652 scripts/list-probe prints a tree; B is one of
-/// Linear's `block-node` groups, Q one that is a quote and N a `node-controls` group; `linear` false leaves their classes out.
+/// Linear's `block-node` groups, Q one that is a quote, N a `node-controls` group and R a rule; roots carry Linear's classes,
+/// which `linear` false leaves out.
 func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
     let roles: [Character: (String, String?)] = [
         "L": ("AXList", "AXContentList"), "G": ("AXGroup", nil), "T": ("AXStaticText", nil), "H": ("AXHeading", nil),
         "E": ("AXGroup", "AXEmptyGroup"), "A": ("AXGroup", "AXApplicationGroup"), "K": ("AXLink", nil),
         "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil), "M": ("AXListMarker", nil),
         "D": ("AXGroup", "AXCodeStyleGroup"), "S": ("AXGroup", "AXStrongStyleGroup"), "F": ("AXGroup", "AXEmphasisStyleGroup"),
-        "B": ("AXGroup", nil), "Q": ("AXGroup", nil), "N": ("AXGroup", nil),
+        "B": ("AXGroup", nil), "Q": ("AXGroup", nil), "N": ("AXGroup", nil), "R": ("AXSplitter", nil),
     ]
     var nodes: [[Int]: (code: Character, start: Int, end: Int)] = [:]
     for token in spec.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
@@ -4138,22 +4139,25 @@ func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
         let built = FakeNode(roles[node.code]!.0, roles[node.code]!.1, node.start, node.end, children)
         if linear, "BQ".contains(node.code) { built.classes = [UnreachableLines.blockClass] }
         if linear, node.code == "N" { built.classes = [UnreachableLines.controlsClass] }
+        if linear, path.count == 1, let kind = ["G": "text-node", "E": "text-node", "L": "list-node", "H": "heading-node"][node.code] {
+            built.classes = [kind]
+        }
         if node.code == "Q" { built.quoteLevel = 1 }
         return built
     }
     return (0...).prefix { nodes[[$0]] != nil }.map { build([$0]) }
 }
 func unreachableScanned(
-    _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget, closing: Bool = true
+    _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget
 ) -> UnreachableLines.Found? {
     var scan = UnreachableScan<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
-    return scan.run(blocks: blocks, candidates: candidates, closing: closing)
+    return scan.run(blocks: blocks, candidates: candidates)
 }
 func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLines.Model {
     let plain = MarkerText.plain(raw)
     let aligned = ParagraphBreaks(value: value, fieldText: plain)!
     let restored = EmptyParagraphs.restore(value: value, fieldText: plain, aligned: aligned, found: scanned(tree, plain)!)!
-    let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks, raw: raw)
+    let candidates = UnreachableLines.candidates(text: restored.text, breaks: restored.breaks, raw: raw, proseMirror: true)
     return UnreachableLines.fold(text: restored.text, breaks: restored.breaks, raw: raw,
                                  found: unreachableScanned(tree, candidates)!)
 }
@@ -5286,8 +5290,8 @@ precondition((1...400).contains { budget in
     guard let found = unreachableScanned(boundaryTree, boundaryCandidates, budget: budget) else { return false }
     return found.joins.isEmpty && found.markers.count == 10
 }, "running out of reads on the lists loses only the joins")
-precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []), closing: false)?.joins == [],
-             "nothing that starts a list and an editor that draws no stops, no joins read")
+precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
+             "nothing that starts a list and no ProseMirror editor, no joins read")
 let ownLists = fakeTree("0/G/0/3 0.0/T/0/3 1/L/3/6 1.0/G/3/6 1.0.0/M/3/5 1.0.1/T/5/6 2/L/6/10 2.0/G/6/10 2.0.0/M/6/9 2.0.1/T/9/10")
 let ownCandidates = UnreachableLines.candidates(text: "Top\n\u{2022} a\n1. b", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "Top\u{2022} a1. b")
 precondition(unreachableScanned(ownLists, ownCandidates)?.joins == [6]
@@ -5430,8 +5434,8 @@ let blocksSpec = """
 19.0.1.0.0/T/524/547 20/Q/547/600 20.0/G/547/570 20.0.0/T/547/570 20.1/G/570/600 20.1.0/T/570/600 21/L/600/624
 21.0/G/600/624 21.0.0/G/600/601 21.0.0.0/T/600/601 21.0.1/G/601/624 21.0.1.0/T/601/624 22/G/624/655 22.0/T/624/655
 """
-let blocksCandidates = UnreachableLines.candidates(text: blocksValue, breaks: ParagraphBreaks(value: blocksValue,
-    fieldText: MarkerText.plain(blocksRaw))!, raw: blocksRaw)
+let blocksBreaks = ParagraphBreaks(value: blocksValue, fieldText: MarkerText.plain(blocksRaw))!
+let blocksCandidates = UnreachableLines.candidates(text: blocksValue, breaks: blocksBreaks, raw: blocksRaw, proseMirror: true)
 let blocksFound = unreachableScanned(fakeTree(blocksSpec), blocksCandidates)!
 precondition(blocksFound.controls == [46..<54, 200..<203, 325..<328, 375..<378, 400..<403, 500..<503], "each code block's label")
 precondition(blocksFound.joins == [325, 350, 375, 400, 423, 451, 477, 500, 524, 547, 600])
@@ -5464,7 +5468,7 @@ precondition((1...400).contains { budget in
     return found.joins.isEmpty && found.controls.isEmpty && found.markers.count == 3
 }, "running out of reads on the roots loses only the stops and labels")
 let listsThenBlocks = fakeTree("0/L/0/2 0.0/G/0/2 1/L/2/4 1.0/G/2/4 2/B/4/8 2.0/N/4/6 2.1/D/6/8 3/Q/8/10 3.0/G/8/10")
-let rootsOnly = UnreachableLines.Candidates(markers: [], chips: [], roots: true)
+let rootsOnly = UnreachableLines.Candidates(markers: [], chips: [], roots: true, stops: true)
 precondition(unreachableScanned(listsThenBlocks, rootsOnly)
              == UnreachableLines.Found(markers: [], chips: [], joins: [2, 4, 8], controls: [4..<6]))
 // The roots and the second list's start are 6 reads, the code block's two children and three more starts 8.
@@ -5475,19 +5479,37 @@ let othersFound = unreachableScanned(fakeTree(blocksSpec, linear: false), blocks
 precondition(othersFound.joins.isEmpty && othersFound.controls.isEmpty && othersFound.markers.count == 3,
              "without Linear's class another editor's quote or code gets no stop")
 precondition(folded(blocksValue, blocksRaw, fakeTree(blocksSpec, linear: false)).text.contains("\nCSS\n"))
-precondition(unreachableScanned(fakeTree(blocksSpec), blocksCandidates, closing: false)
+precondition(unreachableScanned(fakeTree(blocksSpec), UnreachableLines.candidates(text: blocksValue, breaks: blocksBreaks, raw: blocksRaw))
              == UnreachableLines.Found(markers: othersFound.markers, chips: []), "nor does an editor that is not ProseMirror's")
-// Two quotes show nothing in the text: their stop is read wherever the editor draws stops, and kept though nothing folds.
-let twoQuotes = fakeTree("0/Q/0/3 0.0/G/0/3 0.0.0/T/0/3 1/Q/3/6 1.0/G/3/6 1.0.0/T/3/6")
-let quoteCandidates = UnreachableLines.candidates(text: "one\ntwo", breaks: ParagraphBreaks(offsets: [3]), raw: "onetwo")
-precondition(!quoteCandidates.roots && quoteCandidates.lines && !quoteCandidates.isEmpty
-             && UnreachableLines.candidates(text: "one", breaks: ParagraphBreaks(), raw: "one").isEmpty)
+// Two quotes show nothing in the text: a ProseMirror editor's roots are read, and Linear's classes make the stop.
+let twoQuotesSpec = "0/Q/0/3 0.0/G/0/3 0.0.0/T/0/3 1/Q/3/6 1.0/G/3/6 1.0.0/T/3/6"
+let twoQuotes = fakeTree(twoQuotesSpec)
+let quoteCandidates = UnreachableLines.candidates(text: "one\ntwo", breaks: ParagraphBreaks(offsets: [3]), raw: "onetwo", proseMirror: true)
+precondition(!quoteCandidates.roots && quoteCandidates.stops && !quoteCandidates.isEmpty
+             && UnreachableLines.candidates(text: "one\ntwo", breaks: ParagraphBreaks(offsets: [3]), raw: "onetwo").isEmpty
+             && UnreachableLines.candidates(text: "one", breaks: ParagraphBreaks(), raw: "one", proseMirror: true).isEmpty,
+             "another editor's text, or a single line, asks nothing")
 precondition(unreachableScanned(twoQuotes, quoteCandidates)?.joins == [3]
-             && unreachableScanned(twoQuotes, quoteCandidates, closing: false)?.joins == [])
+             && unreachableScanned(fakeTree(twoQuotesSpec, linear: false), quoteCandidates)?.joins == [])
 precondition(folded("one\ntwo", "onetwo", twoQuotes).breaks == ParagraphBreaks(offsets: [3], hidden: [.init(at: 4, text: "", kind: .gap)])
              && UnreachableLines.fold(text: "a\nb", breaks: ParagraphBreaks(offsets: [1]), raw: "ab",
                                       found: .init(markers: [], chips: [], joins: [1])).breaks.gaps == [2],
              "a stop that was read is kept though nothing folds")
+// Review round 2's case: another ProseMirror editor's lists, no marker in the text and no Linear class, get no stop.
+let bareLists = "0/G/0/1 0.0/T/0/1 1/L/1/2 1.0/G/1/2 1.0.0/T/1/2 2/L/2/3 2.0/G/2/3 2.0.0/T/2/3 3/G/3/4 3.0/T/3/4"
+let otherLists = folded("p\na\nb\nc", "pabc", fakeTree(bareLists, linear: false))
+let linearLists = folded("p\na\nb\nc", "pabc", fakeTree(bareLists))
+precondition(otherLists.breaks.gaps.isEmpty && linearLists.breaks.gaps == [4])
+precondition(chords(webPhysical("k", text: otherLists.text, caret: 4, profile: noLineKeys, breaks: otherLists.breaks)).prefix(2)
+             == [.up, .lineStart]
+             && chords(webPhysical("k", text: linearLists.text, caret: 4, profile: noLineKeys, breaks: linearLists.breaks)).prefix(3)
+             == [.up, .up, .lineStart], "one ↑ where nothing shows a stop is drawn")
+// Linear's editor is told by its first three roots, so a document opening with a rule still is.
+let afterRule = fakeTree("0/R/0/0 1/G/0/3 1.0/T/0/3 2/Q/3/6 2.0/G/3/6 2.0.0/T/3/6 3/Q/6/9 3.0/G/6/9 3.0.0/T/6/9")
+let threeRules = fakeTree("0/R/0/0 1/R/0/0 2/R/0/0 3/Q/0/3 3.0/G/0/3 3.0.0/T/0/3 4/Q/3/6 4.0/G/3/6 4.0.0/T/3/6")
+let threeLines = UnreachableLines.candidates(text: "top\none\ntwo", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "toponetwo",
+                                             proseMirror: true)
+precondition(unreachableScanned(afterRule, threeLines)?.joins == [6] && unreachableScanned(threeRules, quoteCandidates)?.joins == [])
 let section = fakeTree("""
 0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8 4/L/8/10 4.0/G/8/10 5/B/10/14 5.0/G/10/12
 5.0.0/T/10/12 5.1/E/12/13 6/L/14/16 6.0/G/14/16 7/B/16/20 7.0/G/16/18 7.0.0/T/16/18 7.1/D/18/20

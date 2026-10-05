@@ -678,6 +678,7 @@ extension Sim {
             webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
         reads.roots = roots
+        reads.proseMirror = listLines != nil
         if emptyParagraphs {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")

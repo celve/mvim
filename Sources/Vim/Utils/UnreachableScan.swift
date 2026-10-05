@@ -20,10 +20,8 @@ public struct UnreachableScan<Node> {
         self.offset = offset
     }
 
-    /// Nil on any failed read or past the budget; `closing` reads the roots whatever the text shows, where the editor draws stops.
-    public mutating func run(
-        blocks roots: [Node], candidates: UnreachableLines.Candidates, closing: Bool = false
-    ) -> UnreachableLines.Found? {
+    /// Nil on any failed read or past the budget.
+    public mutating func run(blocks roots: [Node], candidates: UnreachableLines.Candidates) -> UnreachableLines.Found? {
         var markers: [Int] = []
         var chips: [UnreachableLines.Chip] = []
         var carets: [UnreachableLines.Caret] = []
@@ -40,11 +38,21 @@ public struct UnreachableScan<Node> {
             if let found = hit { carets.append(found) }
         }
         // Last, so running out of reads here loses only these, and the blocks' reads after the lists', which lose only theirs.
-        let lists = candidates.roots || closing ? listJoins(in: roots) : nil
-        let blocks = closing && lists != nil ? blockStops(in: roots) : nil
+        let linear = candidates.stops && linearRoots(roots)
+        let lists = candidates.roots || linear ? listJoins(in: roots) : nil
+        let blocks = linear && lists != nil ? blockStops(in: roots) : nil
         return UnreachableLines.Found(
             markers: markers, chips: chips, carets: carets, joins: blocks?.joins ?? lists ?? [], controls: blocks?.controls ?? []
         )
+    }
+
+    /// Linear's editor: one of its first three roots carries Linear's own class, as all but a rule or a table does.
+    private mutating func linearRoots(_ roots: [Node]) -> Bool {
+        for (index, root) in roots.prefix(3).enumerated() {
+            guard let read = read(root, at: [index]) else { return false }
+            if !UnreachableLines.nodeClasses.isDisjoint(with: read.classes) { return true }
+        }
+        return false
     }
 
     /// Plain starts of root lists that follow another root list; nil on a failed read or past the budget.

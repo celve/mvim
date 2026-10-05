@@ -43,20 +43,20 @@ public enum UnreachableLines {
         public let carets: [Int]
         /// A marker or a text-less leaf may belong to a list or a code block, so the root blocks are worth reading.
         public let roots: Bool
-        /// More than one line: two quotes side by side show nothing in the text, so an editor that draws stops has its roots read.
-        public let lines: Bool
+        /// A ProseMirror editor's text of more than one line, where Linear's stops show nothing in the text: two quotes side by side.
+        public let stops: Bool
 
         public init(
-            markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], roots: Bool = false, lines: Bool = false
+            markers: [Range<Int>], chips: [Range<Int>], carets: [Int] = [], roots: Bool = false, stops: Bool = false
         ) {
             self.markers = markers
             self.chips = chips
             self.carets = carets
             self.roots = roots
-            self.lines = lines
+            self.stops = stops
         }
 
-        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !roots && !lines }
+        public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !roots && !stops }
     }
 
     /// Linear's caret drawn at an inline code span's edge (LIN-1683), whose line and generated breaks are no text.
@@ -122,8 +122,11 @@ public enum UnreachableLines {
     /// The most AX reads one discovery may spend; a larger field keeps its markers and chips as lines.
     public static let readBudget = 1024
 
-    /// ProseMirror's class on its editor, whose gap cursor is the stop between two closed blocks.
+    /// ProseMirror's class on its editor; its gap cursor, Linear's stop, is a plugin another editor may not have.
     public static let editorClass = "ProseMirror"
+
+    /// Linear's own classes on its root blocks, which tell its editor from any other ProseMirror one.
+    public static let nodeClasses: Set<String> = ["text-node", "heading-node", "list-node", "block-node"]
 
     /// Linear's own DOM class on a code block, a quote and a collapsible section, which no other editor's quote carries.
     public static let blockClass = "block-node"
@@ -132,7 +135,9 @@ public enum UnreachableLines {
     public static let controlsClass = "node-controls"
 
     /// Lines shaped like a marker or starting with one and a space, lines starting as Linear's chips do, and drawn carets'.
-    public static func candidates(text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil) -> Candidates {
+    public static func candidates(
+        text: String, breaks: ParagraphBreaks, raw: String? = nil, caret: Int? = nil, proseMirror: Bool = false
+    ) -> Candidates {
         let leaves = raw.map(leafCounts) ?? [:]
         let generated = Set(breaks.offsets)
         let length = text.utf16.count
@@ -157,7 +162,8 @@ public enum UnreachableLines {
         // One can share its offset with a to-do's checkbox, or have no line after a `<br>`.
         if let caret, leaves[caret] != nil, !carets.contains(caret) { carets.append(caret) }
         return Candidates(
-            markers: markers, chips: chips, carets: carets, roots: !markers.isEmpty || leafLines, lines: text.utf16.contains(10)
+            markers: markers, chips: chips, carets: carets, roots: !markers.isEmpty || leafLines,
+            stops: proseMirror && text.utf16.contains(10)
         )
     }
 
