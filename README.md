@@ -100,10 +100,10 @@ per app:
 
 **Capabilities in _App_** shows what mvim can do in the current field, starting with what it learned
 to switch off in fields like it, and lets you override it; a badge on it counts what is off here.
-**Open Beliefs File** opens the file that keeps your choices and what mvim has learned (see
-[Browsers and Electron apps](#browsers-and-electron-apps)). The rest of the menu reports the tap and
-both permissions, whose rows open their System Settings panes, and holds
-[Start at Login](#start-at-login).
+The rest of the menu reports the tap and both permissions, whose rows open their System Settings
+panes, and holds [Start at Login](#start-at-login) and, below it, **Open Beliefs File**, which opens
+the file that keeps your choices and what mvim has learned (see
+[Browsers and Electron apps](#browsers-and-electron-apps)).
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
 
 ## What works
@@ -678,8 +678,9 @@ save in between is read back, and the change is made to it instead.
 
 A file mvim cannot use is never written over: bad JSON, a missing key, another `schema`, an answer
 its question cannot take, or an override other than `on` or `off`. mvim goes on applying the last
-version that read, across relaunches too, and the menu shows its choices under **Open Beliefs File —
-unreadable, last good version in use**. Each bind logs a `beliefs-file` line in `learn` with the
+version that read, across relaunches too: the menu shows its choices, and the **Open Beliefs File**
+row reads **Open Beliefs File — unreadable, last good version in use**. Each bind logs a
+`beliefs-file` line in `learn` with the
 reason, and neither lessons nor menu choices are saved until the file reads again. A question or
 capability name mvim does not know is kept and ignored. Builds before the file kept overrides and
 beliefs in the `capabilityOverrides` and `fieldBeliefs` defaults, which move to the file on first

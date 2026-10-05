@@ -32,9 +32,6 @@ struct MvimApp: App {
                     choose: model.setCapabilityOverride, forget: model.forget, clear: model.clearOverrides
                 )
             }
-            Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, last good version in use") {
-                model.openBeliefsFile()
-            }
             Divider()
             Text(model.tapInstalled ? "Input tap: running" : "Input tap: not installed")
                 .onAppear { model.refresh() }
@@ -54,6 +51,9 @@ struct MvimApp: App {
             ))
             if model.loginItem == .blocked {
                 Button("Approve mvim in Login Items Settings") { model.openLoginItemsSettings() }
+            }
+            Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, last good version in use") {
+                model.openBeliefsFile()
             }
             if let updater {
                 Divider()
