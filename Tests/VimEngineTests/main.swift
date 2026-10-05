@@ -4144,10 +4144,10 @@ func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
     return (0...).prefix { nodes[[$0]] != nil }.map { build([$0]) }
 }
 func unreachableScanned(
-    _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget
+    _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget, closing: Bool = true
 ) -> UnreachableLines.Found? {
     var scan = UnreachableScan<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
-    return scan.run(blocks: blocks, candidates: candidates)
+    return scan.run(blocks: blocks, candidates: candidates, closing: closing)
 }
 func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLines.Model {
     let plain = MarkerText.plain(raw)
@@ -5286,8 +5286,8 @@ precondition((1...400).contains { budget in
     guard let found = unreachableScanned(boundaryTree, boundaryCandidates, budget: budget) else { return false }
     return found.joins.isEmpty && found.markers.count == 10
 }, "running out of reads on the lists loses only the joins")
-precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
-             "nothing that starts a list, no joins read")
+precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []), closing: false)?.joins == [],
+             "nothing that starts a list and an editor that draws no stops, no joins read")
 let ownLists = fakeTree("0/G/0/3 0.0/T/0/3 1/L/3/6 1.0/G/3/6 1.0.0/M/3/5 1.0.1/T/5/6 2/L/6/10 2.0/G/6/10 2.0.0/M/6/9 2.0.1/T/9/10")
 let ownCandidates = UnreachableLines.candidates(text: "Top\n\u{2022} a\n1. b", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "Top\u{2022} a1. b")
 precondition(unreachableScanned(ownLists, ownCandidates)?.joins == [6]
@@ -5297,10 +5297,33 @@ let todosModel = folded("Top\n\n\nTodo a\n\n\nTodo b\nEnd", "Top\u{FFFC}\u{FFFC}
 2.0.0/G/9/9 2.0.0.0/I/9/9 2.0.0.1/C/9/9 2.0.1/G/9/15 2.0.1.0/T/9/15 3/G/15/18 3.0/T/15/18
 """))
 precondition(todosModel.text == "Top\nTodo a\nTodo b\nEnd" && todosModel.breaks.gaps == [11], "two to-do lists alone stop too")
+// softlash/LIN-1726 evidence/tree-empty-above-todo.jsonl: below an empty paragraph a to-do's image and checkbox have no lines.
+let bareTodo = folded(
+    "Corner probe: plain opening paragraph alpha.\nTodo under paragraph bravo\nQuote after todo charlie\nPlain closing paragraph delta.",
+    "Corner probe: plain opening paragraph alpha.\n\u{FFFC}\u{FFFC}Todo under paragraph bravoQuote after todo charliePlain closing paragraph delta.",
+    fakeTree("""
+    0/G/0/44 0.0/T/0/44 1/E/44/45 2/L/45/71 2.0/G/45/71 2.0.0/G/45/45 2.0.0.0/I/45/45 2.0.0.1/C/45/45 2.0.1/G/45/71
+    2.0.1.0/G/45/71 2.0.1.0.0/T/45/71 3/Q/71/95 3.0/G/71/95 3.0.0/T/71/95 4/G/95/125 4.0/T/95/125
+    """))
+precondition(bareTodo.breaks.hidden == [.init(at: lineStart(of: "Quote after todo", in: bareTodo.text), text: "", kind: .gap)]
+             && roundTrips(bareTodo), "with no marker and no leaf's line, the stop is read and kept all the same")
+// evidence/tree-empty-quote-line.jsonl: the same to-do below a quote's empty last line.
+let quotedBareTodo = folded(
+    "Corner probe: plain opening paragraph alpha.\nQuote before todo bravo\nTodo after quote charlie\nPlain closing paragraph delta.",
+    "Corner probe: plain opening paragraph alpha.Quote before todo bravo\n\u{FFFC}\u{FFFC}Todo after quote charliePlain closing paragraph delta.",
+    fakeTree("""
+    0/G/0/44 0.0/T/0/44 1/Q/44/68 1.0/G/44/67 1.0.0/T/44/67 1.1/E/67/68 2/L/68/92 2.0/G/68/92 2.0.0/G/68/68
+    2.0.0.0/I/68/68 2.0.0.1/C/68/68 2.0.1/G/68/92 2.0.1.0/G/68/92 2.0.1.0.0/T/68/92 3/G/92/122 3.0/T/92/122
+    """))
+let quotedBareStart = lineStart(of: "Todo after quote", in: quotedBareTodo.text)
+precondition(quotedBareTodo.breaks.hidden == [.init(at: quotedBareStart, text: "", kind: .boxedGap)] && roundTrips(quotedBareTodo)
+             && chords(webPhysical("j", text: quotedBareTodo.text, caret: quotedBareStart - 1, profile: keyProfile,
+                                   breaks: quotedBareTodo.breaks)) == [.paragraphEnd, .right, .right],
+             "its stop is a to-do's by the leaves at the list's start, though none has a line")
 precondition(!UnreachableLines.candidates(text: "Top\nEnd", breaks: ParagraphBreaks(offsets: [3]), raw: "TopEnd").roots)
 
 let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [
-    .init(at: 11, text: ""), .init(at: 11, text: ""), .init(at: 11, text: "", kind: .gap),
+    .init(at: 11, text: ""), .init(at: 11, text: ""), .init(at: 11, text: "", kind: .boxedGap),
 ])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphEnd, .right, .right], "a to-do, behind its checkbox's leaves, takes → →")
@@ -5315,6 +5338,20 @@ precondition(webPhysical("j", text: tenTwice, caret: 0, profile: writeKeys, brea
              && webPhysical("dd", text: tenTwice, caret: 0, profile: writeKeys, breaks: quoteGap).steps.first
              == webPhysical("dd", text: tenTwice, caret: 0, profile: writeKeys, breaks: ParagraphBreaks(offsets: [10])).steps.first,
              "a stop folds no text, so a write lane plans a quote's first line as any paragraph's")
+let thrice = tenTwice + "\nabcdefghij"
+let foldedQuote = ParagraphBreaks(offsets: [10, 21], hidden: [.init(at: 11, text: "", kind: .gap), .init(at: 22, text: "\u{2022}")])
+let foldedPlain = ParagraphBreaks(offsets: [10, 21], hidden: [.init(at: 22, text: "\u{2022}")])
+precondition([("j", 0), ("k", 22), ("dd", 11), ("d$", 11)].allSatisfy { keys, caret in
+    webPhysical(keys, text: thrice, caret: caret, profile: writeKeys, breaks: foldedQuote).steps
+        == webPhysical(keys, text: thrice, caret: caret, profile: writeKeys, breaks: foldedPlain).steps
+}, "and so it does where the field folds a marker elsewhere")
+let bareTodoGap = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .boxedGap)])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: bareTodoGap))
+             == [.paragraphEnd, .right, .right], "a to-do whose checkbox has no line of its own still takes → →")
+precondition(["j", "$", "o", "dd", "J"].allSatisfy { keys in
+    webPhysical(keys, text: tenTwice, caret: 0, profile: writeKeys, breaks: bareTodoGap).steps
+        == webPhysical(keys, text: tenTwice, caret: 0, profile: writeKeys, breaks: ParagraphBreaks(offsets: [10])).steps
+}, "stops alone leave a field unfolded for the write lane, and an edit's length known")
 let codeGap = ParagraphBreaks(offsets: [10], hidden: [
     .init(at: 11, text: "CSS"), .init(at: 11, text: ""), .init(at: 11, text: ""), .init(at: 11, text: "", kind: .gap),
 ])
@@ -5406,6 +5443,9 @@ precondition(blocksModel.breaks.gaps == Set(["code after bullet mike", "Quote af
     "code after todo tango", "Todo after code uniform", "Quote after todo victor", "Bullet after quote xray",
 ].map { lineStart(of: $0, in: blocksModel.text) }), "a stop between any two of list, code block and quote, and nowhere else")
 precondition(roundTrips(blocksModel))
+precondition(Set(blocksModel.breaks.hidden.filter { $0.kind == .boxedGap }.map(\.at))
+             == Set(["Todo after quote sierra", "Todo after code uniform"].map { lineStart(of: $0, in: blocksModel.text) }),
+             "only a to-do's stop is boxed")
 precondition(blocksModel.breaks.fieldOffset(lineStart(of: "code after bullet mike", in: blocksModel.text)) == 328)
 func crossing(_ line: String, _ keys: String = "j", profile: CapabilityProfile = keyProfile) -> [Chord] {
     chords(webPhysical(keys, text: blocksModel.text, caret: lineStart(of: line, in: blocksModel.text), profile: profile,
@@ -5435,6 +5475,19 @@ let othersFound = unreachableScanned(fakeTree(blocksSpec, linear: false), blocks
 precondition(othersFound.joins.isEmpty && othersFound.controls.isEmpty && othersFound.markers.count == 3,
              "without Linear's class another editor's quote or code gets no stop")
 precondition(folded(blocksValue, blocksRaw, fakeTree(blocksSpec, linear: false)).text.contains("\nCSS\n"))
+precondition(unreachableScanned(fakeTree(blocksSpec), blocksCandidates, closing: false)
+             == UnreachableLines.Found(markers: othersFound.markers, chips: []), "nor does an editor that is not ProseMirror's")
+// Two quotes show nothing in the text: their stop is read wherever the editor draws stops, and kept though nothing folds.
+let twoQuotes = fakeTree("0/Q/0/3 0.0/G/0/3 0.0.0/T/0/3 1/Q/3/6 1.0/G/3/6 1.0.0/T/3/6")
+let quoteCandidates = UnreachableLines.candidates(text: "one\ntwo", breaks: ParagraphBreaks(offsets: [3]), raw: "onetwo")
+precondition(!quoteCandidates.roots && quoteCandidates.lines && !quoteCandidates.isEmpty
+             && UnreachableLines.candidates(text: "one", breaks: ParagraphBreaks(), raw: "one").isEmpty)
+precondition(unreachableScanned(twoQuotes, quoteCandidates)?.joins == [3]
+             && unreachableScanned(twoQuotes, quoteCandidates, closing: false)?.joins == [])
+precondition(folded("one\ntwo", "onetwo", twoQuotes).breaks == ParagraphBreaks(offsets: [3], hidden: [.init(at: 4, text: "", kind: .gap)])
+             && UnreachableLines.fold(text: "a\nb", breaks: ParagraphBreaks(offsets: [1]), raw: "ab",
+                                      found: .init(markers: [], chips: [], joins: [1])).breaks.gaps == [2],
+             "a stop that was read is kept though nothing folds")
 let section = fakeTree("""
 0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8 4/L/8/10 4.0/G/8/10 5/B/10/14 5.0/G/10/12
 5.0.0/T/10/12 5.1/E/12/13 6/L/14/16 6.0/G/14/16 7/B/16/20 7.0/G/16/18 7.0.0/T/16/18 7.1/D/18/20
@@ -5460,10 +5513,15 @@ let blockDoc: [(String, Sim.ListLine)] = [
     ("A to-do", .init(leaves: 2, checkbox: true, stop: true)), ("Quote three", .init(stop: true)),
     ("Numbered", .init(marker: "1.", stop: true)), ("Last paragraph.", .init()),
 ]
-func blockSim(_ profile: CapabilityProfile) -> Sim {
-    var host = Sim(text: blockDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
+// A to-do below an empty paragraph, and one below a quote's empty last line, as softlash/LIN-1726 measured them.
+let bareDoc: [(String, Sim.ListLine)] = [
+    ("Top paragraph", .init()), ("", .init()), ("A to-do", .init(leaves: 2, checkbox: true)), ("A quote", .init(stop: true)),
+    ("", .init()), ("Second to-do", .init(leaves: 2, checkbox: true, stop: true)), ("Last paragraph.", .init()),
+]
+func blockSim(_ profile: CapabilityProfile, _ doc: [(String, Sim.ListLine)] = blockDoc, caret: Int = 0) -> Sim {
+    var host = Sim(text: doc.map(\.0).joined(separator: "\n"), caret: caret, profile: profile)
     host.emptyParagraphs = true
-    host.listLines = blockDoc.map(\.1)
+    host.listLines = doc.map(\.1)
     host.emulatesKeys = true
     host.readModel = .textContent
     return host
@@ -5482,6 +5540,42 @@ for profile in [keyProfile, writeKeys, removing([.lineStartKey], from: keyProfil
         }
         precondition(blocks.settleFailures == 0 && blocks.bells == 0, keys)
     }
+    for keys in ["jjjjjjkkkkkk", "$jjjjjjkkkkkk", "wwwwwwwwwwbbbbbbbbbb", "jjeeeeee"] {
+        var bare = blockSim(profile, bareDoc)
+        var plain = Sim(text: bare.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            bare.type(String(key))
+            plain.type(String(key))
+            precondition(bare.caret == plain.caret && bare.text == plain.text, "bare \(keys) at \(key)")
+        }
+        precondition(bare.settleFailures == 0 && bare.bells == 0, "bare \(keys)")
+    }
 }
+// Quotes alone, a paragraph shaped like a marker above them, and a to-do below an empty line: each stop is read (LIN-1726).
+for (doc, caret, landing) in [
+    ([("one", Sim.ListLine()), ("two", .init(stop: true))], 0, 4),
+    ([("1.", .init()), ("one", .init()), ("two", .init(stop: true))], 3, 7),
+    ([("", .init()), ("task", .init(leaves: 2, checkbox: true)), ("quoted", .init(stop: true))], 1, 6),
+] {
+    var host = blockSim(keyProfile, doc, caret: caret)
+    host.type("j")
+    precondition(host.caret == landing && host.settleFailures == 0 && host.bells == 0, "\(doc.map(\.0))")
+}
+// A paragraph made a quote, or a quote made a paragraph, keeps the text and the block count: the stops are read again.
+var quoted = blockSim(keyProfile, [("item", .init(marker: "\u{2022}")), ("one", .init()), ("two", .init())], caret: 9)
+quoted.type("k")
+quoted.listLines?[1].stop = true
+quoted.type("k")
+quoted.type("j")
+precondition(quoted.caret == 5 && quoted.settleFailures == 0 && quoted.bells == 0, "a stop made after the last read")
+var unquoted = blockSim(keyProfile, [
+    ("item", .init(marker: "\u{2022}")), ("one", .init(stop: true)), ("task", .init(leaves: 2, checkbox: true, stop: true)),
+], caret: 0)
+unquoted.type("j")
+unquoted.listLines?[1].stop = false
+unquoted.listLines?[2].stop = false
+unquoted.type("j")
+precondition(unquoted.caret == 9 && unquoted.settleFailures == 0 && unquoted.bells == 0, "a stop gone since the last read")
 
 print("Vim engine tests passed")

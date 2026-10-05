@@ -94,6 +94,8 @@ public extension FieldSnapshot {
         public var webContent: Bool
         /// The child count, which the memo is keyed on.
         public var blocks: Int?
+        /// The root blocks' identities, hashed, which the unreachable lines' memo is keyed on too.
+        public var roots: Int?
         /// The marker selection, in plain marker offsets.
         public var marked: Range<Int>?
         /// The raw marker text, U+FFFCs included; nil where `AXValue` has no line.
@@ -199,7 +201,8 @@ public extension FieldSnapshot {
                 text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil
             )
             if !candidates.isEmpty {
-                guard let knownUnreachable, knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks) else {
+                guard let knownUnreachable,
+                      knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks, roots: reads.roots) else {
                     return .needs(.unreachable(value: value, markers: raw, candidates: candidates))
                 }
                 unreachable = knownUnreachable

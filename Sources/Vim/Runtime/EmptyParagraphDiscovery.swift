@@ -22,23 +22,27 @@ enum UnreachableDiscovery {
         guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), 0) }
         guard let tree = FieldTree(element, markers: markers) else { return nil }
         var scan = UnreachableScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, candidates: candidates).map { ($0, scan.reads + 2) }
+        return scan.run(blocks: tree.blocks, candidates: candidates, closing: tree.closes).map { ($0, scan.reads + 2) }
     }
 }
 
 /// The reads both discoveries descend a Chromium field's tree by.
 struct FieldTree {
     let blocks: [AXUIElement]
+    /// The editor is ProseMirror's, which draws a stop between two closed blocks.
+    let closes: Bool
     let block: (AXUIElement) -> EmptyBlockScan<AXUIElement>.Block?
     let offset: (AXUIElement, _ end: Bool) -> Int?
 
     init?(_ element: AXUIElement, markers: String) {
-        guard let start = AX.fieldStart(of: element), let blocks = AX.children(of: element) else { return nil }
+        let roots = AX.attributes([kAXChildrenAttribute, "AXDOMClassList"], of: element)
+        guard let start = AX.fieldStart(of: element), Self.absentOrRead(roots, 0) else { return nil }
         // Marker lengths count each U+FFFC before them, plain offsets do not.
         var objects = [0]
         objects.reserveCapacity(markers.utf16.count + 1)
         for unit in markers.utf16 { objects.append(objects[objects.count - 1] + (unit == 0xFFFC ? 1 : 0)) }
-        self.blocks = blocks
+        blocks = roots.elements(0) ?? []
+        closes = roots.strings(1)?.contains(UnreachableLines.editorClass) ?? false
         block = { node in
             let reads = AX.attributes(
                 [kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute, "AXDOMClassList", "AXBlockQuoteLevel"], of: node

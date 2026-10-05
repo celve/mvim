@@ -23,6 +23,8 @@ public struct ParagraphBreaks: Equatable, Sendable {
             case trailingBreak
             /// No text: the line starts a list, code block or quote right after another, and a plain → ↓ or ↑ stops between them first.
             case gap
+            /// The same where text-less leaves start the block, as a to-do's checkbox does, which ⇧→ does not extend into.
+            case boxedGap
         }
 
         public init(at: Int, text: String, kind: Kind = .structure) {
@@ -35,6 +37,8 @@ public struct ParagraphBreaks: Equatable, Sendable {
         public var isStructure: Bool { kind == .structure || kind == .prefix }
 
         public var isMarker: Bool { isStructure && !text.isEmpty }
+
+        public var isGap: Bool { kind == .gap || kind == .boxedGap }
     }
 
     public init(offsets: [Int] = [], hidden: [Hidden] = []) {
@@ -113,7 +117,7 @@ public extension ParagraphBreaks {
 
     /// Model offsets of the lines a stop between two blocks comes before.
     var gaps: Set<Int> {
-        Set(hidden.filter { $0.kind == .gap }.map(\.at))
+        Set(hidden.filter(\.isGap).map(\.at))
     }
 
     /// `text` at `range` with each atom's whole text, as a register keeps it.

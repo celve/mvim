@@ -522,9 +522,11 @@ keeps 2 ms.
 In Linear, → or ↓ from the last line of a list, a code block or a quote stops once before another of
 the three that follows it directly, and so does ↑ coming back; next to a paragraph or a heading there is
 no stop. mvim marks the first line after each stop, so `j`, `w`, a counted `$` and the like press through
-it: ⇧→ →, or → → into a to-do, which ⇧→ will not extend into. mvim finds a code block or a quote by
-Linear's own class on it, so another editor's quote gets no stop. A table or a collapsible section has
-the stop too and is not marked, nor is one between blocks inside a quote.
+it: ⇧→ →, or → → into a to-do, which ⇧→ will not extend into. Two quotes side by side show nothing in
+the text, so in a ProseMirror editor mvim reads the document's blocks whenever the text has more than one
+line, and again when a block changes kind. It finds a code block or a quote by Linear's own class on it,
+so another editor's quote gets no stop. A table or a collapsible section has the stop too and is not
+marked, nor is one between blocks inside a quote.
 
 Each key is a row in the Capabilities menu — **Line start key (⌃A)**, **Line end key (⌃E)**,
 **Document start key (⌘↑)**, **Document end key (⌘↓)** — claimed for every field whose text

@@ -20,8 +20,10 @@ public struct UnreachableScan<Node> {
         self.offset = offset
     }
 
-    /// Nil on any failed read or past the budget.
-    public mutating func run(blocks roots: [Node], candidates: UnreachableLines.Candidates) -> UnreachableLines.Found? {
+    /// Nil on any failed read or past the budget; `closing` reads the roots whatever the text shows, where the editor draws stops.
+    public mutating func run(
+        blocks roots: [Node], candidates: UnreachableLines.Candidates, closing: Bool = false
+    ) -> UnreachableLines.Found? {
         var markers: [Int] = []
         var chips: [UnreachableLines.Chip] = []
         var carets: [UnreachableLines.Caret] = []
@@ -38,8 +40,8 @@ public struct UnreachableScan<Node> {
             if let found = hit { carets.append(found) }
         }
         // Last, so running out of reads here loses only these, and the blocks' reads after the lists', which lose only theirs.
-        let lists = candidates.roots ? listJoins(in: roots) : nil
-        let blocks = lists == nil ? nil : blockStops(in: roots)
+        let lists = candidates.roots || closing ? listJoins(in: roots) : nil
+        let blocks = closing && lists != nil ? blockStops(in: roots) : nil
         return UnreachableLines.Found(
             markers: markers, chips: chips, carets: carets, joins: blocks?.joins ?? lists ?? [], controls: blocks?.controls ?? []
         )

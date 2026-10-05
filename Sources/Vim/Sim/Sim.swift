@@ -677,6 +677,7 @@ extension Sim {
             field: FieldReads(text: text, plain: plain, selectedText: readSelectedText), length: fieldLength,
             webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
+        reads.roots = roots
         if emptyParagraphs {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
@@ -727,9 +728,9 @@ extension Sim {
                     candidates.chips.contains { $0.lowerBound == chip.range.lowerBound && chip.range.upperBound <= $0.upperBound }
                 },
                 carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? [],
-                joins: candidates.roots ? shown.joins : [], controls: candidates.roots ? shown.controls : []
+                joins: shown.joins, controls: shown.controls
             ) : nil
-            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, found: found)
+            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, roots: roots, found: found)
         }
     }
 
@@ -738,6 +739,15 @@ extension Sim {
 
     /// The child count: a block per paragraph.
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
+
+    /// The roots by identity: a line whose block changes kind is a new root, though the text and the count stay.
+    var roots: Int? {
+        listLines.map { lines in
+            var hasher = Hasher()
+            hasher.combine(lines)
+            return hasher.finalize()
+        }
+    }
 
     var chromium: ChromiumParagraphs {
         let caret = selection.isEmpty ? selection.lowerBound : nil
@@ -799,7 +809,7 @@ extension Sim {
 
 public extension Sim {
     /// What Linear draws before a line's text, each a block of its own in `AXValue`: a list marker, then text-less leaves.
-    struct ListLine: Equatable, Sendable {
+    struct ListLine: Hashable, Sendable {
         public var marker: String?
         public var leaves: Int
         /// The leaves are a to-do's checkbox, which a write at its line's start lands beside by where the caret was.
