@@ -37,22 +37,13 @@ public struct UnreachableScan<Node> {
             guard let hit = caret(at: candidate, in: roots, path: [], ancestors: []) else { return nil }
             if let found = hit { carets.append(found) }
         }
-        // Last, so running out of reads here loses only these, and the blocks' reads after the lists', which lose only theirs.
-        let linear = candidates.stops && linearRoots(roots)
-        let lists = candidates.roots || linear ? listJoins(in: roots) : nil
-        let blocks = linear && lists != nil ? blockStops(in: roots) : nil
+        // Last, so running out of reads here loses only these, and Linear's blocks' reads after the lists', which lose only theirs.
+        let lists = candidates.roots ? listJoins(in: roots) : nil
+        let blocks = candidates.stops ? blockStops(in: roots) : nil
         return UnreachableLines.Found(
-            markers: markers, chips: chips, carets: carets, joins: blocks?.joins ?? lists ?? [], controls: blocks?.controls ?? []
+            markers: markers, chips: chips, carets: carets, joins: Array(Set((lists ?? []) + (blocks?.joins ?? []))).sorted(),
+            controls: blocks?.controls ?? []
         )
-    }
-
-    /// Linear's editor: one of its first three roots carries Linear's own class, as all but a rule or a table does.
-    private mutating func linearRoots(_ roots: [Node]) -> Bool {
-        for (index, root) in roots.prefix(3).enumerated() {
-            guard let read = read(root, at: [index]) else { return false }
-            if !UnreachableLines.nodeClasses.isDisjoint(with: read.classes) { return true }
-        }
-        return false
     }
 
     /// Plain starts of root lists that follow another root list; nil on a failed read or past the budget.
@@ -71,14 +62,14 @@ public struct UnreachableScan<Node> {
         return joins
     }
 
-    /// The same with Linear's quotes and code blocks closed too, and what precedes each block's code; nil past the budget.
+    /// The same over Linear's own lists, quotes and code blocks, told by their classes, and what precedes each code; nil past the budget.
     private mutating func blockStops(in roots: [Node]) -> (joins: [Int], controls: [Range<Int>])? {
         var joins: [Int] = []
         var controls: [Range<Int>] = []
         var afterClosed = false
         for (index, root) in roots.enumerated() {
             guard let read = read(root, at: [index]) else { return nil }
-            var closed = read.role == "AXList"
+            var closed = read.role == "AXList" && read.classes.contains(UnreachableLines.listClass)
             if read.classes.contains(UnreachableLines.blockClass) {
                 if read.quoteLevel > 0 {
                     closed = true

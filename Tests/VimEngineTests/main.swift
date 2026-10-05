@@ -5504,12 +5504,19 @@ precondition(chords(webPhysical("k", text: otherLists.text, caret: 4, profile: n
              == [.up, .lineStart]
              && chords(webPhysical("k", text: linearLists.text, caret: 4, profile: noLineKeys, breaks: linearLists.breaks)).prefix(3)
              == [.up, .up, .lineStart], "one ↑ where nothing shows a stop is drawn")
-// Linear's editor is told by its first three roots, so a document opening with a rule still is.
-let afterRule = fakeTree("0/R/0/0 1/G/0/3 1.0/T/0/3 2/Q/3/6 2.0/G/3/6 2.0.0/T/3/6 3/Q/6/9 3.0/G/6/9 3.0.0/T/6/9")
+// Review round 3's case: Linear's blocks are told by their own classes wherever they stand, after any number of rules.
+for rules in 0...4 {
+    let spec = (0..<rules).map { "\($0)/R/0/0" } + [
+        "\(rules)/L/0/5 \(rules).0/G/0/5 \(rules).0.0/G/0/1 \(rules).0.0.0/T/0/1 \(rules).0.1/G/1/5 \(rules).0.1.0/T/1/5",
+        "\(rules + 1)/Q/5/11 \(rules + 1).0/G/5/11 \(rules + 1).0.0/T/5/11",
+    ]
+    let model = folded("\u{2022}\nitem\nquoted", "\u{2022}itemquoted", fakeTree(spec.joined(separator: " ")))
+    precondition(model.breaks.gaps == [lineStart(of: "quoted", in: model.text)]
+                 && chords(webPhysical("j", text: model.text, caret: 0, profile: keyProfile, breaks: model.breaks))
+                 == [.paragraphEnd, .selectRight, .right], "\(rules) rules")
+}
 let threeRules = fakeTree("0/R/0/0 1/R/0/0 2/R/0/0 3/Q/0/3 3.0/G/0/3 3.0.0/T/0/3 4/Q/3/6 4.0/G/3/6 4.0.0/T/3/6")
-let threeLines = UnreachableLines.candidates(text: "top\none\ntwo", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "toponetwo",
-                                             proseMirror: true)
-precondition(unreachableScanned(afterRule, threeLines)?.joins == [6] && unreachableScanned(threeRules, quoteCandidates)?.joins == [])
+precondition(unreachableScanned(threeRules, quoteCandidates)?.joins == [3])
 let section = fakeTree("""
 0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8 4/L/8/10 4.0/G/8/10 5/B/10/14 5.0/G/10/12
 5.0.0/T/10/12 5.1/E/12/13 6/L/14/16 6.0/G/14/16 7/B/16/20 7.0/G/16/18 7.0.0/T/16/18 7.1/D/18/20

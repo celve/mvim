@@ -125,8 +125,8 @@ public enum UnreachableLines {
     /// ProseMirror's class on its editor; its gap cursor, Linear's stop, is a plugin another editor may not have.
     public static let editorClass = "ProseMirror"
 
-    /// Linear's own classes on its root blocks, which tell its editor from any other ProseMirror one.
-    public static let nodeClasses: Set<String> = ["text-node", "heading-node", "list-node", "block-node"]
+    /// Linear's own DOM class on a list, which no other editor's list carries.
+    public static let listClass = "list-node"
 
     /// Linear's own DOM class on a code block, a quote and a collapsible section, which no other editor's quote carries.
     public static let blockClass = "block-node"
