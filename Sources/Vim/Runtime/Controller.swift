@@ -521,27 +521,30 @@ public final class Controller {
         if state.field.mode.isInserting, read.range == operand { return true }
         var side: ParagraphBreaks.Side?
         var snapshot: FieldSnapshot?
-        // An edit that landed before the abort leaves the run's snapshot describing other text.
-        if let marked = read.marked, AX.value(of: binding.element) == reading.reads.text {
+        if let marked = read.marked {
             side = Snapshotter.paragraphSide(of: marked, upper: false)
-            snapshot = reading.snapshot
+            // An edit that landed before the abort leaves the run's snapshot describing other text.
+            if AX.value(of: binding.element) == reading.reads.text { snapshot = reading.snapshot }
         }
         let collapse = PhysicalPlanner.collapse(
             read.range, side: side, paragraphs: paragraphs, snapshot: snapshot, profile: binding.capabilities
         )
+        let writes = binding.capabilities.has(.writeSelection)
+        let settled = executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
         // Keys the field ignored fail their settle, and a write lane then writes the start as it was read.
-        if !executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs),
-           binding.capabilities.has(.writeSelection) {
+        if !settled, writes {
             let asRead = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
             executor.execute(asRead, on: binding.element, state: &state, paragraphs: paragraphs)
         }
+        // A settle can pass with a key still landing (LIN-1766), so after a write lane's keys the caret is waited for.
+        let keyed = settled && writes && !collapse.steps.allSatisfy(PhysicalPlanner.isWrite)
         // The write that stranded this may be the one that lies, so confirm.
-        return becomesCaret(binding.element, paragraphs: paragraphs)
+        return becomesCaret(binding.element, paragraphs: paragraphs, within: keyed ? 0.1 : 0)
     }
 
-    /// Whether the selection reads as a caret within 100 ms: Chromium shows a write or a key milliseconds after it is sent.
-    private func becomesCaret(_ element: AXUIElement, paragraphs: Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(0.1)
+    /// Whether the selection reads as a caret, by `wait` seconds from now: Chromium shows a key milliseconds after it is sent.
+    private func becomesCaret(_ element: AXUIElement, paragraphs: Bool, within wait: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(wait)
         while let read = selection(of: element, paragraphs: paragraphs) {
             if read.caret || Date() >= deadline { return read.caret }
             Thread.sleep(forTimeInterval: 0.003)

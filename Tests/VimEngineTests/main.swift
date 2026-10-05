@@ -1347,21 +1347,30 @@ precondition(strandedPlan(2..<4, .start(skipping: 0), profile: axProfile) == Phy
 precondition(strandedPlan(2..<2, .end, profile: axProfile) == collapsedToEnd, "a selected break alone starts at the end too")
 precondition(strandedPlan(1..<4, .end, profile: axProfile) == PhysicalPlan(.setSelection(1..<1)), "off a boundary the side says nothing")
 let drawnAhead = FieldSnapshot(capabilities: axProfile, text: "ab\ncd\nef", breaks: paras, drawnBreak: 4)
-for unresolved in [
-    strandedPlan(2..<4, nil, profile: axProfile),
-    PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, profile: axProfile),
-    strandedPlan(2..<4, .end, text: "a", profile: axProfile),
-    PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, snapshot: drawnAhead, profile: axProfile),
+for (profile, asRead) in [
+    (axProfile, PhysicalPlan(.setSelection(2..<2))),
+    (readProfile, PhysicalPlan(
+        .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1), .settle(Expectation(selection: 2..<2))
+    )),
 ] {
-    precondition(unresolved == PhysicalPlan(.setSelection(2..<2)),
-                 "no side, no snapshot, a start past its text or a <br> drawn for the caret: written as read")
+    for sideAlone in [
+        PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, profile: profile),
+        strandedPlan(2..<4, .end, text: "a", profile: profile),
+        PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, snapshot: drawnAhead, profile: profile),
+    ] {
+        precondition(sideAlone == collapsedToEnd, "no snapshot, a start past its text or a <br> drawn for the caret: the end side alone decides")
+    }
+    for unplaced in [
+        strandedPlan(2..<4, nil, profile: profile),
+        strandedPlan(2..<4, .start(skipping: 0), text: "a", profile: profile),
+        PhysicalPlanner.collapse(2..<4, side: .start(skipping: 2), paragraphs: true, snapshot: drawnAhead, profile: profile),
+    ] {
+        precondition(unplaced == asRead, "no side, or a start side with no snapshot to place it: the plan for the offset as read")
+    }
 }
 precondition(strandedPlan(2..<4, .start(skipping: 0), profile: readProfile) == PhysicalPlan(
     .press(.left, count: 1), .settle(Expectation(selection: 2..<2, edge: .paragraphStart))
 ), "no ⇧← → crosses the break above a paragraph's start")
-precondition(strandedPlan(2..<4, nil, profile: readProfile) == PhysicalPlan(
-    .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1), .settle(Expectation(selection: 2..<2))
-))
 precondition(strandedPlan(4..<6, .start(skipping: 2), text: "• ab\n• cd", breaks: listItems, profile: axProfile)
              == PhysicalPlan(.setSelection(6..<6)), "a list item's start is written past its marker")
 precondition(strandedPlan(0..<2, .start(skipping: 2), text: "• ab\n• cd", breaks: listItems, profile: axProfile)
@@ -4104,11 +4113,14 @@ precondition(atStart.text == "ab cd\nXef gh" && atStart.settleFailures == 1, "an
 let numbered = [Sim.ListLine(marker: "1."), Sim.ListLine(marker: "2."), Sim.ListLine()]
 precondition(strandedChange(["one", "two three", "four"], caret: 3, profile: writeKeys, lines: numbered).text
              == "oneX\ntwo three\nfour", "the snapshot's text tells that a write to a list item's end needs keys, so ← collapses there too")
-precondition(strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4]).text
-             == "ab x\nXcd ef\ngh", "the caret Linear drew at the code span ended its paragraph with a <br>, so the snapshot is not used")
-let afterChip = strandedChange(["ab \u{2060}", "ef gh"], caret: 4, profile: keyProfile, lines: [Sim.ListLine(), Sim.ListLine()])
-precondition(afterChip.text == "ab \u{2060}X\nef gh" && afterChip.settleFailures == 2,
-             "nor once AXValue has changed, here by the chip's image: the settle expects the selection's offset, short of the chip's <br>")
+let atDrawn = strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4])
+precondition(atDrawn.text == "ab xX\ncd ef\ngh" && atDrawn.settleFailures == 1,
+             "the snapshot holds the <br> Linear drew for its caret at the code span, and the end side alone still collapses there")
+for profile in [writeKeys, keyProfile] {
+    let afterChip = strandedChange(["ab \u{2060}", "ef gh"], caret: 4, profile: profile, lines: [Sim.ListLine(), Sim.ListLine()])
+    precondition(afterChip.text == "ab \u{2060}X\nef gh" && afterChip.settleFailures == 2,
+                 "once AXValue has changed, here by the chip's image, the settle expects the offset as read, short of the chip's <br>")
+}
 var strandedToDo = blankSim(["one", "", "two"], caret: 4, profile: writeKeys)
 strandedToDo.listLines = [Sim.ListLine(), Sim.ListLine(leaves: 2, checkbox: true), Sim.ListLine()]
 strandedToDo.swallowsReplace = true

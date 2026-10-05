@@ -323,11 +323,11 @@ private extension Sim {
         if state.field.mode.isInserting, readSelection == operand { return true }
         let paragraphs = snapshot.breaks != nil
         let read = readSelection
-        // As the Controller: the markers must answer the read, and `AXValue` still read as the snapshot's did.
-        let current = paragraphs && (markers || emptyParagraphs) && shownValue == value
+        // As the Controller: the markers answer for the side, and the snapshot holds while `AXValue` reads as it did.
+        let marked = paragraphs && (markers || emptyParagraphs)
         let collapse = PhysicalPlanner.collapse(
-            read, side: current ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
-            snapshot: current ? snapshot : nil, profile: profile
+            read, side: marked ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
+            snapshot: marked && shownValue == value ? snapshot : nil, profile: profile
         )
         if !executeAside(collapse), profile.has(.writeSelection) {
             executeAside(PhysicalPlanner.collapse(read, paragraphs: paragraphs, profile: profile))
