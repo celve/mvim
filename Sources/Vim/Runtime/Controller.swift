@@ -398,7 +398,7 @@ public final class Controller {
                 if state.field.mode.isInserting {
                     executor.commit(.setMode(before.nonVisual), state: &state)
                 }
-            } else if !repairStrandedSelection(on: binding, operand: planned.operand, paragraphs: paragraphs),
+            } else if !repairStrandedSelection(on: binding, operand: planned.operand, reading: reading),
                       state.field.mode.isInserting {
                 // A selection we could not collapse is one the app would type over.
                 executor.commit(.setMode(before.nonVisual), state: &state)
@@ -511,24 +511,59 @@ public final class Controller {
 
     /// Collapse a stranded selection, and report whether the field is safe to type into.
     private func repairStrandedSelection(
-        on binding: FocusTracker.Binding, operand: Range<Int>?, paragraphs: Bool
+        on binding: FocusTracker.Binding, operand: Range<Int>?, reading: Snapshotter.Reading
     ) -> Bool {
+        let paragraphs = reading.snapshot.breaks != nil
         // Unknown is not empty: a settle can fail *because* the read went dark.
         guard let read = selection(of: binding.element, paragraphs: paragraphs) else { return false }
         guard !read.caret else { return true }
         // Still the operand: the app's own editor substitutes on the first keystroke.
         if state.field.mode.isInserting, read.range == operand { return true }
-        let collapse = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
-        executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
+        var side: ParagraphBreaks.Side?
+        var snapshot: FieldSnapshot?
+        if let marked = read.marked {
+            side = Snapshotter.paragraphSide(of: marked, upper: false)
+            // An edit, or a caret Linear drew or took away, leaves the run's snapshot describing other text.
+            snapshot = AX.value(of: binding.element) == reading.reads.text ? reading.snapshot : Snapshotter.snapshot(
+                of: binding.element, capabilities: binding.capabilities, anchor: nil, cursor: state.field.cursor,
+                chromium: binding.isChromium, model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
+                sampling: sampling, known: emptyParagraphs, knownUnreachable: unreachable
+            ).snapshot
+        }
+        let collapse = PhysicalPlanner.collapse(
+            read.range, side: side, paragraphs: paragraphs, snapshot: snapshot, profile: binding.capabilities
+        )
+        let writes = binding.capabilities.has(.writeSelection)
+        let settled = executor.execute(collapse, on: binding.element, state: &state, paragraphs: paragraphs)
+        // Keys the field ignored fail their settle, and a write lane then writes the start as it was read.
+        if !settled, writes {
+            let asRead = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
+            executor.execute(asRead, on: binding.element, state: &state, paragraphs: paragraphs)
+        }
+        // Keys can still be landing when their settle passes, so where they replaced a write the caret is waited for.
+        let keyed = settled && writes && !collapse.steps.allSatisfy(PhysicalPlanner.isWrite)
         // The write that stranded this may be the one that lies, so confirm.
-        return selection(of: binding.element, paragraphs: paragraphs).map(\.caret) ?? false
+        return becomesCaret(binding.element, paragraphs: paragraphs, within: keyed ? 0.1 : 0)
     }
 
-    /// In field offsets, through the markers for a text-content field, where a selection of one paragraph break is
-    /// empty in offsets but no caret.
-    private func selection(of element: AXUIElement, paragraphs: Bool) -> (range: Range<Int>, caret: Bool)? {
-        if paragraphs, let marked = Snapshotter.markedSelection(of: element) { return (marked.range, marked.isCollapsed) }
-        return AX.selectedRange(of: element).map { ($0.location..<($0.location + $0.length), $0.length == 0) }
+    /// Whether the selection reads as a caret, by `wait` seconds from now: Chromium shows a key milliseconds after it is sent.
+    private func becomesCaret(_ element: AXUIElement, paragraphs: Bool, within wait: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(wait)
+        while let read = selection(of: element, paragraphs: paragraphs) {
+            if read.caret || Date() >= deadline { return read.caret }
+            Thread.sleep(forTimeInterval: 0.003)
+        }
+        return false
+    }
+
+    /// In field offsets, through the markers (`marked`) in a text-content field, where a selected paragraph break is no caret.
+    private func selection(
+        of element: AXUIElement, paragraphs: Bool
+    ) -> (range: Range<Int>, caret: Bool, marked: AX.MarkedSelection?)? {
+        guard paragraphs, let marked = Snapshotter.markedSelection(of: element) else {
+            return AX.selectedRange(of: element).map { ($0.location..<($0.location + $0.length), $0.length == 0, nil) }
+        }
+        return (marked.range, marked.isCollapsed, marked)
     }
 
     /// Records a mutating command as `lastChange`, or opens a body if it entered Insert.

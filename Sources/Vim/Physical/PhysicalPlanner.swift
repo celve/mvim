@@ -144,17 +144,32 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left, as read in field offsets, to its start; `paragraphs` for Chromium's rich text.
+    /// Collapses a selection an aborted run left to its start, in field offsets; `snapshot` reads the field as it is.
     static func collapse(
-        _ selection: Range<Int>, misread: Bool = false, paragraphs: Bool = false, profile: CapabilityProfile
+        _ selection: Range<Int>, misread: Bool = false, side: ParagraphBreaks.Side? = nil, paragraphs: Bool = false,
+        snapshot: FieldSnapshot? = nil, profile: CapabilityProfile
     ) -> PhysicalPlan {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
-        let start = selection.lowerBound
-        let context = Context(snapshot: FieldSnapshot(
-            capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil
-        ))
-        return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
+        var start = selection.lowerBound
+        var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil)
+        // A `<br>` Linear drew for its caret leaves in its own time, and every offset behind it moves then.
+        let held = snapshot.flatMap { $0.drawnBreak == nil ? $0 : nil }
+        // In `AXValue` offsets a paragraph's end and the next one's start differ, as they do in a command's plan.
+        if let held, let breaks = held.breaks, let resolved = breaks.valueRange(start..<start, side: { _ in side }),
+           resolved.upperBound <= (held.text?.utf16.count ?? .max) {
+            start = resolved.lowerBound
+            field = FieldSnapshot(capabilities: profile, text: held.text, selection: resolved, breaks: breaks)
+        }
+        var context = Context(snapshot: field)
+        context.unknown.insert(.length)
+        let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : []) + settle(context, profile: profile)
+        guard profile.has(.writeSelection) else { return PhysicalPlan(steps: keys) }
+        // A folded write plans nothing where the caret is already placed, which a selection there is not.
+        context.selection = nil
+        let written = write(start..<start, context: context)
+        // Where a write needs keys to finish, as at a paragraph's end, ← lands the selection's start itself (LIN-1532).
+        return PhysicalPlan(steps: presses(written) ? keys : written)
     }
 
     /// Takes the drawn cursor off a field focus has left, by a write alone: a key would reach the field focus went to.

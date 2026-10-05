@@ -255,7 +255,7 @@ private extension Sim {
         var memo = foundEmptyParagraphs
         var unreachable = foundUnreachable
         func snapshot() -> (built: (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?),
-                            observed: Learning.Observation) {
+                            observed: Learning.Observation, value: String?) {
             var (reads, observed) = read()
             let built = FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
                 FieldSnapshot.build(
@@ -263,16 +263,16 @@ private extension Sim {
                     unreachable: unreachable
                 )
             }
-            return (built, observed)
+            return (built, observed, reads.field.text)
         }
         snapshotting = true
-        var (built, observed) = snapshot()
+        var (built, observed, value) = snapshot()
         snapshotting = false
         // The Snapshotter waits for the caret drawn at a code span's end that ends a paragraph, whose `<br>` moves offsets.
         let caret = selection.lowerBound
         if drawsLate, built.snapshot.breaks != nil, !built.snapshot.holdsDrawnCaret, selection.isEmpty,
            isCodeEdge(caret, start: false), TextModel(text).lineEnd(of: caret) == caret {
-            (built, observed) = snapshot()
+            (built, observed, value) = snapshot()
         }
         foundEmptyParagraphs = built.memo
         foundUnreachable = built.unreachable
@@ -297,7 +297,8 @@ private extension Sim {
                 if state.field.mode.isInserting {
                     state = VimReducer.reduce(state, .setMode(before.nonVisual))
                 }
-            } else if !repairStrandedSelection(operand: planned.operand), state.field.mode.isInserting {
+            } else if !repairStrandedSelection(operand: planned.operand, snapshot: snapshot, value: value),
+                      state.field.mode.isInserting {
                 state = VimReducer.reduce(state, .setMode(before.nonVisual))
             }
             // The monitor drained the payload it will never offer again.
@@ -315,12 +316,22 @@ private extension Sim {
         recordChange(for: command, from: before, mutated: physical.mutatesText)
     }
 
-    /// The Controller's twin, and it must obey the host the same way.
-    mutating func repairStrandedSelection(operand: Range<Int>?) -> Bool {
+    /// The Controller's twin, and it must obey the host the same way; `value` is the `AXValue` the snapshot read.
+    mutating func repairStrandedSelection(operand: Range<Int>?, snapshot: FieldSnapshot, value: String?) -> Bool {
         guard !unreadableSelection else { return false }   // unknown is not empty
         guard !readSelection.isEmpty else { return true }
         if state.field.mode.isInserting, readSelection == operand { return true }
-        executeAside(PhysicalPlanner.collapse(readSelection, paragraphs: fieldBreaks != nil, profile: profile))
+        let paragraphs = snapshot.breaks != nil
+        let read = readSelection
+        // As the Controller: the markers answer for the side, and the field is read again once `AXValue` has changed.
+        let marked = paragraphs && (markers || emptyParagraphs)
+        let collapse = PhysicalPlanner.collapse(
+            read, side: marked ? chromium.side(selection.lowerBound) : nil, paragraphs: paragraphs,
+            snapshot: marked ? (shownValue == value ? snapshot : snapshotAside()) : nil, profile: profile
+        )
+        if !executeAside(collapse), profile.has(.writeSelection) {
+            executeAside(PhysicalPlanner.collapse(read, paragraphs: paragraphs, profile: profile))
+        }
         return readSelection.isEmpty
     }
 
@@ -598,11 +609,28 @@ private extension Sim {
         }
     }
 
-    /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them.
-    mutating func executeAside(_ plan: PhysicalPlan) {
+    /// The field as it reads now, for a repair: unlike a run's snapshot it teaches nothing and keeps no discovery.
+    mutating func snapshotAside() -> FieldSnapshot {
+        let learned = learner
+        defer { learner = learned }
+        var (reads, observed) = read()
+        var memo = foundEmptyParagraphs
+        var unreachable = foundUnreachable
+        return FieldSnapshot.Step.run(taking: { take($0, into: &reads, memo: &memo, unreachable: &unreachable) }) {
+            FieldSnapshot.build(
+                reads, capabilities: profile, answer: observed.after, anchor: nil, cursor: state.field.cursor, memo: memo,
+                unreachable: unreachable
+            )
+        }.snapshot
+    }
+
+    /// Runs a repair or release, keeping the command's evidence, which the Controller harvests before them; false when a step failed.
+    @discardableResult
+    mutating func executeAside(_ plan: PhysicalPlan) -> Bool {
         let evidence = attribution
-        _ = execute(plan.steps)
+        let aborted = execute(plan.steps)
         attribution = evidence
+        return aborted == nil
     }
 
     /// The twin of the real executor's surviving-commit scan.
@@ -733,8 +761,11 @@ extension Sim {
         }
     }
 
+    /// `AXValue`.
+    var shownValue: String { emptyParagraphs ? chromium.shown.value : text }
+
     /// `kAXNumberOfCharacters`: `AXValue`'s length.
-    var fieldLength: Int { emptyParagraphs ? chromium.shown.value.utf16.count : text.utf16.count }
+    var fieldLength: Int { shownValue.utf16.count }
 
     /// The child count: a block per paragraph.
     var blocks: Int { hasChildren ? text.utf16.filter { $0 == 10 }.count + 1 : 0 }
