@@ -536,7 +536,7 @@ public final class Controller {
             let asRead = PhysicalPlanner.collapse(read.range, paragraphs: paragraphs, profile: binding.capabilities)
             executor.execute(asRead, on: binding.element, state: &state, paragraphs: paragraphs)
         }
-        // A settle can pass with a key still landing (LIN-1766), so after a write lane's keys the caret is waited for.
+        // Keys can still be landing when their settle passes, so where they replaced a write the caret is waited for.
         let keyed = settled && writes && !collapse.steps.allSatisfy(PhysicalPlanner.isWrite)
         // The write that stranded this may be the one that lies, so confirm.
         return becomesCaret(binding.element, paragraphs: paragraphs, within: keyed ? 0.1 : 0)
