@@ -5255,7 +5255,7 @@ precondition(gapKeys.press(.up) && gapKeys.selection == 4..<4 && !gapKeys.inGap,
 
 let boundaryValue = "LIN-1686 boundary probe: plain opening paragraph here.\n1.\nNumbered one alpha\n2.\nNumbered two bravo\n\u{2022}\nBullet one charlie\n\u{2022}\nBullet two delta\n1.\nNumbered again echo\n\n\nTodo one foxtrot\n\n\nTodo two golf\n1.\nNumbered after todo hotel\n\u{2022}\nDash bullet india\n\u{2022}\nStar bullet juliet\n\n\nTodo after star kilo\n\u{2022}\nStar after todo lima\nParagraph after list mike.\n\u{2022}\nBullet after paragraph november\n\n\nHeading after list oscar\nPlain closing paragraph papa."
 let boundaryRaw = "LIN-1686 boundary probe: plain opening paragraph here.1.Numbered one alpha2.Numbered two bravo\u{2022}Bullet one charlie\u{2022}Bullet two delta1.Numbered again echo\u{FFFC}\u{FFFC}Todo one foxtrot\u{FFFC}\u{FFFC}Todo two golf1.Numbered after todo hotel\u{2022}Dash bullet india\u{2022}Star bullet juliet\u{FFFC}\u{FFFC}Todo after star kilo\u{2022}Star after todo limaParagraph after list mike.\u{2022}Bullet after paragraph november\u{FFFC}\u{FFFC}Heading after list oscarPlain closing paragraph papa."
-let boundaryTree = fakeTree("""
+let boundarySpec = """
 0/G/0/54 0.0/T/0/54 1/L/54/94 1.0/G/54/74 1.0.0/G/54/56 1.0.0.0/T/54/55 1.0.0.1/T/55/56 1.0.1/G/56/74 1.0.1.0/T/56/74
 1.1/G/74/94 1.1.0/G/74/76 1.1.0.0/T/74/75 1.1.0.1/T/75/76 1.1.1/G/76/94 1.1.1.0/T/76/94 2/L/94/130 2.0/G/94/113 2.0.0/G/94/95
 2.0.0.0/T/94/95 2.0.1/G/95/113 2.0.1.0/T/95/113 2.1/G/113/130 2.1.0/G/113/114 2.1.0.0/T/113/114 2.1.1/G/114/130
@@ -5270,7 +5270,8 @@ let boundaryTree = fakeTree("""
 10/G/285/311 10.0/T/285/311 11/L/311/343 11.0/G/311/343 11.0.0/G/311/312 11.0.0.0/T/311/312 11.0.1/G/312/343
 11.0.1.0/T/312/343 12/H/343/367 12.0/G/343/343 12.0.0/G/343/343 12.0.0.0/E/343/343 12.0.0.1/P/343/343 12.1/T/343/367
 13/G/367/396 13.0/T/367/396
-""")
+"""
+let boundaryTree = fakeTree(boundarySpec)
 let boundaryModel = folded(boundaryValue, boundaryRaw, boundaryTree)
 func lineStart(of needle: String, in text: String) -> Int {
     var offset = 0
@@ -5292,6 +5293,11 @@ precondition((1...400).contains { budget in
 }, "running out of reads on the lists loses only the joins")
 precondition(unreachableScanned(boundaryTree, UnreachableLines.Candidates(markers: [], chips: []))?.joins == [],
              "nothing that starts a list and no ProseMirror editor, no joins read")
+let otherBoundary = fakeTree(boundarySpec, linear: false)
+let markedJoins = unreachableScanned(otherBoundary, boundaryCandidates)?.joins ?? []
+precondition(!markedJoins.isEmpty && unreachableScanned(otherBoundary, UnreachableLines.candidates(text: boundaryValue,
+    breaks: ParagraphBreaks(value: boundaryValue, fieldText: MarkerText.plain(boundaryRaw))!, raw: boundaryRaw, proseMirror: true))?
+    .joins == markedJoins, "another ProseMirror editor's lists join where its text shows a marker, as on main")
 let ownLists = fakeTree("0/G/0/3 0.0/T/0/3 1/L/3/6 1.0/G/3/6 1.0.0/M/3/5 1.0.1/T/5/6 2/L/6/10 2.0/G/6/10 2.0.0/M/6/9 2.0.1/T/9/10")
 let ownCandidates = UnreachableLines.candidates(text: "Top\n\u{2022} a\n1. b", breaks: ParagraphBreaks(offsets: [3, 7]), raw: "Top\u{2022} a1. b")
 precondition(unreachableScanned(ownLists, ownCandidates)?.joins == [6]
