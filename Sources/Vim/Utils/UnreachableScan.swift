@@ -37,9 +37,12 @@ public struct UnreachableScan<Node> {
             guard let hit = caret(at: candidate, in: roots, path: [], ancestors: []) else { return nil }
             if let found = hit { carets.append(found) }
         }
-        // Last, so running out of reads here loses only these.
-        let joins = candidates.lists ? listJoins(in: roots) ?? [] : []
-        return UnreachableLines.Found(markers: markers, chips: chips, carets: carets, joins: joins)
+        // Last, so running out of reads here loses only these, and the blocks' reads after the lists', which lose only theirs.
+        let lists = candidates.roots ? listJoins(in: roots) : nil
+        let blocks = lists == nil ? nil : blockStops(in: roots)
+        return UnreachableLines.Found(
+            markers: markers, chips: chips, carets: carets, joins: blocks?.joins ?? lists ?? [], controls: blocks?.controls ?? []
+        )
     }
 
     /// Plain starts of root lists that follow another root list; nil on a failed read or past the budget.
@@ -56,6 +59,36 @@ public struct UnreachableScan<Node> {
             afterList = list
         }
         return joins
+    }
+
+    /// The same with Linear's quotes and code blocks closed too, and what precedes each block's code; nil past the budget.
+    private mutating func blockStops(in roots: [Node]) -> (joins: [Int], controls: [Range<Int>])? {
+        var joins: [Int] = []
+        var controls: [Range<Int>] = []
+        var afterClosed = false
+        for (index, root) in roots.enumerated() {
+            guard let read = read(root, at: [index]) else { return nil }
+            var closed = read.role == "AXList"
+            if read.classes.contains(UnreachableLines.blockClass) {
+                if read.quoteLevel > 0 {
+                    closed = true
+                } else if read.children.count > 1, let last = read.children.last {
+                    let path = [index, read.children.count - 1]
+                    guard let code = self.read(last, at: path) else { return nil }
+                    if DrawnCaret.isCode(code.subrole) {
+                        guard let lower = start(of: root, at: [index]), let upper = start(of: last, at: path) else { return nil }
+                        controls.append(lower..<upper)
+                        closed = true
+                    }
+                }
+            }
+            if closed, afterClosed {
+                guard let start = start(of: root, at: [index]) else { return nil }
+                joins.append(start)
+            }
+            afterClosed = closed
+        }
+        return (joins, controls)
     }
 
     private enum Hit {

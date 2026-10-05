@@ -173,6 +173,8 @@ public enum AX {
 
         public func string(_ index: Int) -> String? { slot(index) as? String }
 
+        public func strings(_ index: Int) -> [String]? { slot(index) as? [String] }
+
         public func int(_ index: Int) -> Int? { slot(index) as? Int }
 
         public func bool(_ index: Int) -> Bool? { slot(index) as? Bool }

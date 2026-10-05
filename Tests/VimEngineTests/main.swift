@@ -4035,6 +4035,8 @@ final class FakeNode {
     let end: Int
     let children: [FakeNode]
     var fails = false
+    var classes: [String] = []
+    var quoteLevel = 0
 
     init(_ role: String, _ subrole: String? = nil, _ start: Int, _ end: Int, _ children: [FakeNode] = []) {
         self.role = role
@@ -4043,14 +4045,16 @@ final class FakeNode {
         self.end = end
         self.children = children
     }
+
+    var block: EmptyBlockScan<FakeNode>.Block? {
+        fails ? nil : .init(role: role, subrole: subrole, children: children, classes: classes, quoteLevel: quoteLevel)
+    }
 }
 func text(_ start: Int, _ end: Int) -> FakeNode { FakeNode("AXStaticText", nil, start, end) }
 func paragraph(_ start: Int, _ end: Int) -> FakeNode { FakeNode("AXGroup", nil, start, end, [text(start, end)]) }
 func blank(_ at: Int) -> FakeNode { FakeNode("AXGroup", "AXEmptyGroup", at, at + 1) }
 func scanned(_ blocks: [FakeNode], _ plain: String, budget: Int = EmptyParagraphs.readBudget) -> [Int]? {
-    var scan = EmptyBlockScan<FakeNode>(budget: budget, block: { node in
-        node.fails ? nil : EmptyBlockScan.Block(role: node.role, subrole: node.subrole, children: node.children)
-    }, offset: { node, end in end ? node.end : node.start })
+    var scan = EmptyBlockScan<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
     return scan.run(blocks: blocks, plain: Array(plain.utf16))
 }
 let middleBlank = blank(1)
@@ -4113,32 +4117,35 @@ precondition(chipBreaks.isAtom(1) && !chipBreaks.isAtom(0) && chipBreaks.atoms =
 precondition(chipBreaks.withAtoms("Ta\nN", at: 0..<4) == "Tabc\nN" && chipBreaks.coversAtom(0..<2) && !chipBreaks.coversAtom(2..<4))
 precondition(chipBreaks.replacing(1..<2, with: "") == ParagraphBreaks(offsets: [1]), "deleting the chip takes its <br>")
 
-/// `path/role/start/end` per node, roles abbreviated, as softlash/LIN-1652 scripts/list-probe prints a tree.
-func fakeTree(_ spec: String) -> [FakeNode] {
+/// `path/role/start/end` per node, roles abbreviated, as softlash/LIN-1652 scripts/list-probe prints a tree; B is one of
+/// Linear's `block-node` groups and Q one that is a quote, which `linear` false leaves without the class.
+func fakeTree(_ spec: String, linear: Bool = true) -> [FakeNode] {
     let roles: [Character: (String, String?)] = [
         "L": ("AXList", "AXContentList"), "G": ("AXGroup", nil), "T": ("AXStaticText", nil), "H": ("AXHeading", nil),
         "E": ("AXGroup", "AXEmptyGroup"), "A": ("AXGroup", "AXApplicationGroup"), "K": ("AXLink", nil),
         "I": ("AXImage", nil), "C": ("AXCheckBox", nil), "P": ("AXPopUpButton", nil), "M": ("AXListMarker", nil),
         "D": ("AXGroup", "AXCodeStyleGroup"), "S": ("AXGroup", "AXStrongStyleGroup"), "F": ("AXGroup", "AXEmphasisStyleGroup"),
+        "B": ("AXGroup", nil), "Q": ("AXGroup", nil),
     ]
-    var nodes: [[Int]: (role: (String, String?), start: Int, end: Int)] = [:]
+    var nodes: [[Int]: (code: Character, start: Int, end: Int)] = [:]
     for token in spec.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
         let parts = token.split(separator: "/")
-        nodes[parts[0].split(separator: ".").map { Int($0)! }] = (roles[parts[1].first!]!, Int(parts[2])!, Int(parts[3])!)
+        nodes[parts[0].split(separator: ".").map { Int($0)! }] = (parts[1].first!, Int(parts[2])!, Int(parts[3])!)
     }
     func build(_ path: [Int]) -> FakeNode {
         let node = nodes[path]!
         let children = (0...).prefix { nodes[path + [$0]] != nil }.map { build(path + [$0]) }
-        return FakeNode(node.role.0, node.role.1, node.start, node.end, children)
+        let built = FakeNode(roles[node.code]!.0, roles[node.code]!.1, node.start, node.end, children)
+        if linear, "BQ".contains(node.code) { built.classes = [UnreachableLines.blockClass] }
+        if node.code == "Q" { built.quoteLevel = 1 }
+        return built
     }
     return (0...).prefix { nodes[[$0]] != nil }.map { build([$0]) }
 }
 func unreachableScanned(
     _ blocks: [FakeNode], _ candidates: UnreachableLines.Candidates, budget: Int = UnreachableLines.readBudget
 ) -> UnreachableLines.Found? {
-    var scan = UnreachableScan<FakeNode>(budget: budget, block: { node in
-        node.fails ? nil : EmptyBlockScan.Block(role: node.role, subrole: node.subrole, children: node.children)
-    }, offset: { node, end in end ? node.end : node.start })
+    var scan = UnreachableScan<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
     return scan.run(blocks: blocks, candidates: candidates)
 }
 func folded(_ value: String, _ raw: String, _ tree: [FakeNode]) -> UnreachableLines.Model {
@@ -5234,6 +5241,12 @@ precondition(gapKeys.press(.right) && gapKeys.press(.left) && gapKeys.selection 
 precondition(gapKeys.press(.selectRight) && gapKeys.selection == 1..<2, "⇧→ crosses")
 gapKeys = KeyModel(text: "a\nb\nc", anchor: 2, focus: 2, gaps: [2])
 precondition(gapKeys.press(.left) && gapKeys.selection == 1..<1, "← from the next list skips it")
+// softlash/LIN-1726 scripts/block-boundary (Dia 1.51.0): ↑ from the line after a stop enters it, and ↑ again leaves upward.
+gapKeys = KeyModel(text: "ab\ncd\nef", anchor: 4, focus: 4, gaps: [3])
+precondition(gapKeys.press(.up) && gapKeys.selection == 2..<2 && gapKeys.inGap)
+precondition(gapKeys.press(.up) && gapKeys.selection == 0..<0 && !gapKeys.inGap)
+gapKeys = KeyModel(text: "ab\ncd\nef", anchor: 7, focus: 7, gaps: [3])
+precondition(gapKeys.press(.up) && gapKeys.selection == 4..<4 && !gapKeys.inGap, "no stop above a line that starts no block")
 
 let boundaryValue = "LIN-1686 boundary probe: plain opening paragraph here.\n1.\nNumbered one alpha\n2.\nNumbered two bravo\n\u{2022}\nBullet one charlie\n\u{2022}\nBullet two delta\n1.\nNumbered again echo\n\n\nTodo one foxtrot\n\n\nTodo two golf\n1.\nNumbered after todo hotel\n\u{2022}\nDash bullet india\n\u{2022}\nStar bullet juliet\n\n\nTodo after star kilo\n\u{2022}\nStar after todo lima\nParagraph after list mike.\n\u{2022}\nBullet after paragraph november\n\n\nHeading after list oscar\nPlain closing paragraph papa."
 let boundaryRaw = "LIN-1686 boundary probe: plain opening paragraph here.1.Numbered one alpha2.Numbered two bravo\u{2022}Bullet one charlie\u{2022}Bullet two delta1.Numbered again echo\u{FFFC}\u{FFFC}Todo one foxtrot\u{FFFC}\u{FFFC}Todo two golf1.Numbered after todo hotel\u{2022}Dash bullet india\u{2022}Star bullet juliet\u{FFFC}\u{FFFC}Todo after star kilo\u{2022}Star after todo limaParagraph after list mike.\u{2022}Bullet after paragraph november\u{FFFC}\u{FFFC}Heading after list oscarPlain closing paragraph papa."
@@ -5283,22 +5296,40 @@ let todosModel = folded("Top\n\n\nTodo a\n\n\nTodo b\nEnd", "Top\u{FFFC}\u{FFFC}
 2.0.0/G/9/9 2.0.0.0/I/9/9 2.0.0.1/C/9/9 2.0.1/G/9/15 2.0.1.0/T/9/15 3/G/15/18 3.0/T/15/18
 """))
 precondition(todosModel.text == "Top\nTodo a\nTodo b\nEnd" && todosModel.breaks.gaps == [11], "two to-do lists alone stop too")
-precondition(!UnreachableLines.candidates(text: "Top\nEnd", breaks: ParagraphBreaks(offsets: [3]), raw: "TopEnd").lists)
+precondition(!UnreachableLines.candidates(text: "Top\nEnd", breaks: ParagraphBreaks(offsets: [3]), raw: "TopEnd").roots)
 
-let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .gap)])
+let gapBreaks = ParagraphBreaks(offsets: [10], hidden: [
+    .init(at: 11, text: ""), .init(at: 11, text: ""), .init(at: 11, text: "", kind: .gap),
+])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
-             == [.paragraphEnd, .right, .right])
+             == [.paragraphEnd, .right, .right], "a to-do, behind its checkbox's leaves, takes → →")
 let markedGap = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "\u{2022}"), .init(at: 11, text: "", kind: .gap)])
 precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: markedGap))
              == [.paragraphEnd, .selectRight, .right], "a marked item is crossed into by ⇧→ →, which Dia reads right sooner")
+let quoteGap = ParagraphBreaks(offsets: [10], hidden: [.init(at: 11, text: "", kind: .gap)])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: quoteGap))
+             == [.paragraphEnd, .selectRight, .right], "and so is a quote, where → → reads one past for ~150 ms (LIN-1726)")
+precondition(webPhysical("j", text: tenTwice, caret: 0, profile: writeKeys, breaks: quoteGap).steps
+             == webPhysical("j", text: tenTwice, caret: 0, profile: writeKeys, breaks: ParagraphBreaks(offsets: [10])).steps
+             && webPhysical("dd", text: tenTwice, caret: 0, profile: writeKeys, breaks: quoteGap).steps.first
+             == webPhysical("dd", text: tenTwice, caret: 0, profile: writeKeys, breaks: ParagraphBreaks(offsets: [10])).steps.first,
+             "a stop folds no text, so a write lane plans a quote's first line as any paragraph's")
+let codeGap = ParagraphBreaks(offsets: [10], hidden: [
+    .init(at: 11, text: "CSS"), .init(at: 11, text: ""), .init(at: 11, text: ""), .init(at: 11, text: "", kind: .gap),
+])
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: keyProfile, breaks: codeGap))
+             == [.paragraphEnd, .selectRight, .right], "and a code block, behind its label and images")
 precondition(chords(webPhysical("w", text: tenTwice, caret: 3, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphEnd, .right, .right])
 precondition(chords(webPhysical("2$", text: tenTwice, caret: 0, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphEnd, .right, .right, .paragraphEnd])
 precondition(chords(webPhysical("k", text: tenTwice, caret: 11, profile: keyProfile, breaks: gapBreaks))
              == [.paragraphStart, .left, .paragraphStart], "← from below never stops")
-precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: removing([.lineEndKey, .lineStartKey], from: keyProfile),
-                                breaks: gapBreaks)) == [.down, .down, .lineStart], "lane B's ↓ stops there too")
+let noLineKeys = removing([.lineEndKey, .lineStartKey], from: keyProfile)
+precondition(chords(webPhysical("j", text: tenTwice, caret: 0, profile: noLineKeys, breaks: gapBreaks))
+             == [.down, .down, .lineStart], "lane B's ↓ stops there too")
+precondition(chords(webPhysical("k", text: tenTwice, caret: 11, profile: noLineKeys, breaks: gapBreaks))
+             == [.up, .up, .lineStart], "and its ↑ from below")
 
 let joinedDoc: [(String, String?, Int, Bool, Bool)] = [
     ("Top paragraph", nil, 0, false, false), ("Numbered one", "1.", 0, false, false), ("Numbered two", "2.", 0, false, false),
@@ -5309,7 +5340,7 @@ let joinedDoc: [(String, String?, Int, Bool, Bool)] = [
 func joinedSim(_ profile: CapabilityProfile, caret: Int = 0) -> Sim {
     var host = Sim(text: joinedDoc.map(\.0).joined(separator: "\n"), caret: caret, profile: profile)
     host.emptyParagraphs = true
-    host.listLines = joinedDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.3, joinsList: $0.4) }
+    host.listLines = joinedDoc.map { Sim.ListLine(marker: $0.1, leaves: $0.2, checkbox: $0.3, stop: $0.4) }
     host.emulatesKeys = true
     host.readModel = .textContent
     return host
@@ -5317,7 +5348,7 @@ func joinedSim(_ profile: CapabilityProfile, caret: Int = 0) -> Sim {
 var afterCode = Sim(text: "ab\ncd ef\ngh", caret: 4, profile: keyProfile)
 afterCode.emptyParagraphs = true
 afterCode.listLines = [Sim.ListLine(marker: "\u{2022}"), Sim.ListLine(marker: "\u{2022}"),
-                       Sim.ListLine(leaves: 2, checkbox: true, joinsList: true)]
+                       Sim.ListLine(leaves: 2, checkbox: true, stop: true)]
 afterCode.codeSpans = [6..<8]
 afterCode.emulatesKeys = true
 afterCode.readModel = .textContent
@@ -5339,6 +5370,104 @@ for profile in [keyProfile, writeKeys] {
             precondition(joined.caret == plain.caret && joined.text == plain.text, "\(keys) at \(key)")
         }
         precondition(joined.settleFailures == 0 && joined.bells == 0, keys)
+    }
+}
+
+// softlash/LIN-1726 scripts/block-boundary (Dia 1.51.0): every pair of paragraph, heading, list, code block and quote.
+let blocksValue = "Boundary probe: plain opening paragraph alpha.\nMarkdown\n\n\ncode after paragraph bravo\n\nsecond code line charlie\nParagraph after code delta.\nQuote after paragraph echo\nParagraph after quote foxtrot.\n\n\nHeading golf\nCSS\n\n\ncode after heading hotel\n\n\nHeading after code india\nQuote after heading juliet\n\n\nHeading after quote kilo\n\u{2022}\nBullet before code lima\nCSS\n\n\ncode after bullet mike\nQuote after code november\nCSS\n\n\ncode after quote oscar\nCSS\n\n\ncode after code papa\n1.\nNumbered after code quebec\nQuote after numbered romeo\n\n\nTodo after quote sierra\nCSS\n\n\ncode after todo tango\n\n\nTodo after code uniform\nQuote after todo victor\nSecond quote paragraph whiskey\n\u{2022}\nBullet after quote xray\nPlain closing paragraph yankee."
+let blocksRaw = "Boundary probe: plain opening paragraph alpha.Markdown\u{FFFC}\u{FFFC}code after paragraph bravo\nsecond code line charlieParagraph after code delta.Quote after paragraph echoParagraph after quote foxtrot.\u{FFFC}\u{FFFC}Heading golfCSS\u{FFFC}\u{FFFC}code after heading hotel\u{FFFC}\u{FFFC}Heading after code indiaQuote after heading juliet\u{FFFC}\u{FFFC}Heading after quote kilo\u{2022}Bullet before code limaCSS\u{FFFC}\u{FFFC}code after bullet mikeQuote after code novemberCSS\u{FFFC}\u{FFFC}code after quote oscarCSS\u{FFFC}\u{FFFC}code after code papa1.Numbered after code quebecQuote after numbered romeo\u{FFFC}\u{FFFC}Todo after quote sierraCSS\u{FFFC}\u{FFFC}code after todo tango\u{FFFC}\u{FFFC}Todo after code uniformQuote after todo victorSecond quote paragraph whiskey\u{2022}Bullet after quote xrayPlain closing paragraph yankee."
+let blocksSpec = """
+0/G/0/46 0.0/T/0/46 1/B/46/105 1.0/G/46/54 1.1/D/54/105 1.1.0/T/54/81 1.1.1/T/81/105 2/G/105/132 2.0/T/105/132
+3/Q/132/158 3.0/G/132/158 3.0.0/T/132/158 4/G/158/188 4.0/T/158/188 5/H/188/200 5.0/G/188/188 5.1/T/188/200
+6/B/200/227 6.0/G/200/203 6.1/D/203/227 6.1.0/T/203/207 6.1.1/T/207/227 7/H/227/251 7.0/G/227/227 7.1/T/227/251
+8/Q/251/277 8.0/G/251/277 8.0.0/T/251/277 9/H/277/301 9.0/G/277/277 9.1/T/277/301 10/L/301/325 10.0/G/301/325
+10.0.0/G/301/302 10.0.0.0/T/301/302 10.0.1/G/302/325 10.0.1.0/T/302/325 11/B/325/350 11.0/G/325/328 11.1/D/328/350
+11.1.0/T/328/332 11.1.1/T/332/350 12/Q/350/375 12.0/G/350/375 12.0.0/T/350/375 13/B/375/400 13.0/G/375/378
+13.1/D/378/400 13.1.0/T/378/382 13.1.1/T/382/389 13.1.2/T/389/394 13.1.3/T/394/400 14/B/400/423 14.0/G/400/403
+14.1/D/403/423 14.1.0/T/403/407 14.1.1/T/407/414 14.1.2/T/414/418 14.1.3/T/418/423 15/L/423/451 15.0/G/423/451
+15.0.0/G/423/425 15.0.0.0/T/423/424 15.0.0.1/T/424/425 15.0.1/G/425/451 15.0.1.0/T/425/451 16/Q/451/477 16.0/G/451/477
+16.0.0/T/451/477 17/L/477/500 17.0/G/477/500 17.0.0/G/477/477 17.0.0.0/I/477/477 17.0.0.1/C/477/477 17.0.1/G/477/500
+17.0.1.0/G/477/500 17.0.1.0.0/T/477/500 18/B/500/524 18.0/G/500/503 18.1/D/503/524 18.1.0/T/503/507 18.1.1/T/507/524
+19/L/524/547 19.0/G/524/547 19.0.0/G/524/524 19.0.0.0/I/524/524 19.0.0.1/C/524/524 19.0.1/G/524/547 19.0.1.0/G/524/547
+19.0.1.0.0/T/524/547 20/Q/547/600 20.0/G/547/570 20.0.0/T/547/570 20.1/G/570/600 20.1.0/T/570/600 21/L/600/624
+21.0/G/600/624 21.0.0/G/600/601 21.0.0.0/T/600/601 21.0.1/G/601/624 21.0.1.0/T/601/624 22/G/624/655 22.0/T/624/655
+"""
+let blocksCandidates = UnreachableLines.candidates(text: blocksValue, breaks: ParagraphBreaks(value: blocksValue,
+    fieldText: MarkerText.plain(blocksRaw))!, raw: blocksRaw)
+let blocksFound = unreachableScanned(fakeTree(blocksSpec), blocksCandidates)!
+precondition(blocksFound.controls == [46..<54, 200..<203, 325..<328, 375..<378, 400..<403, 500..<503], "each code block's label")
+precondition(blocksFound.joins == [325, 350, 375, 400, 423, 451, 477, 500, 524, 547, 600])
+let blocksModel = folded(blocksValue, blocksRaw, fakeTree(blocksSpec))
+let blocksLines = blocksModel.text.split(separator: "\n", omittingEmptySubsequences: false)
+precondition(blocksLines.count == 26 && !blocksLines.contains("CSS") && !blocksLines.contains("Markdown"), "a label is no line")
+precondition(blocksModel.breaks.gaps == Set(["code after bullet mike", "Quote after code november", "code after quote oscar",
+    "code after code papa", "Numbered after code quebec", "Quote after numbered romeo", "Todo after quote sierra",
+    "code after todo tango", "Todo after code uniform", "Quote after todo victor", "Bullet after quote xray",
+].map { lineStart(of: $0, in: blocksModel.text) }), "a stop between any two of list, code block and quote, and nowhere else")
+precondition(roundTrips(blocksModel))
+precondition(blocksModel.breaks.fieldOffset(lineStart(of: "code after bullet mike", in: blocksModel.text)) == 328)
+func crossing(_ line: String, _ keys: String = "j", profile: CapabilityProfile = keyProfile) -> [Chord] {
+    chords(webPhysical(keys, text: blocksModel.text, caret: lineStart(of: line, in: blocksModel.text), profile: profile,
+                       breaks: blocksModel.breaks))
+}
+precondition(crossing("Bullet before code lima") == [.paragraphEnd, .selectRight, .right])
+precondition(crossing("code after bullet mike") == [.paragraphEnd, .selectRight, .right])
+precondition(crossing("Quote after numbered romeo") == [.paragraphEnd, .right, .right], "a to-do after a quote")
+precondition(crossing("Boundary probe") == [.paragraphEnd, .right] && crossing("Heading golf") == [.paragraphEnd, .right]
+             && crossing("Paragraph after code delta") == [.paragraphEnd, .right], "one → beside a paragraph or heading")
+precondition(crossing("code after bullet mike", "k") == [.paragraphStart, .left, .paragraphStart])
+precondition(crossing("code after bullet mike", "k", profile: noLineKeys).prefix(3) == [.up, .up, .lineStart]
+             && crossing("code after heading hotel", "k", profile: noLineKeys).prefix(2) == [.up, .lineStart])
+precondition((1...400).contains { budget in
+    guard let found = unreachableScanned(fakeTree(blocksSpec), blocksCandidates, budget: budget) else { return false }
+    return found.joins.isEmpty && found.controls.isEmpty && found.markers.count == 3
+}, "running out of reads on the roots loses only the stops and labels")
+let listsThenBlocks = fakeTree("0/L/0/2 0.0/G/0/2 1/L/2/4 1.0/G/2/4 2/B/4/8 2.0/G/4/6 2.1/D/6/8 3/Q/8/10 3.0/G/8/10")
+let rootsOnly = UnreachableLines.Candidates(markers: [], chips: [], roots: true)
+precondition(unreachableScanned(listsThenBlocks, rootsOnly)
+             == UnreachableLines.Found(markers: [], chips: [], joins: [2, 4, 8], controls: [4..<6]))
+// The roots and the second list's start are 6 reads, the code block's last child and three more starts 7.
+precondition((6...12).allSatisfy { budget in
+    unreachableScanned(listsThenBlocks, rootsOnly, budget: budget) == UnreachableLines.Found(markers: [], chips: [], joins: [2])
+} && unreachableScanned(listsThenBlocks, rootsOnly, budget: 13)?.joins == [2, 4, 8], "the lists' stops are read first, as on main")
+let othersFound = unreachableScanned(fakeTree(blocksSpec, linear: false), blocksCandidates)!
+precondition(othersFound.joins.isEmpty && othersFound.controls.isEmpty && othersFound.markers.count == 3,
+             "without Linear's class another editor's quote or code gets no stop")
+precondition(folded(blocksValue, blocksRaw, fakeTree(blocksSpec, linear: false)).text.contains("\nCSS\n"))
+let section = fakeTree("0/L/0/2 0.0/G/0/2 1/B/2/4 1.0/G/2/4 1.0.0/T/2/4 2/L/4/6 2.0/G/4/6 3/B/6/8 3.0/D/6/8")
+precondition(unreachableScanned(section, rootsOnly) == UnreachableLines.Found(markers: [], chips: []),
+             "a collapsible section, or code with nothing before it, is not closed")
+
+let blockDoc: [(String, Sim.ListLine)] = [
+    ("Top paragraph", .init()), ("code one", .init(marker: "Markdown", leaves: 2, controls: true)),
+    ("Middle paragraph", .init()), ("A quote", .init()), ("Bullet one", .init(marker: "\u{2022}", stop: true)),
+    ("code two", .init(marker: "CSS", leaves: 2, stop: true, controls: true)), ("Quote two", .init(stop: true)),
+    ("code three", .init(marker: "CSS", leaves: 2, stop: true, controls: true)),
+    ("code four", .init(marker: "Plaintext", leaves: 2, stop: true, controls: true)),
+    ("A to-do", .init(leaves: 2, checkbox: true, stop: true)), ("Quote three", .init(stop: true)),
+    ("Numbered", .init(marker: "1.", stop: true)), ("Last paragraph.", .init()),
+]
+func blockSim(_ profile: CapabilityProfile) -> Sim {
+    var host = Sim(text: blockDoc.map(\.0).joined(separator: "\n"), caret: 0, profile: profile)
+    host.emptyParagraphs = true
+    host.listLines = blockDoc.map(\.1)
+    host.emulatesKeys = true
+    host.readModel = .textContent
+    return host
+}
+for profile in [keyProfile, writeKeys, removing([.lineStartKey], from: keyProfile), noLineKeys] {
+    let down = String(repeating: "j", count: blockDoc.count)
+    for keys in [down + String(repeating: "k", count: blockDoc.count), "3j2k4j5j3k", "9jkkkkkkkk", "5ljjjjjjjjjjjjkkkkkkkkkkkk",
+                 "$jjjjjjjjjjjjkkkkkkkkkkkk", "jjjwwwwwwwwwwwwwwwwbbbbbbbbbbbbbbbb", "jjjjeeeeeeeeeeee", "jjjj2$", "jjjj0jj^jj$"] {
+        var blocks = blockSim(profile)
+        var plain = Sim(text: blocks.text, caret: 0, profile: profile)
+        plain.emulatesKeys = true
+        for key in keys {
+            blocks.type(String(key))
+            plain.type(String(key))
+            precondition(blocks.caret == plain.caret && blocks.text == plain.text, "\(keys) at \(key)")
+        }
+        precondition(blocks.settleFailures == 0 && blocks.bells == 0, keys)
     }
 }
 

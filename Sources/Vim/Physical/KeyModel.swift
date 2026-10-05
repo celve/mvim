@@ -11,7 +11,7 @@ struct KeyModel {
     /// Offsets of chips, where Linear's shifted ⌃A and ⌃E stop (LIN-1652).
     var atoms: Set<Int> = []
 
-    /// Starts of lines a plain → or ↓ from the line above reaches only after a stop between two lists (LIN-1686).
+    /// Starts of lines a plain → or ↓ from the line above, or ↑ from them, leaves only after a stop between two blocks (LIN-1686).
     var gaps: Set<Int> = []
 
     /// The caret is in that stop, before the line after `focus`.
@@ -25,9 +25,9 @@ struct KeyModel {
         if inGap, let left = leaveGap(chord, in: model) { return left }
         let shift = chord.modifiers.contains(.shift)
         let collapsed = anchor == focus
-        if !shift, collapsed, entersGap(chord, in: model) {
-            focus = model.lineEnd(of: focus)
-            anchor = focus
+        if !shift, collapsed, let end = stop(chord, in: model) {
+            focus = end
+            anchor = end
             inGap = true
             return true
         }
@@ -91,21 +91,25 @@ struct KeyModel {
 
     static let pageRows = 10
 
-    /// → from a line's end, or ↓ from its last row, before a line that starts a list right after another.
-    private func entersGap(_ chord: Chord, in model: TextModel) -> Bool {
-        guard !gaps.isEmpty else { return false }
+    /// The line end whose stop the press enters: → from that end, ↓ from its last row, or ↑ from the next line's first row.
+    private func stop(_ chord: Chord, in model: TextModel) -> Int? {
+        guard !gaps.isEmpty else { return nil }
         switch chord {
         case .right:
-            return gaps.contains(focus + 1) && focus < model.length && model.graphemes(from: focus, toLineEnd: true, atMost: 0) == 0
+            let stops = gaps.contains(focus + 1) && focus < model.length && model.graphemes(from: focus, toLineEnd: true, atMost: 0) == 0
+            return stops ? focus : nil
         case .down:
             let end = model.lineEnd(of: focus)
-            return end < model.length && gaps.contains(end + 1) && row(of: focus, in: model).end == end
+            return end < model.length && gaps.contains(end + 1) && row(of: focus, in: model).end == end ? end : nil
+        case .up:
+            let start = model.lineStart(of: focus)
+            return gaps.contains(start) && row(of: focus, in: model).start == start ? start - 1 : nil
         default:
-            return false
+            return nil
         }
     }
 
-    /// The press from inside the stop between two lists, as measured in Linear; nil for a key that acts from the line's end.
+    /// The press from inside the stop between two blocks, as measured in Linear; nil for a key that acts from the line's end.
     private mutating func leaveGap(_ chord: Chord, in model: TextModel) -> Bool? {
         switch chord {
         case .paragraphStart, .paragraphEnd, Chord.paragraphStart.shifted, Chord.paragraphEnd.shifted:

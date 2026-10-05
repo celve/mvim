@@ -40,9 +40,15 @@ struct FieldTree {
         for unit in markers.utf16 { objects.append(objects[objects.count - 1] + (unit == 0xFFFC ? 1 : 0)) }
         self.blocks = blocks
         block = { node in
-            let reads = AX.attributes([kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute], of: node)
+            let reads = AX.attributes(
+                [kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute, "AXDOMClassList", "AXBlockQuoteLevel"], of: node
+            )
             guard (0..<3).allSatisfy({ Self.absentOrRead(reads, $0) }) else { return nil }
-            return EmptyBlockScan.Block(role: reads.string(0), subrole: reads.string(1), children: reads.elements(2) ?? [])
+            // The last two only add Linear's stops and controls, so one that fails reads as none.
+            return EmptyBlockScan.Block(
+                role: reads.string(0), subrole: reads.string(1), children: reads.elements(2) ?? [],
+                classes: reads.strings(3) ?? [], quoteLevel: reads.int(4) ?? 0
+            )
         }
         offset = { node, end in
             guard let length = AX.markerLength(from: start, to: node, end: end, in: element),

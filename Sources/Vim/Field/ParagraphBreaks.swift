@@ -13,7 +13,7 @@ public struct ParagraphBreaks: Equatable, Sendable {
         public let kind: Kind
 
         public enum Kind: Equatable, Sendable {
-            /// A list marker or a text-less block, which the caret passes.
+            /// A list marker, a code block's label or a text-less block, which the caret passes.
             case structure
             /// Chromium's own list marker, which starts its item's line and reads as a boundary a side skips past.
             case prefix
@@ -21,7 +21,7 @@ public struct ParagraphBreaks: Equatable, Sendable {
             case atom
             /// A `<br>` ending a paragraph after a chip: a caret after the chip reads past it, a selection stops before it.
             case trailingBreak
-            /// No text: the line starts a list right after another, and a plain → or ↓ from above stops between them first.
+            /// No text: the line starts a list, code block or quote right after another, and a plain → ↓ or ↑ stops between them first.
             case gap
         }
 
@@ -111,7 +111,7 @@ public extension ParagraphBreaks {
         Set(hidden.filter { $0.kind == .atom }.map { $0.at - 1 })
     }
 
-    /// Model offsets of the lines a stop between two lists comes before.
+    /// Model offsets of the lines a stop between two blocks comes before.
     var gaps: Set<Int> {
         Set(hidden.filter { $0.kind == .gap }.map(\.at))
     }
