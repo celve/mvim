@@ -144,17 +144,30 @@ public enum PhysicalPlanner {
 // MARK: - Repair and release
 
 public extension PhysicalPlanner {
-    /// Collapses a selection an aborted run left, as read in field offsets, to its start; `paragraphs` for Chromium's rich text.
+    /// Collapses a selection an aborted run left to its start, in field offsets; `snapshot` is the run's, while the field reads as it did.
     static func collapse(
-        _ selection: Range<Int>, misread: Bool = false, paragraphs: Bool = false, profile: CapabilityProfile
+        _ selection: Range<Int>, misread: Bool = false, side: ParagraphBreaks.Side? = nil, paragraphs: Bool = false,
+        snapshot: FieldSnapshot? = nil, profile: CapabilityProfile
     ) -> PhysicalPlan {
         // After a failed text check the offsets name other text than is selected, and ← collapses whatever is.
         guard !misread else { return PhysicalPlan(.press(.left, count: 1)) }
-        let start = selection.lowerBound
-        let context = Context(snapshot: FieldSnapshot(
-            capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil
-        ))
-        return PhysicalPlan(steps: collapse(to: start, context: context, profile: profile))
+        var start = selection.lowerBound
+        var field = FieldSnapshot(capabilities: profile, selection: start..<start, breaks: paragraphs ? ParagraphBreaks() : nil)
+        // In `AXValue` offsets a boundary's two sides differ, so the write steps back and the settle checks as a command's do.
+        if let breaks = snapshot?.breaks, let resolved = breaks.valueRange(start..<start, side: { _ in side }),
+           resolved.upperBound <= (snapshot?.text?.utf16.count ?? .max) {
+            start = resolved.lowerBound
+            field = FieldSnapshot(capabilities: profile, text: snapshot?.text, selection: resolved, breaks: breaks)
+        }
+        var context = Context(snapshot: field)
+        context.unknown.insert(.length)
+        // A folded write plans nothing where the caret is already placed, which a selection there is not.
+        var stranded = context
+        stranded.selection = nil
+        var steps = collapse(to: start, context: context, from: stranded, profile: profile)
+        // Settled, so neither the caller's read nor the next command's write overtakes keys pressed after a write.
+        if case .press? = steps.last { steps += settle(context, profile: profile) }
+        return PhysicalPlan(steps: steps)
     }
 
     /// Takes the drawn cursor off a field focus has left, by a write alone: a key would reach the field focus went to.
@@ -563,11 +576,13 @@ private extension PhysicalPlanner {
     }
 
     /// To the caret at `start`, which the context predicts: ← lands a selection's start in every host measured (LIN-1532).
-    static func collapse(to start: Int, context: Context, profile: CapabilityProfile) -> [PhysicalStep] {
+    static func collapse(
+        to start: Int, context: Context, from origin: Context? = nil, profile: CapabilityProfile
+    ) -> [PhysicalStep] {
         let keys = [.press(.left, count: 1)] + (context.normalizes(start) ? outside : [])
         // Settled, so a later AX write cannot overtake the ←; in a write lane `planning` settles before the next write.
         guard profile.has(.writeSelection) else { return keys + settle(context, profile: profile) }
-        return keyed(write(start..<start, context: context), or: keys, context: context)
+        return keyed(write(start..<start, context: origin ?? context), or: keys, context: context)
     }
 
     /// A folded field's write that needs arrows after it gives way to the key lane's `keys` where they press no more (LIN-1685).

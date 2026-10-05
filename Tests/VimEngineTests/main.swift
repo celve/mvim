@@ -1325,6 +1325,46 @@ precondition(listItems.valueRange(0..<0) { _ in .start(skipping: 2) } == 2..<2, 
 precondition(listItems.valueRange(0..<0) { _ in nil } == nil, "a field's start nothing resolves is unknown too")
 precondition(listItems.valueRange(0..<4) { $0 == .lower ? .start(skipping: 2) : .end } == 2..<4)
 
+// LIN-1643: a stranded selection's start resolves through its side, so its collapse is planned as a command's caret is.
+func strandedPlan(
+    _ selection: Range<Int>, _ side: ParagraphBreaks.Side?, text: String = "ab\ncd\nef", breaks: ParagraphBreaks = paras,
+    profile: CapabilityProfile
+) -> PhysicalPlan {
+    PhysicalPlanner.collapse(
+        selection, side: side, paragraphs: true, snapshot: FieldSnapshot(capabilities: profile, text: text, breaks: breaks),
+        profile: profile
+    )
+}
+precondition(strandedPlan(2..<4, .end, profile: axProfile) == PhysicalPlan(
+    .setSelection(2..<2), .press(.selectLeft, count: 1), .press(.left, count: 1),
+    .settle(Expectation(selection: 2..<2, edge: .paragraphEnd))
+), "the write lands on the next paragraph, so keys step back, and a settle waits for them")
+precondition(strandedPlan(2..<4, .start(skipping: 0), profile: axProfile) == PhysicalPlan(.setSelection(2..<2)))
+precondition(strandedPlan(2..<2, .end, profile: axProfile).steps.count == 4, "a selected break alone starts at the end too")
+precondition(strandedPlan(1..<4, .end, profile: axProfile) == PhysicalPlan(.setSelection(1..<1)), "off a boundary the side says nothing")
+for unresolved in [
+    strandedPlan(2..<4, nil, profile: axProfile),
+    PhysicalPlanner.collapse(2..<4, side: .end, paragraphs: true, profile: axProfile),
+    strandedPlan(2..<4, .end, text: "a", profile: axProfile),
+] {
+    precondition(unresolved == PhysicalPlan(.setSelection(2..<2)), "no side, no snapshot or a start past its text: written as read")
+}
+precondition(strandedPlan(2..<4, .end, profile: readProfile) == PhysicalPlan(
+    .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1),
+    .settle(Expectation(selection: 2..<2, edge: .paragraphEnd))
+))
+precondition(strandedPlan(2..<4, .start(skipping: 0), profile: readProfile) == PhysicalPlan(
+    .press(.left, count: 1), .settle(Expectation(selection: 2..<2, edge: .paragraphStart))
+), "no ⇧← → crosses the break above a paragraph's start")
+precondition(strandedPlan(2..<4, nil, profile: readProfile) == PhysicalPlan(
+    .press(.left, count: 1), .press(.selectLeft, count: 1), .press(.right, count: 1), .settle(Expectation(selection: 2..<2))
+))
+precondition(strandedPlan(4..<6, .start(skipping: 2), text: "• ab\n• cd", breaks: listItems, profile: axProfile)
+             == PhysicalPlan(.setSelection(6..<6)), "a list item's start is written past its marker")
+precondition(strandedPlan(0..<2, .start(skipping: 2), text: "• ab\n• cd", breaks: listItems, profile: axProfile)
+             == PhysicalPlan(.setSelection(2..<2)))
+precondition(strandedPlan(4..<6, .end, text: "• ab\n• cd", breaks: listItems, profile: axProfile).steps.first == .setSelection(4..<4))
+
 precondition(paras.replacing(1..<4, with: "") == ParagraphBreaks(offsets: [2]))
 precondition(paras.replacing(0..<0, with: "x\n") == ParagraphBreaks(offsets: [1, 4, 7]))
 precondition(paras.replacing(5..<6, with: " ") == ParagraphBreaks(offsets: [2]), "J joins the paragraphs")
@@ -4018,6 +4058,37 @@ e78Writes.type("j")
 precondition(e78Writes.caret == 213 && e78Writes.settleFailures == 0)
 e78Writes.type("k")
 precondition(e78Writes.caret == 205 && e78Writes.settleFailures == 0)
+
+// LIN-1643: `cw` whose ⇧→ selects a word fails its check with the selection stranded, and `c` keeps Insert where it collapses.
+func strandedChange(
+    _ paragraphs: [String], caret: Int, profile: CapabilityProfile, lines: [Sim.ListLine]? = nil, code: [Range<Int>] = [],
+    rebound: [Chord: Chord] = [:]
+) -> Sim {
+    var host = blankSim(paragraphs, caret: caret, profile: profile)
+    host.listLines = lines
+    host.codeSpans = code
+    host.reboundChords = [.selectRight: .selectWordRight, Chord.paragraphEnd.shifted: .selectWordRight].merging(rebound) { $1 }
+    host.type("cw")
+    host.reboundChords = [:]
+    host.type("X")
+    return host
+}
+for profile in [writeKeys, keyProfile] {
+    let atEnd = strandedChange(["ab cd", "ef gh"], caret: 5, profile: profile)
+    precondition(atEnd.text == "ab cdX\nef gh" && atEnd.settleFailures == 1, "the repair leaves the caret at the paragraph's end")
+}
+let atStart = strandedChange(["ab cd", "ef gh"], caret: 6, profile: keyProfile, rebound: [.selectLeft: .selectAll])
+precondition(atStart.text == "ab cd\nXef gh" && atStart.settleFailures == 1, "and presses no ⇧← above a paragraph's start")
+let numbered = [Sim.ListLine(marker: "1."), Sim.ListLine(marker: "2."), Sim.ListLine()]
+precondition(strandedChange(["one", "two three", "four"], caret: 3, profile: writeKeys, lines: numbered).text
+             == "oneX\ntwo three\nfour", "a list item's end is reached from inside it, as a command's write reaches it")
+precondition(strandedChange(["ab x", "cd ef", "gh"], caret: 4, profile: writeKeys, lines: numbered, code: [3..<4]).text
+             == "ab x\nXcd ef\ngh", "the caret Linear drew at the code span left AXValue with it, so the snapshot is not used")
+var strandedToDo = blankSim(["one", "", "two"], caret: 4, profile: writeKeys)
+strandedToDo.listLines = [Sim.ListLine(), Sim.ListLine(leaves: 2, checkbox: true), Sim.ListLine()]
+strandedToDo.swallowsReplace = true
+strandedToDo.type("dd")
+precondition(strandedToDo.settleFailures == 1 && strandedToDo.selection == 4..<4, "a selection at a to-do's start is no caret placed there")
 
 // Beside a line put back, emptying one changes which empty paragraphs AXValue hides, so no length is checked after it.
 var emptied = blankSim(e78Paragraphs, caret: 214, profile: writeKeys)
