@@ -8,7 +8,7 @@ final class Updater: NSObject, ObservableObject {
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var automaticallyChecksForUpdates = false
     /// Found by a scheduled check away from launch, when Sparkle would open its alert behind
-    /// whatever the user is doing: mvim has no window to raise.
+    /// whatever the user is doing: uvim has no window to raise.
     @Published private(set) var pendingVersion: String?
 
     private var controller: SPUStandardUpdaterController!

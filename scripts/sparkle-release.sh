@@ -6,6 +6,7 @@
 set -euo pipefail
 
 mode=$1 app=$2 bin=$3 dir=$4
+name=$(basename "$app" .app)
 die() { echo "error: $*" >&2; exit 1; }
 info() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist"; }
 
@@ -34,23 +35,29 @@ http_status() { { gh api --include "$1" 2>/dev/null || true; } | sed -n '1s|^HTT
 
 # Every install updates from the latest release: outnumber its build and keep its signing identity.
 check_latest() {
-    local latest previous key requirement live=$work/latest
+    local latest previous key requirement released live=$work/latest
     mkdir "$live"
     latest=$(gh api "repos/$repo/releases/latest" --jq .tag_name) || die "could not read $repo's latest release"
-    gh release download "$latest" --repo "$repo" --pattern appcast.xml --pattern 'mvim-*.zip' --dir "$live" ||
+    # Found by kind, not by name: the release before a rename carries the old one.
+    gh release download "$latest" --repo "$repo" --pattern appcast.xml --pattern '*.zip' --dir "$live" ||
         die "could not download $latest's appcast.xml and zip"
     previous=$(sed -n 's|.*<sparkle:version>\([^<]*\)</sparkle:version>.*|\1|p' "$live/appcast.xml")
     previous=${previous%%$'\n'*}
     case $previous in '' | *[!0-9]*) die "$latest's appcast.xml names no numeric build" ;; esac
     [ "$build" -gt "$previous" ] || die "build $build does not exceed $latest's $previous: installs would ignore it"
-    ditto -x -k "$live"/mvim-*.zip "$live/app"
+    set -- "$live"/*.zip
+    [ $# = 1 ] && [ -f "$1" ] || die "$latest does not hold exactly one zip"
+    ditto -x -k "$1" "$live/app"
+    set -- "$live"/app/*.app
+    [ $# = 1 ] && [ -d "$1" ] || die "$latest's zip does not hold exactly one app"
+    released=$1
     # Installs check an update against the EdDSA key they shipped with, so the key is held fixed.
-    key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$live/app/mvim.app/Contents/Info.plist") ||
+    key=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$released/Contents/Info.plist") ||
         die "could not read the SUPublicEDKey of $latest's app"
     [ "$(info SUPublicEDKey)" = "$key" ] ||
         die "$app's SUPublicEDKey is not the one $latest shipped, which installs check updates against" \
             "(generate_keys -f imports the original private key)"
-    requirement=$(codesign -d -r- "$live/app/mvim.app" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')
+    requirement=$(codesign -d -r- "$released" 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')
     [ -n "$requirement" ] || die "could not read the designated requirement of $latest's app"
     # TCC holds each install's grants against that requirement, so an app failing it starts over.
     [ -n "${SPARKLE_NEW_IDENTITY:-}" ] || codesign --verify --test-requirement="=$requirement" "$app" ||
@@ -107,18 +114,21 @@ fi
 
 rm -rf "$dir"
 mkdir -p "$dir"
-zip=$dir/mvim-$version.zip
-notes=$dir/mvim-$version.md
+zip=$dir/$name-$version.zip
+notes=$dir/$name-$version.md
+# What this version has to tell its users goes above GitHub's list of pull requests.
+lead=$(dirname "$0")/../docs/release-notes/$version.md
+[ ! -f "$lead" ] || { cat "$lead"; echo; } >"$notes"
 gh api "repos/$repo/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$sha" \
-    --jq .body >"$notes" || die "GitHub wrote no release notes for $sha: is it pushed?"
+    --jq .body >>"$notes" || die "GitHub wrote no release notes for $sha: is it pushed?"
 
 # The service takes an archive but only the app can carry its ticket, so the app is zipped twice.
-ditto -c -k --sequesterRsrc --keepParent "$app" "$work/mvim-$version.zip"
-notarize "$work/mvim-$version.zip"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$work/$name-$version.zip"
+notarize "$work/$name-$version.zip"
 xcrun stapler staple "$app" || die "could not staple the notarization ticket to $app"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$work/stapled.zip"
 ditto -x -k "$work/stapled.zip" "$work/shipped"
-require_notarized "$work/shipped/mvim.app"
+require_notarized "$work/shipped/$name.app"
 mv "$work/stapled.zip" "$zip"
 
 appcast=(--download-url-prefix "https://github.com/$repo/releases/download/$tag/"
@@ -131,11 +141,11 @@ grep -q 'sparkle:edSignature=' "$dir/appcast.xml" ||
     die "the update is unsigned: this signing key is not the one SUPublicEDKey names"
 
 if [ "$mode" = dist ]; then
-    echo "Staged mvim $version ($build) in $dir/ — make publish releases it as $tag."
+    echo "Staged $name $version ($build) in $dir/ — make publish releases it as $tag."
     exit 0
 fi
 
 # gh uploads both assets before it publishes, so the feed never names a missing archive.
 gh release create "$tag" "$zip" "$dir/appcast.xml" --repo "$repo" --target "$sha" \
-    --title "mvim $version" --notes-file "$notes" --latest
+    --title "$name $version" --notes-file "$notes" --latest
 echo "Released $tag: https://github.com/$repo/releases/tag/$tag"

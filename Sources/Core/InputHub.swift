@@ -12,7 +12,7 @@ import Foundation
 ///
 /// Dispatch is OBSERVE-ALL / CONSUME-IF-ANY: every handler sees every
 /// (non-self) event in priority order, and the event is consumed iff ANY
-/// handler returns true. mvim registers a single editor handler today; the
+/// handler returns true. uvim registers a single editor handler today; the
 /// shape is kept because its teardown-on-empty keeps a handler-less app from
 /// holding a tap (and from triggering an Input-Monitoring prompt).
 @MainActor
@@ -59,9 +59,9 @@ public final class InputHub {
 
     private func ensureTap() {
         guard tap == nil else { return }
-        if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }   // register mvim + prompt
+        if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }   // register uvim + prompt
         // keyDown only: vim consumes key-downs. flagsChanged and keyUp are
-        // deliberately not observed — mvim has no consumer for either.
+        // deliberately not observed — uvim has no consumer for either.
         let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
@@ -106,7 +106,7 @@ private func inputHubCallback(proxy: CGEventTapProxy, type: CGEventType,
         }
         return Unmanaged.passUnretained(event)
     }
-    // Bypass tagged synthesized events. mvim's own no longer traverse this
+    // Bypass tagged synthesized events. uvim's own no longer traverse this
     // tap (Synth posts below the session stage — the settle-deadlock
     // lesson), but Vibe's do, and the shared magic is a cross-app ABI:
     // otherwise Normal mode would consume a dictation transcript as

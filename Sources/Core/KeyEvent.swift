@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Backend-agnostic key event, normalized from the event tap's `CGEvent`.
-/// mvim's copy carries no NSEvent/recorder path — the tap is the only source.
+/// uvim's copy carries no NSEvent/recorder path — the tap is the only source.
 public struct KeyEvent {
     public enum Kind { case keyDown, keyUp, flagsChanged }
 

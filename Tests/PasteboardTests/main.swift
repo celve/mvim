@@ -4,7 +4,7 @@ import AppKit
 
 typealias Flavours = [[(NSPasteboard.PasteboardType, Data)]]
 
-let privateType = NSPasteboard.PasteboardType("io.github.celve.mvim.test.private")
+let privateType = NSPasteboard.PasteboardType("io.github.celve.uvim.test.private")
 
 func dump(_ pasteboard: NSPasteboard) -> Flavours {
     (pasteboard.pasteboardItems ?? []).map { item in
@@ -90,7 +90,7 @@ func run() {
     let rtf = try! NSAttributedString(string: "rich").data(
         from: NSRange(location: 0, length: 4), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
     )
-    let files = ["one", "two"].map { URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("mvim-\($0).txt") }
+    let files = ["one", "two"].map { URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("uvim-\($0).txt") }
 
     let fixtures: [(String, () -> Void)] = [
         ("text, RTF and HTML", {

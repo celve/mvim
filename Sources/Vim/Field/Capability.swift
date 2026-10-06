@@ -62,7 +62,7 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// focus change ends a session. Never probed, never learned.
     case fieldIsSession
 
-    /// ⌃A and ⇧⌃A: to the start of the caret's paragraph, which is mvim's line.
+    /// ⌃A and ⇧⌃A: to the start of the caret's paragraph, which is uvim's line.
     case lineStartKey
 
     /// ⌃E and ⇧⌃E: to the end of the caret's paragraph.

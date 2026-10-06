@@ -1,5 +1,5 @@
-PROJECT := mvim
-SCHEME  := mvim
+PROJECT := uvim
+SCHEME  := uvim
 CONFIG  := Debug
 DERIVED := build
 RELEASE := .release

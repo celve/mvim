@@ -22,7 +22,7 @@ final class PasteboardLoan {
         self.pasteboard = pasteboard
     }
 
-    /// A text still up from an earlier put is mvim's own, so the user's contents saved then are kept.
+    /// A text still up from an earlier put is uvim's own, so the user's contents saved then are kept.
     func put(_ text: String) {
         if saved == nil || pasteboard.changeCount != stamp {
             saved = (pasteboard.pasteboardItems ?? []).map { item in

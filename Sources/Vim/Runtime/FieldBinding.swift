@@ -66,7 +66,7 @@ public enum FieldProber {
         public var engageable: Bool { isTextual && !isSecure && isEnabled }
     }
 
-    /// Whether mvim should engage at all. Conservative on purpose: only
+    /// Whether uvim should engage at all. Conservative on purpose: only
     /// concrete text roles — engaging in a web area or list view would eat
     /// navigation keys the app owns. Secure fields are caught by role OR
     /// subrole: `NSSecureTextField` keeps role `AXTextField` and reveals

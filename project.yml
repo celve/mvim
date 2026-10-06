@@ -1,4 +1,4 @@
-name: mvim
+name: uvim
 
 options:
   # Older XcodeGen copies what is inside Resources/AppIcon.icon as loose files, and the app gets no icon.
@@ -19,7 +19,7 @@ packages:
 settings:
   base:
     # `make publish` tags a release v<MARKETING_VERSION>, so bump it before publishing.
-    MARKETING_VERSION: "1.0.0"
+    MARKETING_VERSION: "1.1.0"
     # `make release` passes the commit count instead: Sparkle orders updates by CFBundleVersion.
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
@@ -48,7 +48,7 @@ targets:
       - path: Sources/Core
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.mvim.Core
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.uvim.Core
         GENERATE_INFOPLIST_FILE: YES
 
   # Modal editing engine + runtime. Depends on Core for the key model + text I/O.
@@ -62,11 +62,11 @@ targets:
       - target: Core
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.mvim.Vim
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.uvim.Vim
         GENERATE_INFOPLIST_FILE: YES
 
   # The menu-bar app: composition root + the menu, its whole UI. Embeds the two frameworks and Sparkle.
-  mvim:
+  uvim:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
@@ -95,35 +95,35 @@ targets:
           sign "$framework"
     settings:
       base:
-        PRODUCT_NAME: mvim
+        PRODUCT_NAME: uvim
         # The identifier keys the defaults domain, the TCC grants and the login item: changing
         # it strands all three, and nothing migrates them.
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.mvim
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.celve.uvim
         GENERATE_INFOPLIST_FILE: YES
         # Merged into the generated plist: Sparkle's feed and key, from the settings below.
         INFOPLIST_FILE: Info.plist
-        CODE_SIGN_ENTITLEMENTS: mvim.entitlements
+        CODE_SIGN_ENTITLEMENTS: uvim.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         # Run as a menu bar agent: no Dock icon, no main window.
         INFOPLIST_KEY_LSUIElement: YES
-        # No NSMicrophoneUsageDescription — deliberate. mvim contains no microphone or
+        # No NSMicrophoneUsageDescription — deliberate. uvim contains no microphone or
         # keychain code, and its only network traffic is Sparkle's; keep the Info.plist honest.
-        INFOPLIST_KEY_CFBundleDisplayName: mvim
+        INFOPLIST_KEY_CFBundleDisplayName: uvim
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Linyu Wu. Licensed under GPL-3.0-or-later."
       configs:
         # Release only: an updater in a Debug build would offer to replace it with the release.
         Release:
-          SPARKLE_FEED_URL: https://github.com/celve/mvim/releases/latest/download/appcast.xml
+          SPARKLE_FEED_URL: https://github.com/celve/uvim/releases/latest/download/appcast.xml
           # The public half of the publisher's Sparkle key: installs check every update against it.
           SPARKLE_PUBLIC_KEY: "Tnc/icsEcgLzrfgXPmx4TUVBf2u0vXr7k4OoADOdL2Y="
 
 schemes:
-  mvim:
+  uvim:
     build:
       targets:
-        mvim: all
+        uvim: all
     run:
       config: Debug
     archive:

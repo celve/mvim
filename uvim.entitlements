@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  Intentionally empty: mvim runs NON-sandboxed. A sandboxed app cannot
+	  Intentionally empty: uvim runs NON-sandboxed. A sandboxed app cannot
 	  drive other apps via the Accessibility API or post CGEvents, which the
 	  vim execution path requires. Accessibility and Input Monitoring are
 	  runtime trust grants, not entitlements.

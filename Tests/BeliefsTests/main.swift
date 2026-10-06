@@ -2,13 +2,13 @@ import Foundation
 
 // Temporary directories and private defaults suites, never the user's.
 
-let root = FileManager.default.temporaryDirectory.appending(path: "mvim-beliefs-test-\(getpid())")
+let root = FileManager.default.temporaryDirectory.appending(path: "uvim-beliefs-test-\(getpid())")
 var suites: [String] = []
 
 func fresh() -> Beliefs {
-    let suite = "io.github.celve.mvim.test.beliefs.\(getpid()).\(suites.count)"
+    let suite = "io.github.celve.uvim.test.beliefs.\(getpid()).\(suites.count)"
     suites.append(suite)
-    return Beliefs(url: root.appending(path: "\(suites.count)/mvim/beliefs.json"), defaults: UserDefaults(suiteName: suite)!)
+    return Beliefs(url: root.appending(path: "\(suites.count)/uvim/beliefs.json"), defaults: UserDefaults(suiteName: suite)!)
 }
 
 func text(_ file: Beliefs) -> String {
@@ -100,7 +100,7 @@ try! saved.update {
     $0.overrides[rung] = ["insertText": "off"]
 }
 precondition(tries == 2 && (try! saved.load()).overrides == ["other.app": ["wordKeys": "off"], rung: ["insertText": "off"]],
-             "an edit saved between mvim's read and its write is kept")
+             "an edit saved between uvim's read and its write is kept")
 precondition((try? saved.update {
     tries += 1
     write(file(overrides: #""app\#(tries)": {"wordKeys": "off"}"#), to: saved)
