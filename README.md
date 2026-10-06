@@ -11,9 +11,10 @@ free software under the [GNU GPL](#license).
 
 ## Install
 
-You need Xcode 16 or later (the full app, not only its command-line tools),
-[XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`), and an **Apple
-Development** signing certificate, which Xcode → Settings → Accounts → Manage Certificates… creates.
+You need Xcode 26 or later (the full app, not only its command-line tools),
+[XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.1 or later (`brew install xcodegen`), and an
+**Apple Development** signing certificate, which Xcode → Settings → Accounts → Manage Certificates…
+creates.
 
 1. Clone this repository and set `DEVELOPMENT_TEAM` in [`project.yml`](project.yml) to your team ID,
    the `OU=` value this prints. macOS keeps mvim's permissions only while its signature stays the
@@ -263,7 +264,8 @@ mvim/
 │   ├── PasteboardTests/        # `make test-pasteboard`: the paste's loan on a private pasteboard
 │   └── BeliefsTests/           # `make test-beliefs`: the beliefs file in a temporary directory
 └── Resources/
-    └── Assets.xcassets         # App icon + accent color (both still empty)
+    ├── AppIcon.icon/           # App icon: an Icon Composer document, edited in Icon Composer
+    └── Assets.xcassets         # Accent color (still empty)
 ```
 
 ### Modules
