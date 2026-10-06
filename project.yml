@@ -116,9 +116,8 @@ targets:
         # Release only: an updater in a Debug build would offer to replace it with the release.
         Release:
           SPARKLE_FEED_URL: https://github.com/celve/mvim/releases/latest/download/appcast.xml
-          # The public half of `generate_keys` (README, Publishing an update); until it is set,
-          # Release builds have no updater either.
-          SPARKLE_PUBLIC_KEY: ""
+          # The public half of the publisher's Sparkle key: installs check every update against it.
+          SPARKLE_PUBLIC_KEY: "Tnc/icsEcgLzrfgXPmx4TUVBf2u0vXr7k4OoADOdL2Y="
 
 schemes:
   mvim:
