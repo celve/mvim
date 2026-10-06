@@ -6,8 +6,9 @@ focused field through Accessibility, and takes the keys it needs with a keyboard
 A field starts in Insert mode, unless you reach it from another block of the same document.
 **⌃[ enters Normal mode**, and Esc does too if you choose it in the menu.
 
-There is no release yet, so [build it from source](#install). mvim needs macOS 14 or later, and it is
-free software under the [GNU GPL](#license).
+Download the [latest release](https://github.com/celve/mvim/releases/latest) or
+[build it from source](#install). mvim needs macOS 14 or later, and it is free software under the
+[GNU GPL](#license).
 
 ## Install
 
@@ -182,14 +183,14 @@ app's own keys: see [Native word, paragraph and page keys](#native-word-paragrap
 
 mvim needs **Accessibility**, to read and edit the focused field and to post keys, and **Input
 Monitoring**, for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed
-into a field it is working in. mvim has no microphone, keychain or networking code, and
-[Sparkle](#updates) is built in but inactive until the first release. Its settings, its beliefs file
-and its log name the apps and websites you use. The log also records the Normal-mode commands you
-type, but never the text you insert or a command's operand, count or register (a unit test holds it
-to that), unless you turn on [text recording](#diagnostics); if mvim ever mistook the mode, some of
-your words could reach it as commands. mvim pastes through the clipboard into fields it cannot write,
-and restores the clipboard afterwards; in fields it cannot read, cut and copy use the clipboard
-itself.
+into a field it is working in. mvim has no microphone, keychain or networking code of its own; a
+release build's only traffic is [Sparkle](#updates)'s update check, which asks first. Its settings,
+its beliefs file and its log name the apps and websites you use. The log also records the Normal-mode
+commands you type, but never the text you insert or a command's operand, count or register (a unit
+test holds it to that), unless you turn on [text recording](#diagnostics); if mvim ever mistook the
+mode, some of your words could reach it as commands. mvim pastes through the clipboard into fields it
+cannot write, and restores the clipboard afterwards; in fields it cannot read, cut and copy use the
+clipboard itself.
 
 ## Reporting a bug
 
@@ -340,9 +341,8 @@ signature.
 
 Every build embeds [Sparkle](https://sparkle-project.org), but a build has update items only when
 its Info.plist names both a feed and a public key. `project.yml` gives both to Release builds
-alone, and `SPARKLE_PUBLIC_KEY` stays empty until the first release, so no build updates yet. Once
-it is set, Release builds update themselves from this repository's GitHub releases: the feed is the
-`appcast.xml` attached to the latest one.
+alone, so a Debug build never updates. Release builds update themselves from this repository's
+GitHub releases: the feed is the `appcast.xml` attached to the latest one.
 
 - **Sparkle asks first.** On mvim's second launch it asks whether to check once a day, and
   whether to install what it finds without asking. **Check for Updates Automatically** in the
@@ -379,10 +379,10 @@ Once, on the Mac you will publish from:
    It asks for an app-specific password: [account.apple.com](https://account.apple.com) → Sign-In
    and Security → App-Specific Passwords makes one. `make dist` and `make publish` take the
    profile's name from `NOTARY_PROFILE`.
-4. Run `make release`, which resolves Sparkle, then
-   `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`. It keeps a new private key
-   in the login keychain and prints the public one: paste that into `SPARKLE_PUBLIC_KEY` in
-   `project.yml` and commit it.
+4. Get the Sparkle key into the login keychain. `SPARKLE_PUBLIC_KEY` in `project.yml` already holds
+   its public half, so on another Mac import the private half: run `make release`, which resolves
+   Sparkle, then `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys -f <backup>`. A
+   fork makes a pair of its own with `generate_keys` alone and commits the public key it prints.
 5. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe.
    Installed copies check every update against that key, and `make publish` releases under no other.
 6. `gh auth login`: the release is created with the GitHub CLI.
