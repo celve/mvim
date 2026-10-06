@@ -383,8 +383,8 @@ Once, on the Mac you will publish from:
    `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`. It keeps a new private key
    in the login keychain and prints the public one: paste that into `SPARKLE_PUBLIC_KEY` in
    `project.yml` and commit it.
-5. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe. Every
-   installed copy trusts that key alone; lose it and they can never update again.
+5. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe.
+   Installed copies check every update against that key, and `make publish` releases under no other.
 6. `gh auth login`: the release is created with the GitHub CLI.
 
 For each release, from a clean checkout of `main` on that Mac:
@@ -419,9 +419,11 @@ again, so Sparkle signs the archive that ships. `make dist` and `make publish` b
   Developer ID requirement names the team, not the certificate, so any Developer ID Application
   certificate of the same team satisfies it; for a deliberate change, such as moving to another
   team, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
-- `SUPublicEDKey` is not the latest release's: installs verify with the key they shipped with, so
-  every install would reject the update. On a new Mac, import the original key with
-  `generate_keys -f <backup>`; never paste a freshly generated one into `project.yml`;
+- `SUPublicEDKey` is not the latest release's. Installs check an update against the key they shipped
+  with, and Sparkle takes a new key only from an update that keeps the Developer ID signature, never
+  both changed at once; the script holds the key fixed, with no override. On a new Mac, import the
+  original key with `generate_keys -f <backup>`; never paste a freshly generated one into
+  `project.yml`;
 - the tree has uncommitted changes, `HEAD` is not on `main`, `v<version>` exists, or the build
   number does not exceed the one the latest release offers, which installs would ignore;
 - GitHub cannot answer any of those questions: a failed read refuses rather than guesses.

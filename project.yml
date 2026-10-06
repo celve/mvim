@@ -83,6 +83,7 @@ targets:
       - name: Sign Sparkle's helpers
         basedOnDependencyAnalysis: false
         script: |
+          set -e
           [ "$CODE_SIGNING_ALLOWED" = YES ] && [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] || exit 0
           framework="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/Sparkle.framework"
           helpers="$framework/Versions/B"
