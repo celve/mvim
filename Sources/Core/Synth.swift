@@ -6,7 +6,7 @@ import CoreGraphics
 ///
 /// **The magic is a cross-app ABI.** Vibe tags its synthesized events with
 /// the same value and both apps bypass tagged events before any handler runs;
-/// never change it in one app without the other (see docs/reference.md).
+/// never change it in one app without the other (see README).
 public enum SynthTag {
     public static let magic: Int64 = 0x4345_4C56   // 'CELV'
     public static func tag(_ event: CGEvent?) { event?.setIntegerValueField(.eventSourceUserData, value: magic) }

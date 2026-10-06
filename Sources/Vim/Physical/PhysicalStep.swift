@@ -379,7 +379,7 @@ extension Landing {
 }
 
 extension PhysicalStep {
-    /// Its letter in the plan alphabet — see docs/reference.md; `P3` is one press posting three times.
+    /// Its letter in the plan alphabet — see the README; `P3` is one press posting three times.
     var traceCode: String {
         switch self {
         case .setSelection: return "W"

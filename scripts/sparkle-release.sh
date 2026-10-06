@@ -13,13 +13,13 @@ info() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist"; }
 command -v gh >/dev/null || die "needs the GitHub CLI: brew install gh"
 [ -x "$bin/generate_appcast" ] || die "no $bin/generate_appcast: make release resolves Sparkle"
 [ -n "${NOTARY_PROFILE:-}" ] ||
-    die "NOTARY_PROFILE names no notarytool keychain profile (docs/reference.md, Publishing an update)"
+    die "NOTARY_PROFILE names no notarytool keychain profile (README, Publishing an update)"
 
 version=$(info CFBundleShortVersionString)
 build=$(info CFBundleVersion)
 feed=$(info SUFeedURL)
 [ -n "$(info SUPublicEDKey)" ] ||
-    die "no SUPublicEDKey: set SPARKLE_PUBLIC_KEY in project.yml (docs/reference.md, Publishing an update)"
+    die "no SUPublicEDKey: set SPARKLE_PUBLIC_KEY in project.yml (README, Publishing an update)"
 repo=${feed#https://github.com/}
 repo=${repo%/releases/latest/download/appcast.xml}
 [ "https://github.com/$repo/releases/latest/download/appcast.xml" = "$feed" ] ||
