@@ -1,6 +1,8 @@
 name: mvim
 
 options:
+  # Older XcodeGen copies what is inside Resources/AppIcon.icon as loose files, and the app gets no icon.
+  minimumXcodeGenVersion: "2.45.1"
   bundleIdPrefix: io.github.celve
   deploymentTarget:
     macOS: "14.0"
