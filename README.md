@@ -1,21 +1,68 @@
-# mvim
+<p align="center">
+  <img src="docs/images/icon.png" width="128" height="128" alt="mvim's icon: an m on a dark tile">
+</p>
 
-Vim's modal editing in the text fields of your Mac. mvim lives in the menu bar: it reads and edits the
-focused field through Accessibility, and takes the keys it needs with a keyboard event tap.
+<h1 align="center">mvim</h1>
 
-A field starts in Insert mode, unless you reach it from another block of the same document.
-**⌃[ enters Normal mode**, and Esc does too if you choose it in the menu.
+<p align="center">
+  <b>Vim's modal editing in the text fields of your Mac.</b><br>
+  A menu-bar app for macOS 14 or later. Free software under the GNU GPL.
+</p>
 
-Download the [latest release](https://github.com/celve/mvim/releases/latest) or
-[build it from source](#install). mvim needs macOS 14 or later, and it is free software under the
-[GNU GPL](#license).
+<p align="center">
+  <a href="https://github.com/celve/mvim/releases/latest"><b>Download</b></a> ·
+  <a href="https://mvimsite.vercel.app">Home page</a> ·
+  <a href="#what-works">What works</a> ·
+  <a href="#development">Development</a>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/demo-dark.gif">
+    <img src="docs/images/demo-light.gif" width="760" alt="Fix every typo: Esc enters Normal mode; /teh ⏎ finds the typo; ciw fixes it; n finds the next one, and . fixes it too; leaving “Check the draft and the slides before Friday.”">
+  </picture>
+</p>
+
+<p align="center">
+  <sub><b>Fix every typo.</b> Each step is what mvim's engine does with these keys, in its simulation of a
+  native Mac text field. Esc enters Normal mode once you choose it in the menu.
+  The home page has <a href="https://mvimsite.vercel.app">more demos</a>.</sub>
+</p>
+
+mvim reads and edits the focused field through Accessibility, and takes the keys it needs with a keyboard
+event tap. Type as usual, and press **⌃[** for Normal mode, or **Esc** if you choose it in the menu.
+
+- **Vim's grammar, not only `hjkl`.** Operators with motions and word objects, counts, registers, marks,
+  search, Visual mode and `.` ([What works](#what-works)).
+- **Native apps, browsers and Electron apps.** Where a field takes no writes, mvim presses keys instead and
+  checks the field after each step: when the field does not answer as planned, it beeps and stops rather than
+  edit the wrong text. It also [learns](#browsers-and-electron-apps) what each kind of field supports.
+- **Your shortcuts stay yours.** A field starts in Insert mode, apps keep every ⌘ and ⌥ combination, and
+  terminals and code editors start Off.
+- **Private.** No networking code of its own: a release's only traffic is the update check, which asks first
+  ([Privacy](#privacy)).
 
 ## Install
 
-A [release](https://github.com/celve/mvim/releases) is a zip of `mvim.app`, signed with a Developer ID
-certificate and notarized by Apple. Unzip it and move `mvim.app` to `/Applications` before you open it
-for the first time: [Sparkle](#updates) cannot update a copy run from Downloads or from a disk image,
-and by default it does not say so. Then go on from step 3.
+1. Download the [latest release](https://github.com/celve/mvim/releases/latest), unzip it, and move `mvim.app`
+   to `/Applications` before you open it for the first time: Sparkle, which updates mvim, cannot update a copy
+   run from Downloads or from a disk image, and by default it does not say so.
+2. Open mvim and allow **Input Monitoring** when macOS asks. mvim does not ask for **Accessibility**: choose
+   **Accessibility: not granted** in its menu and switch mvim on there.
+3. Quit mvim and open it again, since it creates its keyboard tap only at launch. The menu should now read
+   `Input tap: running`, `Accessibility: granted` and `Input Monitoring: granted`.
+4. To enter Normal mode with Esc, choose **Esc** under **Normal Mode Key** in the menu.
+
+A release is signed with a Developer ID certificate and notarized by Apple. It [updates](#updates) itself: on
+its second launch mvim asks whether to check once a day. You can also
+[build mvim from source](#building-from-source).
+
+To uninstall, switch **Start at Login** off, quit and delete the app, remove it from Accessibility and Input
+Monitoring in System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and delete
+`~/Library/Application Support/mvim`.
+
+<details>
+<summary><h3>Building from source</h3></summary>
 
 To build from source, you need Xcode 26 or later (the full app, not only its command-line tools),
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.1 or later (`brew install xcodegen`), and an
@@ -40,16 +87,10 @@ creates.
    open /Applications/mvim.app
    ```
 
-3. Allow **Input Monitoring** when macOS asks. mvim does not ask for **Accessibility**: choose
-   **Accessibility: not granted** in its menu and switch mvim on there.
-4. Quit mvim and open it again, since it creates its keyboard tap only at launch. The menu should now
-   read `Input tap: running`, `Accessibility: granted` and `Input Monitoring: granted`.
+3. Grant the permissions and open mvim again, as in steps 2 and 3 above.
 
 To update a build from source, quit mvim, run `git pull --autostash` and the same `make release`,
-and copy the app again; the permissions carry over while the same identity signs it. To uninstall,
-switch **Start at Login** off, quit and delete the app, remove it from Accessibility and Input
-Monitoring in System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and
-delete `~/Library/Application Support/mvim`.
+and copy the app again; the permissions carry over while the same identity signs it.
 
 **Updating across the identifier change.** mvim's identifier was `com.loom.mvim` until it became
 `io.github.celve.mvim`, and to macOS the two are different apps: the permissions, the settings and
@@ -75,43 +116,57 @@ defaults read /Applications/mvim.app/Contents/Info CFBundleIdentifier
    different tags each take the other's typing for yours, so Normal mode would run a dictated
    transcript as commands.
 
+</details>
+
 ## Using it
 
-**⌃[** enters Normal mode, leaves Visual mode and cancels a half-typed command. It is Control and the
-key to the right of P, whatever the keyboard layout. By default **Esc stays the app's**, for its own
-cancels and dialogs. Choose **Esc** under **Normal Mode Key** in the menu and Esc does what ⌃[ does,
-except in Normal mode with nothing half-typed, where it still goes to the app: press Esc twice to
-close a dialog, a popup or Spotlight from a field. ⌃[ keeps working either way. The menu-bar icon
-shows the mode as a letter in a square: an outlined **i** or **r** in Insert or Replace mode, where
-keys type, and a filled **n** or **v** in Normal or Visual mode, where they are commands. A dashed
-square means mvim is not working in a field, a slashed one that **Vim Mode** is off, and **!** that
-Accessibility is not granted or the input tap is not running. Where mvim can set the selection,
-Normal mode also draws a block cursor. Nothing shows a half-typed command, or a `/` search as you
-type it. Moving between the blocks of one document, as in Notion, keeps the mode you were in.
+A field starts in Insert mode. Moving between the blocks of one document, as in Notion, keeps the mode you
+were in.
 
-In Insert mode mvim takes only ⌃[, and Esc if you chose it. In Normal and Visual mode apps still keep
-every ⌘ and ⌥ combination, Esc unless you chose it, Home, End, Page Up and Page Down, the function
-keys, and every ⌃ combination but ⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while
-[the app's own page keys](#native-word-paragraph-and-page-keys) are on. So ⌃A, ⌃E and ⌃K work as in
-any Mac text field, and a key mvim does not know beeps instead of typing.
+**⌃[** enters Normal mode, leaves Visual mode and cancels a half-typed command. It is Control and the key to
+the right of P, whatever the keyboard layout.
 
-The menu is mvim's whole interface. **Vim Mode** turns mvim off everywhere until you turn it back on
-or mvim starts again. **Normal Mode Key** chooses ⌃[ or Esc for every app. **Vim in _App_** chooses,
-per app:
+**Esc stays the app's** by default, for its own cancels and dialogs. Choose **Esc** under **Normal Mode Key**
+and Esc does what ⌃[ does, except in Normal mode with nothing half-typed, where it still goes to the app:
+press Esc twice to close a dialog, a popup or Spotlight from a field. ⌃[ keeps working either way.
 
-- **Auto**: mvim works in text fields, text areas and combo boxes, but never in password fields.
-- **Off**: mvim leaves the app alone. Terminals and code editors start Off: Terminal, iTerm2, kitty,
-  Alacritty, WezTerm, Ghostty, Warp, Visual Studio Code, Cursor, Xcode, Zed, VimR, Neovide and the
-  JetBrains IDEs.
-- **Force**: for apps that expose no text field to Accessibility. mvim drives the front window
-  without reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
+The menu-bar icon shows the mode as a letter in a square:
 
-**Capabilities in _App_** shows what mvim can do in the current field, starting with what it learned
-to switch off in fields like it, and lets you override it; a badge on it counts what is off here.
-The rest of the menu reports the tap and both permissions, whose rows open their System Settings
-panes, and holds [Start at Login](#start-at-login) and, below it, **Open Beliefs File**, which opens
-the file that keeps your choices and what mvim has learned (see
-[Browsers and Electron apps](#browsers-and-electron-apps)).
+| Icon | Meaning |
+|---|---|
+| Outlined **i** or **r** | Insert or Replace mode: keys type |
+| Filled **n** or **v** | Normal or Visual mode: keys are commands |
+| Dashed square | mvim is not working in a field |
+| Slashed square | **Vim Mode** is off |
+| **!** | Accessibility is not granted, or the input tap is not running |
+
+Where mvim can set the selection, Normal mode also draws a block cursor. Nothing shows a half-typed command,
+or a `/` search as you type it.
+
+In Insert mode mvim takes only ⌃[, and Esc if you chose it. In Normal and Visual mode apps still keep every ⌘
+and ⌥ combination, Esc unless you chose it, Home, End, Page Up and Page Down, the function keys, and every ⌃
+combination but ⌃[, ⌃R and ⌃V, and ⌃F and ⌃B while
+[the app's own page keys](#native-word-paragraph-and-page-keys) are on. So ⌃A, ⌃E and ⌃K work
+as in any Mac text field, and a key mvim does not know beeps instead of typing.
+
+The menu is mvim's whole interface:
+
+- **Vim Mode** turns mvim off everywhere until you turn it back on or mvim starts again.
+- **Normal Mode Key** chooses ⌃[ or Esc for every app.
+- **Vim in _App_** chooses, per app:
+  - **Auto**: mvim works in text fields, text areas and combo boxes, but never in password fields.
+  - **Off**: mvim leaves the app alone. Terminals and code editors start Off: Terminal, iTerm2, kitty,
+    Alacritty, WezTerm, Ghostty, Warp, Visual Studio Code, Cursor, Xcode, Zed, VimR, Neovide and the
+    JetBrains IDEs.
+  - **Force**: for apps that expose no text field to Accessibility. mvim drives the front window without
+    reading it, with arrow keys and ⌘Z, ⌘X, ⌘C and ⌘V, and a click returns to Insert mode.
+- **Capabilities in _App_** shows what mvim can do in the current field, starting with what it learned to
+  switch off in fields like it, and lets you override it; a badge on it counts what is off here.
+- The status rows report the input tap and both permissions; the permission rows open their System Settings
+  panes.
+- [**Start at Login**](#start-at-login) and, below it, **Open Beliefs File**, which opens the
+  file that keeps your choices and what mvim has learned.
+
 mvim also stands aside while macOS has Secure Event Input on, as it does in a password field.
 
 ## What works
@@ -136,6 +191,41 @@ motions `ge` `%` `(` `)` `H` `M` `L` `*` `#` `[[` `]]`; and `g-` `g+` `&` `gR` `
 `gk`, unless [the app's own keys](#native-word-paragraph-and-page-keys) are on.
 
 ## Browsers and Electron apps
+
+Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field, and some, such as
+Linear in Dia, let it set the selection too, so mvim moves and selects there by writing it. Where a field
+takes no writes, or mvim has learned that they fail, mvim runs the same Normal-mode commands by pressing keys
+(arrows, ⌃A and ⌃E, ⌘↑ and ⌘↓) with no block cursor, and checks the field after each step: when the field
+does not answer as planned, it beeps and stops rather than edit the wrong text.
+
+**mvim learns.** When one of the field's writes, or one of the app's keys mvim relies on, fails its check
+three commands in a row, mvim switches that capability off for fields like the one it failed in until the app
+updates; the app's own word and paragraph keys go off after one failure. Some failures only stop the command:
+a key landing elsewhere in Chromium's rich text, a word key doing nothing in web content, anything under
+**Force**, and any capability you set yourself. **Capabilities** lists what was switched off first, under
+**Learned for …** with the day it failed, and **Try Again** forgets it so mvim tries it afresh. **On …** and
+**Off …** override what mvim detected or learned, for one field, fields like it, a site or the whole app, and
+[a file you can edit](#the-beliefs-file) keeps those choices and what mvim learned.
+
+What else differs there:
+
+- `o` and `O` paste their new line, because ⏎ could send a message.
+- `j` and `k` count the lines Linear shows: a list's markers, to-do boxes and a code block's language label
+  are not lines, and a mention chip is one character on its paragraph's line.
+- In a field mvim cannot read at all, and under **Force**, moves are approximate, deletes and yanks go
+  through ⌘X and ⌘C so the clipboard is the register, and search, marks and Visual mode beep.
+- **Notion** comes with its own defaults, since each of its blocks is a separate field.
+- An input or a plain text area keeps mvim while a row of its popup list is highlighted, as in Linear's ⌘K
+  menu, so pick the row from Insert mode: in Normal mode the arrow keys and ⏎ are Vim's motions. A rich-text
+  editor loses mvim meanwhile, except an empty one, which is a known limit: there Normal mode takes the keys
+  meant for that row until you press `i`.
+- **App's word, paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to
+  [the app's own keys](#native-word-paragraph-and-page-keys).
+
+[How mvim presses keys there](#native-keys) is under Development.
+
+<details>
+<summary><b>The full account</b></summary>
 
 Chromium browsers and Electron apps, such as Chrome, Dia and Linear, let mvim read a field, and some,
 such as Linear in Dia, let it set the selection too, so mvim moves and selects there by writing it.
@@ -179,34 +269,49 @@ or the whole app. Those choices and what mvim learned are kept in a file you can
 paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to the
 app's own keys: see [Native word, paragraph and page keys](#native-word-paragraph-and-page-keys).
 
+</details>
+
 ## Privacy
 
-mvim needs **Accessibility**, to read and edit the focused field and to post keys, and **Input
-Monitoring**, for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed
-into a field it is working in. mvim has no microphone, keychain or networking code of its own; a
-release build's only traffic is [Sparkle](#updates)'s update check, which asks first. Its settings,
-its beliefs file and its log name the apps and websites you use. The log also records the Normal-mode
-commands you type, but never the text you insert or a command's operand, count or register (a unit
-test holds it to that), unless you turn on [text recording](#diagnostics); if mvim ever mistook the
-mode, some of your words could reach it as commands. mvim pastes through the clipboard into fields it
-cannot write, and restores the clipboard afterwards; in fields it cannot read, cut and copy use the
-clipboard itself.
+mvim needs **Accessibility**, to read and edit the focused field and to post keys, and **Input Monitoring**,
+for its keyboard tap. The tap sees every key you press, but mvim acts only on keys typed into a field it is
+working in.
+
+- **Network.** mvim has no microphone, keychain or networking code of its own; a release build's only traffic
+  is [Sparkle](#updates)'s update check, which asks first.
+- **What it records.** Its settings, its beliefs file and its log name the apps and websites you use. The log
+  also records the Normal-mode commands you type, but never the text you insert or a command's operand, count
+  or register (a unit test holds it to that), unless you turn on
+  [text recording](#diagnostics); if mvim ever mistook the mode, some of your words could
+  reach it as commands.
+- **Clipboard.** mvim pastes through the clipboard into fields it cannot write, and restores the clipboard
+  afterwards; in fields it cannot read, cut and copy use the clipboard itself.
 
 ## Reporting a bug
 
-Open an [issue](https://github.com/celve/mvim/issues) with your macOS version, the output of
-`git rev-parse --short HEAD`, the app (and the site, in a browser), the keys you typed, what happened
-and what you expected, and a screenshot of the **Capabilities** menu. A command that fails is always
-logged, so attach the last hour of mvim's log, after reading it, since it names apps and sites:
+Open an [issue](https://github.com/celve/mvim/issues) with your macOS version, mvim's version from Finder's
+Get Info (or the output of `git rev-parse --short HEAD` for a build from source), the app (and the site, in a
+browser), the keys you typed, what happened and what you expected, and a screenshot of the **Capabilities**
+menu. A command that fails is always logged, so attach the last hour of mvim's log, after reading it, since it
+names apps and sites:
 
 ```sh
 log show --predicate 'subsystem == "io.github.celve.mvim"' --last 1h --info --debug > mvim.log
 ```
 
-Never post a `log collect` archive: it holds your whole system log. To log the commands that succeed
-as well, see [Diagnostics](#diagnostics).
+Never post a `log collect` archive: it holds your whole system log. To log the commands that succeed as well,
+see [Diagnostics](#diagnostics).
 
 ## Development
+
+mvim builds with Xcode 26 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen), and `make test` runs
+the engine's tests with no Xcode project and no permissions. Each section below opens in place;
+[Building from source](#building-from-source) is under Install.
+
+**Build and release**
+
+<details>
+<summary><h3>Make targets</h3></summary>
 
 The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen and built with
 `xcodebuild`. `mvim.xcodeproj` is git-ignored: edit `project.yml`, then regenerate.
@@ -239,7 +344,10 @@ xcodebuild -project mvim.xcodeproj -scheme mvim -configuration Debug \
   -derivedDataPath build build
 ```
 
-### Project layout
+</details>
+
+<details>
+<summary><h3>Project layout</h3></summary>
 
 ```
 mvim/
@@ -248,6 +356,8 @@ mvim/
 ├── Info.plist                  # Sparkle's feed and key, merged into the generated plist
 ├── mvim.entitlements           # intentionally empty — mvim runs non-sandboxed
 ├── LICENSE                     # GPL-3.0
+├── docs/
+│   └── images/                 # the README's icon and demo
 ├── scripts/
 │   └── sparkle-release.sh      # notarizes, stages and publishes updates (make dist / publish)
 ├── Sources/
@@ -276,14 +386,20 @@ mvim/
     └── Assets.xcassets         # Accent color (still empty)
 ```
 
-### Modules
+</details>
+
+<details>
+<summary><h3>Modules</h3></summary>
 
 `mvim (app) → Vim → Core`, one-way and compiler-enforced; the app also imports Core directly. Vim's
 pure engine (everything under `Sources/Vim` except `Runtime/`) has no AppKit/AX dependency and is
 unit-tested standalone via `make test`, with the pure Core files the Makefile lists. Only the app
 links [Sparkle](https://sparkle-project.org), pinned to an exact version in `project.yml`.
 
-### Signing
+</details>
+
+<details>
+<summary><h3>Signing</h3></summary>
 
 `project.yml` signs the two configurations differently, both under the team it names:
 
@@ -316,7 +432,10 @@ app's frameworks only when they carry its team, and an ad-hoc or self-signed sig
 `make dist` and `make publish` refuse `SIGN`, since only `project.yml`'s Developer ID signature can be
 notarized, and installs keep their grants only while updates keep it.
 
-### Start at login
+</details>
+
+<details>
+<summary><h3>Start at login</h3></summary>
 
 The menu's **Start at Login** toggle registers mvim with `SMAppService.mainApp`, the API that
 replaced `SMLoginItemSetEnabled`. The system owns the bit — nothing is mirrored into `Prefs`.
@@ -337,7 +456,10 @@ Three consequences worth knowing:
 A login-launched mvim keeps its Accessibility and Input Monitoring grants: same bundle, same
 signature.
 
-### Updates
+</details>
+
+<details>
+<summary><h3>Updates</h3></summary>
 
 Every build embeds [Sparkle](https://sparkle-project.org), but a build has update items only when
 its Info.plist names both a feed and a public key. `project.yml` gives both to Release builds
@@ -360,7 +482,10 @@ GitHub releases: the feed is the `appcast.xml` attached to the latest one.
 - **What goes out:** a request to github.com for the feed, and the download when you install.
   Sparkle's anonymous system profiling stays off.
 
-#### Publishing an update
+</details>
+
+<details>
+<summary><h3>Publishing an update</h3></summary>
 
 Once, on the Mac you will publish from:
 
@@ -435,7 +560,12 @@ The first release skips the checks against the latest release.
 The zip holds the app with its ticket stapled, so Gatekeeper needs no network to check a copy
 downloaded in a browser, and macOS opens it after its one confirmation for an app from the Internet.
 
-### Diagnostics
+</details>
+
+**How it works**
+
+<details>
+<summary><h3>Diagnostics</h3></summary>
 
 mvim records one line per **command decision** to `os_log`, under subsystem
 `io.github.celve.mvim`. The unit is the decision, not the keystroke: what a reader wants back is
@@ -554,7 +684,10 @@ defaults delete io.github.celve.mvim mvimRecordText
 it per line would put a `UserDefaults` lookup on the command path — so `defaults delete`
 does not stop an mvim that is already running.
 
-### Native keys
+</details>
+
+<details>
+<summary><h3>Native keys</h3></summary>
 
 When a field can be read but not written, mvim moves by line and document with the standard
 Cocoa bindings instead of counting arrow presses: ⌃A/⌃E to the start and end of the caret's
@@ -641,7 +774,10 @@ until it holds text, so the settles after it do not check the length. In a field
 empty paragraphs, an edit that empties a line or types into an empty one changes which of them
 `AXValue` shows, so the settles after it check neither the length nor the paragraph side.
 
-### Learned beliefs
+</details>
+
+<details>
+<summary><h3>Learned beliefs</h3></summary>
 
 mvim learns three kinds of answer about each kind of field — every field of one role on one site,
 or in one app natively — and keeps them in the [beliefs file](#the-beliefs-file):
@@ -688,7 +824,10 @@ this field, which read **Trying again here** and are not counted in the badge. *
 its reads already moved it off. Choosing On or Off for a row retires what fields like this one
 learned about it.
 
-### The beliefs file
+</details>
+
+<details>
+<summary><h3>The beliefs file</h3></summary>
 
 `~/Library/Application Support/mvim/beliefs.json` keeps the choices made with **On …** and **Off …**
 and the [learned beliefs](#learned-beliefs). It is JSON for you to read and edit, and **Open Beliefs
@@ -759,7 +898,10 @@ drops your choices as well:
 rm ~/Library/Application\ Support/mvim/beliefs.json
 ```
 
-### Native word, paragraph and page keys
+</details>
+
+<details>
+<summary><h3>Native word, paragraph and page keys</h3></summary>
 
 Off by default. **Capabilities in _App_ › App's word, paragraph & page keys** turns it on for one
 field, fields like it, a site or the whole app. With it on, mvim presses the app's own keys
@@ -797,12 +939,17 @@ instead of counting arrows or ringing, and the app decides where they land:
   move that leaves a selection behind is demoted. Words go back to counting and paragraphs to
   ringing until you choose Try Again or override it, or the app updates.
 
-### Synthesized events
+</details>
+
+<details>
+<summary><h3>Synthesized events</h3></summary>
 
 mvim tags every event it posts with `SynthTag.magic` (`0x4345_4C56`, in `Sources/Core/Synth.swift`),
 and its tap passes tagged events through before any handler runs. **The magic is a cross-app ABI:**
 Vibe, the author's dictation app, tags its typing with the same value, so Normal mode never runs a
 transcript as commands. Never change the magic in one app without the other.
+
+</details>
 
 ## License
 
