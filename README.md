@@ -565,7 +565,7 @@ again, so Sparkle signs the archive that ships. `make dist` and `make publish` b
   certificate of the same team satisfies it; for a deliberate change, such as moving to another
   team or a new identifier, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway. Under a new
   file name and identifier, installs are still offered the update and cannot install it, since
-  Sparkle looks in an update for the app's own file name or identifier;
+  Sparkle looks in an update for the installed app's file name or identifier;
 - `SUPublicEDKey` is not the latest release's. Installs check an update against the key they shipped
   with, and Sparkle takes a new key only from an update that keeps the Developer ID signature, never
   both changed at once; the script holds the key fixed, with no override. On a new Mac, import the
