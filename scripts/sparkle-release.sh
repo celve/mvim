@@ -1,7 +1,7 @@
 #!/bin/bash
-# Stages a Sparkle update of a built app in DIR — the zip and a one-item appcast pointing at it —
-# and, for `publish`, releases both on GitHub, where the app's own feed looks.
-# Signs with the login keychain's Sparkle key, or the key file in $SPARKLE_KEY_FILE.
+# Notarizes a built app and stages its Sparkle update in DIR; `publish` also releases it on GitHub.
+# Notarizes with the keychain profile $NOTARY_PROFILE names, made by `notarytool store-credentials`.
+# Signs the update with the login keychain's Sparkle key, or the key file in $SPARKLE_KEY_FILE.
 # Usage: sparkle-release.sh dist|publish APP SPARKLE_BIN DIR
 set -euo pipefail
 
@@ -12,6 +12,8 @@ info() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist"; }
 [ "$mode" = dist ] || [ "$mode" = publish ] || die "unknown mode: $mode"
 command -v gh >/dev/null || die "needs the GitHub CLI: brew install gh"
 [ -x "$bin/generate_appcast" ] || die "no $bin/generate_appcast: make release resolves Sparkle"
+[ -n "${NOTARY_PROFILE:-}" ] ||
+    die "NOTARY_PROFILE names no notarytool keychain profile (README, Publishing an update)"
 
 version=$(info CFBundleShortVersionString)
 build=$(info CFBundleVersion)
@@ -24,16 +26,17 @@ repo=${repo%/releases/latest/download/appcast.xml}
     die "SUFeedURL is not a GitHub latest-release asset: '$feed'"
 tag=v$version
 sha=$(git rev-parse HEAD)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
 # The HTTP status GitHub answers a GET with; empty when it could not be asked.
 http_status() { { gh api --include "$1" 2>/dev/null || true; } | sed -n '1s|^HTTP/[0-9.]* \([0-9]*\).*|\1|p'; }
 
 # Every install updates from the latest release: outnumber its build and keep its signing identity.
 check_latest() {
-    local latest previous key requirement
+    local latest previous key requirement live=$work/latest
+    mkdir "$live"
     latest=$(gh api "repos/$repo/releases/latest" --jq .tag_name) || die "could not read $repo's latest release"
-    live=$(mktemp -d)
-    trap 'rm -rf "$live"' EXIT
     gh release download "$latest" --repo "$repo" --pattern appcast.xml --pattern 'mvim-*.zip' --dir "$live" ||
         die "could not download $latest's appcast.xml and zip"
     previous=$(sed -n 's|.*<sparkle:version>\([^<]*\)</sparkle:version>.*|\1|p' "$live/appcast.xml")
@@ -55,11 +58,33 @@ check_latest() {
             "(SPARKLE_NEW_IDENTITY=1 publishes anyway)"
 }
 
-# TCC keys Accessibility and Input Monitoring to the signature, and an ad-hoc one is new every build.
-signature=$(codesign -dv "$app" 2>&1) || die "$app is not signed"
-case $signature in
-    *Signature=adhoc*) die "$app is ad-hoc signed: every install would lose its grants on updating" ;;
-esac
+# Trusts the service's own Accepted in notarytool's answer, never its exit status alone.
+notarize() {
+    local answer id status exited=0
+    echo "Notarizing $(basename "$1"): waiting for the notary service's answer."
+    answer=$(xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json) ||
+        exited=$?
+    id=$(plutil -extract id raw -o - - <<<"$answer" 2>/dev/null) || id=
+    status=$(plutil -extract status raw -o - - <<<"$answer" 2>/dev/null) || status=
+    [ "$exited" = 0 ] && [ "$status" = Accepted ] && return
+    [ -z "$id" ] || xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+    die "the notary service did not accept $(basename "$1"): ${status:-no status}, notarytool exited $exited"
+}
+
+# Sparkle strips quarantine from an update it installs, so Gatekeeper never sees one: this stands in.
+require_notarized() {
+    local assessment
+    xcrun stapler validate "$1" || die "the zipped app carries no notarization ticket"
+    assessment=$(spctl --assess --type execute -vv "$1" 2>&1) &&
+        [[ $assessment = *'source=Notarized Developer ID'* ]] ||
+        die "Gatekeeper does not take the zipped app as a notarized Developer ID app: $assessment"
+}
+
+# Apple's marks on a Developer ID Application certificate and on the authority that issues it.
+developer_id='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists'
+developer_id+=' and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+codesign --verify --deep --strict --test-requirement="=$developer_id" "$app" ||
+    die "$app is not signed with a Developer ID Application certificate: the notary service takes no other"
 
 if [ "$mode" = publish ]; then
     [ -z "$(git status --porcelain)" ] || die "uncommitted changes: a release must build from its tag"
@@ -84,9 +109,17 @@ rm -rf "$dir"
 mkdir -p "$dir"
 zip=$dir/mvim-$version.zip
 notes=$dir/mvim-$version.md
-ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
 gh api "repos/$repo/releases/generate-notes" -f tag_name="$tag" -f target_commitish="$sha" \
     --jq .body >"$notes" || die "GitHub wrote no release notes for $sha: is it pushed?"
+
+# The service takes an archive but only the app can carry its ticket, so the app is zipped twice.
+ditto -c -k --sequesterRsrc --keepParent "$app" "$work/mvim-$version.zip"
+notarize "$work/mvim-$version.zip"
+xcrun stapler staple "$app" || die "could not staple the notarization ticket to $app"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$work/stapled.zip"
+ditto -x -k "$work/stapled.zip" "$work/shipped"
+require_notarized "$work/shipped/mvim.app"
+mv "$work/stapled.zip" "$zip"
 
 appcast=(--download-url-prefix "https://github.com/$repo/releases/download/$tag/"
     --embed-release-notes --full-release-notes-url "https://github.com/$repo/releases"

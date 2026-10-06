@@ -11,24 +11,30 @@ free software under the [GNU GPL](#license).
 
 ## Install
 
-You need Xcode 26 or later (the full app, not only its command-line tools),
+A [release](https://github.com/celve/mvim/releases) is a zip of `mvim.app`, signed with a Developer ID
+certificate and notarized by Apple. Unzip it and move `mvim.app` to `/Applications` before you open it
+for the first time: [Sparkle](#updates) cannot update a copy run from Downloads or from a disk image,
+and by default it does not say so. Then go on from step 3.
+
+To build from source, you need Xcode 26 or later (the full app, not only its command-line tools),
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.45.1 or later (`brew install xcodegen`), and an
 **Apple Development** signing certificate, which Xcode → Settings → Accounts → Manage Certificates…
 creates.
 
-1. Clone this repository and set `DEVELOPMENT_TEAM` in [`project.yml`](project.yml) to your team ID,
-   the `OU=` value this prints. macOS keeps mvim's permissions only while its signature stays the
-   same, and an ad-hoc signature changes with every build ([Signing](#signing)).
+1. Clone this repository and find your certificate's full name, the quoted text this prints. macOS
+   keeps mvim's permissions only while its signature stays the same, and an ad-hoc signature changes
+   with every build ([Signing](#signing)).
 
    ```sh
-   security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+   security find-identity -v -p codesigning
    ```
 
-2. Build it and copy it to where it will live, since [Start at Login](#start-at-login) remembers the
-   path:
+2. Build it under that name, as `make release` alone asks for the Developer ID certificate that
+   releases carry. Then copy it to where it will live, since [Start at Login](#start-at-login)
+   remembers the path:
 
    ```sh
-   make release
+   make release SIGN="Apple Development: Your Name (XXXXXXXXXX)"
    rm -rf /Applications/mvim.app && ditto .release/mvim.app /Applications/mvim.app
    open /Applications/mvim.app
    ```
@@ -38,11 +44,11 @@ creates.
 4. Quit mvim and open it again, since it creates its keyboard tap only at launch. The menu should now
    read `Input tap: running`, `Accessibility: granted` and `Input Monitoring: granted`.
 
-To update, quit mvim, run `git pull --autostash && make release` and copy the app again; the
-permissions carry over while the same Apple Development identity signs it. To uninstall, switch
-**Start at Login** off, quit and delete the app, remove it from Accessibility and Input Monitoring in
-System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and delete
-`~/Library/Application Support/mvim`.
+To update a build from source, quit mvim, run `git pull --autostash` and the same `make release`,
+and copy the app again; the permissions carry over while the same identity signs it. To uninstall,
+switch **Start at Login** off, quit and delete the app, remove it from Accessibility and Input
+Monitoring in System Settings → Privacy & Security, run `defaults delete io.github.celve.mvim`, and
+delete `~/Library/Application Support/mvim`.
 
 **Updating across the identifier change.** mvim's identifier was `com.loom.mvim` until it became
 `io.github.celve.mvim`, and to macOS the two are different apps: the permissions, the settings and
@@ -213,15 +219,16 @@ The Xcode project is generated from [`project.yml`](project.yml) by XcodeGen and
 | `make test-pasteboard` | Run the pasteboard loan's tests on a private pasteboard: no permissions |
 | `make test-beliefs` | Run the beliefs file's tests in a temporary directory: no permissions |
 | `make release`   | Build Release, copy it to `.release/mvim.app`                        |
-| `make dist`      | `release`, then stage its update in `dist/`                          |
-| `make publish`   | `release`, then stage its update and release it on GitHub            |
+| `make dist`      | `release`, then notarize it and stage its update in `dist/`          |
+| `make publish`   | `release`, then notarize it, stage its update and release it on GitHub |
 | `make clean`     | Remove `build/`, `dist/` and the `.xcodeproj`                        |
 | `make distclean` | `clean`, plus remove `.release/`                                     |
 
 `make release` launches and installs nothing. `make clean` leaves `.release/` alone (see
 [Start at login](#start-at-login)); `make distclean` removes it too. The Release build number is the
 commit count, which is how [updates](#updates) are ordered. `make dist` and `make publish` need the
-GitHub CLI, `gh`.
+GitHub CLI, `gh`, and the certificate and credentials of
+[Publishing an update](#publishing-an-update).
 
 By hand:
 
@@ -241,7 +248,7 @@ mvim/
 ├── mvim.entitlements           # intentionally empty — mvim runs non-sandboxed
 ├── LICENSE                     # GPL-3.0
 ├── scripts/
-│   └── sparkle-release.sh      # stages and publishes an update (make dist / publish)
+│   └── sparkle-release.sh      # notarizes, stages and publishes updates (make dist / publish)
 ├── Sources/
 │   ├── Core/                   # Core framework — what the engine stands on: InputHub
 │   │                           #   (one shared CGEventTap), KeyEvent/Mods, field reads
@@ -277,19 +284,36 @@ links [Sparkle](https://sparkle-project.org), pinned to an exact version in `pro
 
 ### Signing
 
-The project signs with a stable **Apple Development** identity (`CODE_SIGN_STYLE: Automatic`,
-team in `project.yml`) so the Accessibility / Input Monitoring grants persist across
-rebuilds — an ad-hoc signature would change every build and macOS would revoke the grants
-each time. To build under a different team, change `DEVELOPMENT_TEAM` in `project.yml`: every
-`make build` and `make release` regenerates the Xcode project from it, so a team picked in Xcode
-does not stick. Keep that change out of pull requests.
+`project.yml` signs the two configurations differently, both under the team it names:
 
-Without that certificate, `SIGN` signs one `make build`, `make run` or `make release` another way,
+- **Debug** (`make build`, `make run`) signs with a stable **Apple Development** identity
+  (`CODE_SIGN_STYLE: Automatic`) so the Accessibility / Input Monitoring grants persist across
+  rebuilds — an ad-hoc signature would change every build and macOS would revoke the grants each
+  time.
+- **Release** (`make release`, `make dist`, `make publish`) signs with the team's **Developer ID
+  Application** certificate, which is what Apple's notary service takes: under the hardened runtime,
+  with a secure timestamp, and without `get-task-allow`, the entitlement that lets other processes
+  attach a debugger. That holds for the app, both frameworks and Sparkle's helpers. The style is
+  `Manual` because Xcode's automatic signing cannot use Developer ID.
+
+[`mvim.entitlements`](mvim.entitlements) stays empty under the hardened runtime too: Accessibility and
+Input Monitoring are grants, not entitlements. The two configurations share one bundle identifier and
+differ in signature, so going from a Debug build to a Release one on the same Mac, or back, costs the
+grants each time.
+
+To build under a different team, change `DEVELOPMENT_TEAM` in `project.yml`: every `make build` and
+`make release` regenerates the Xcode project from it, so a team picked in Xcode does not stick. Keep
+that change out of pull requests.
+
+Without those certificates, `SIGN` signs one `make build`, `make run` or `make release` another way,
 leaving `project.yml` alone. `make run SIGN=-` signs ad-hoc: it builds anywhere, but macOS revokes
 the grants at every build. `SIGN="<name>"` signs with another code-signing identity in the keychain,
-such as a self-signed certificate; switching to or from it costs the grants once, and they persist
-across its builds. `make dist` and `make publish` refuse `SIGN`, since installs keep their grants
-only while updates keep `project.yml`'s identity.
+such as your own Apple Development certificate or a self-signed one, named in full as
+`security find-identity -v -p codesigning` prints it; switching to or from it costs the grants once,
+and they persist across its builds. A `SIGN` build is not hardened: the hardened runtime loads an
+app's frameworks only when they carry its team, and an ad-hoc or self-signed signature has none.
+`make dist` and `make publish` refuse `SIGN`, since only `project.yml`'s Developer ID signature can be
+notarized, and installs keep their grants only while updates keep it.
 
 ### Start at login
 
@@ -299,7 +323,7 @@ Three consequences worth knowing:
 
 - **It needs a real signature.** `SMAppService` fails with `kSMErrorInvalidSignature` on a bundle
   that is not properly code-signed, so the toggle needs a build made with an Apple Development
-  identity — see [Signing](#signing).
+  or Developer ID identity — see [Signing](#signing).
 - **Registration records the bundle's path.** Move the app afterwards and the item still points at
   the old location; `make clean` strands one registered from `build/`, and `make distclean` or
   deleting the clone one registered from `.release/`. Register from wherever mvim will actually
@@ -328,6 +352,11 @@ it is set, Release builds update themselves from this repository's GitHub releas
   forward, so Sparkle would otherwise open its window behind your work.
 - **Grants survive an update** because TCC holds them against the app's designated requirement,
   and `make publish` refuses a build that fails the current release's — see below.
+- **An update is notarized like a download.** Sparkle removes the quarantine mark from what it
+  installs, so Gatekeeper never checks an update; `make dist` and `make publish` check it instead,
+  and stage nothing else.
+- **Sparkle updates only a copy it can replace.** One run from Downloads or from a disk image it
+  cannot, and by default it does not say so: keep mvim in `/Applications` ([Install](#install)).
 - **What goes out:** a request to github.com for the feed, and the download when you install.
   Sparkle's anonymous system profiling stays off.
 
@@ -335,34 +364,61 @@ it is set, Release builds update themselves from this repository's GitHub releas
 
 Once, on the Mac you will publish from:
 
-1. Run `make release`, which resolves Sparkle, then
+1. Check at [developer.apple.com](https://developer.apple.com/account) → Membership that the Apple
+   Developer Program membership of the team in `project.yml` is active. Without it there is no
+   Developer ID certificate and no notarizing.
+2. Create the team's **Developer ID Application** certificate: Xcode → Settings → Accounts →
+   Manage Certificates… → **+**. Only the team's Account Holder can, and its private key stays in
+   this Mac's keychain.
+3. Store credentials for Apple's notary service in the keychain, under a profile name you choose:
+
+   ```sh
+   xcrun notarytool store-credentials mvim-notary --apple-id <your Apple ID> --team-id <your team ID>
+   ```
+
+   It asks for an app-specific password: [account.apple.com](https://account.apple.com) → Sign-In
+   and Security → App-Specific Passwords makes one. `make dist` and `make publish` take the
+   profile's name from `NOTARY_PROFILE`.
+4. Run `make release`, which resolves Sparkle, then
    `build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys`. It keeps a new private key
    in the login keychain and prints the public one: paste that into `SPARKLE_PUBLIC_KEY` in
    `project.yml` and commit it.
-2. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe. Every
+5. Back the private key up — `generate_keys -x <file>`, then store the file somewhere safe. Every
    installed copy trusts that key alone; lose it and they can never update again.
-3. `gh auth login`: the release is created with the GitHub CLI.
+6. `gh auth login`: the release is created with the GitHub CLI.
 
-For each release, from a clean checkout of `main` on a Mac holding the signing certificate:
+For each release, from a clean checkout of `main` on that Mac:
 
 1. Bump `MARKETING_VERSION` in `project.yml` and merge it.
-2. `make dist` stages `dist/mvim-<version>.zip`, its notes (GitHub's, from the merged pull
-   requests) and `appcast.xml` without publishing anything. Allow the keychain prompt the first
-   time.
-3. `make publish` stages the same, then creates release `v<version>` holding the zip and the
-   appcast. Installed copies find it at their next check.
+2. `NOTARY_PROFILE=mvim-notary make dist` builds the app, sends it to the notary service and waits
+   for the answer, which Apple says typically comes within an hour, staples the ticket to
+   `.release/mvim.app`, and stages `dist/mvim-<version>.zip`, its notes (GitHub's, from the merged
+   pull requests) and `appcast.xml` without publishing anything. Allow the keychain prompts the
+   first time.
+3. `NOTARY_PROFILE=mvim-notary make publish` does all of that again, then creates release
+   `v<version>` holding the zip and the appcast. Installed copies find it at their next check.
 
-`make dist` and `make publish` both stop when `gh` is missing, `SUPublicEDKey` is empty, the feed
-is not a GitHub latest-release asset, the app is ad-hoc signed — every install would lose its
-grants on updating — GitHub can write no release notes for `HEAD` because it is not pushed, or the
-appcast item came out unsigned because the key is not the one `SUPublicEDKey` names.
+Both notarize the app as a zip, staple the ticket to the app, which a zip cannot carry, and zip it
+again, so Sparkle signs the archive that ships. `make dist` and `make publish` both stop when:
+
+- `gh` is missing, `NOTARY_PROFILE` is not set, `SUPublicEDKey` is empty, or the feed is not a GitHub
+  latest-release asset;
+- the app is not signed with a Developer ID Application certificate, which a `SIGN` build and a
+  Debug build are not;
+- GitHub can write no release notes for `HEAD` because it is not pushed;
+- the notary service does not answer that it accepted the app: a rejection prints the service's log,
+  which names each file it objects to;
+- the ticket cannot be stapled, or the app unpacked from the finished zip lacks its ticket or does
+  not pass Gatekeeper as a notarized Developer ID app: the zip reaches `dist/` only after that;
+- the appcast item came out unsigned because the key is not the one `SUPublicEDKey` names.
 
 `make publish` also refuses to release when:
 
 - the app does not satisfy the designated requirement of the latest release's app — TCC holds
-  Accessibility and Input Monitoring against that requirement, so every install would lose both. An Apple Development requirement names the certificate's holder, so
-  publish from the same person's certificate; for a deliberate change, such as moving to
-  Developer ID, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
+  Accessibility and Input Monitoring against that requirement, so every install would lose both. A
+  Developer ID requirement names the team, not the certificate, so any Developer ID Application
+  certificate of the same team satisfies it; for a deliberate change, such as moving to another
+  team, `SPARKLE_NEW_IDENTITY=1 make publish` publishes anyway;
 - `SUPublicEDKey` is not the latest release's: installs verify with the key they shipped with, so
   every install would reject the update. On a new Mac, import the original key with
   `generate_keys -f <backup>`; never paste a freshly generated one into `project.yml`;
@@ -374,10 +430,8 @@ The first release skips the checks against the latest release.
 
 `SPARKLE_KEY_FILE=<file>` signs with a key file instead of the keychain.
 
-Releases are not notarized: they carry the Apple Development signature, so a copy downloaded from
-GitHub in a browser opens only after **Open Anyway** in System Settings → Privacy & Security.
-Updates Sparkle installs are not quarantined. Notarizing takes a `Developer ID Application`
-certificate, the hardened runtime and `notarytool`.
+The zip holds the app with its ticket stapled, so Gatekeeper needs no network to check a copy
+downloaded in a browser, and macOS opens it after its one confirmation for an app from the Internet.
 
 ### Diagnostics
 
