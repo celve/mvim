@@ -11,7 +11,9 @@ SPARKLE := $(DERIVED)/SourcePackages/artifacts/sparkle/Sparkle/bin
 BUILD   := $(shell git rev-list --count HEAD 2>/dev/null)
 # Empty signs as project.yml says; `-` signs ad-hoc, and any other value names a keychain identity.
 SIGN    :=
-SIGNING := $(if $(SIGN),CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGN)" DEVELOPMENT_TEAM=)
+# SIGN builds stay unhardened: without a team, the hardened runtime refuses the app's own frameworks.
+SIGNING := $(if $(SIGN),CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$(SIGN)" DEVELOPMENT_TEAM= \
+	ENABLE_HARDENED_RUNTIME=NO OTHER_CODE_SIGN_FLAGS=)
 
 ifneq ($(and $(SIGN),$(filter dist publish,$(MAKECMDGOALS))),)
 $(error SIGN is for local builds: installs keep their grants only under project.yml's identity)

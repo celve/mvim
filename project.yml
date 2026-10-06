@@ -23,12 +23,20 @@ settings:
     # `make release` passes the commit count instead: Sparkle orders updates by CFBundleVersion.
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
-    # Stable Apple Development signature so Accessibility / Input Monitoring
-    # grants persist across rebuilds. Ad-hoc ("-") changes the signature every
-    # build, which makes macOS revoke the grants each time.
+    # Debug's identity: stable, so the Accessibility and Input Monitoring grants survive rebuilds.
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
     DEVELOPMENT_TEAM: "8TDYAWS6VC"
+  configs:
+    # What ships, signed as notarizing demands; the automatic style cannot use Developer ID.
+    Release:
+      CODE_SIGN_STYLE: Manual
+      CODE_SIGN_IDENTITY: "Developer ID Application"
+      ENABLE_HARDENED_RUNTIME: YES
+      # A secure timestamp on every signature, the helpers' below included.
+      OTHER_CODE_SIGN_FLAGS: "--timestamp"
+      # Xcode would otherwise inject get-task-allow, which lets other processes attach a debugger.
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 
 targets:
   # Input tap, key model, text I/O (AX/Synth), capability config and Prefs; deliberately no Keychain.
@@ -75,10 +83,11 @@ targets:
       - name: Sign Sparkle's helpers
         basedOnDependencyAnalysis: false
         script: |
+          set -e
           [ "$CODE_SIGNING_ALLOWED" = YES ] && [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] || exit 0
           framework="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/Sparkle.framework"
           helpers="$framework/Versions/B"
-          sign() { codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" -o runtime "$@"; }
+          sign() { codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" -o runtime $OTHER_CODE_SIGN_FLAGS "$@"; }
           sign "$helpers/XPCServices/Installer.xpc"
           sign --preserve-metadata=entitlements "$helpers/XPCServices/Downloader.xpc"
           sign "$helpers/Autoupdate"
