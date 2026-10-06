@@ -25,7 +25,7 @@
 
 <p align="center">
   <sub><b>Fix every typo.</b> Each step is what mvim's engine does with these keys, in its simulation of a
-  native Mac text field, with Esc chosen as the Normal-mode key.
+  native Mac text field. Esc enters Normal mode once you choose it in the menu.
   The home page has <a href="https://mvimsite.vercel.app">more demos</a>.</sub>
 </p>
 
@@ -35,8 +35,8 @@ event tap. Type as usual, and press **⌃[** for Normal mode, or **Esc** if you 
 - **Vim's grammar, not only `hjkl`.** Operators with motions and word objects, counts, registers, marks,
   search, Visual mode and `.` ([What works](#what-works)).
 - **Native apps, browsers and Electron apps.** Where a field takes no writes, mvim presses keys instead and
-  checks the field after each step: it beeps and stops rather than edit the wrong text, and it
-  [learns](#browsers-and-electron-apps) what each kind of field supports.
+  checks the field after each step: when the field does not answer as planned, it beeps and stops rather than
+  edit the wrong text. It also [learns](#browsers-and-electron-apps) what each kind of field supports.
 - **Your shortcuts stay yours.** A field starts in Insert mode, apps keep every ⌘ and ⌥ combination, and
   terminals and code editors start Off.
 - **Private.** No networking code of its own: a release's only traffic is the update check, which asks first
@@ -156,9 +156,10 @@ What else differs there:
 - In a field mvim cannot read at all, and under **Force**, moves are approximate, deletes and yanks go
   through ⌘X and ⌘C so the clipboard is the register, and search, marks and Visual mode beep.
 - **Notion** comes with its own defaults, since each of its blocks is a separate field.
-- While a row of a field's popup list is highlighted, as in Linear's ⌘K menu, pick the row from Insert mode:
-  in Normal mode the arrow keys and ⏎ are Vim's motions. A rich-text editor loses mvim meanwhile, except an
-  empty one, which is a known limit: there Normal mode takes the keys meant for that row until you press `i`.
+- An input or a plain text area keeps mvim while a row of its popup list is highlighted, as in Linear's ⌘K
+  menu, so pick the row from Insert mode: in Normal mode the arrow keys and ⏎ are Vim's motions. A rich-text
+  editor loses mvim meanwhile, except an empty one, which is a known limit: there Normal mode takes the keys
+  meant for that row until you press `i`.
 - **App's word, paragraph & page keys**, off by default, hands `w` `e` `b` `iw` `{` `}` `gj` `gk` ⌃F ⌃B to
   [the app's own keys](docs/reference.md#native-word-paragraph-and-page-keys).
 
@@ -173,9 +174,9 @@ working in.
 
 - **Network.** mvim has no microphone, keychain or networking code of its own; a release build's only traffic
   is [Sparkle](docs/reference.md#updates)'s update check, which asks first.
-- **Names.** Its settings, its beliefs file and its log name the apps and websites you use.
-- **Commands, not text.** The log also records the Normal-mode commands you type, but never the text you
-  insert or a command's operand, count or register (a unit test holds it to that), unless you turn on
+- **What it records.** Its settings, its beliefs file and its log name the apps and websites you use. The log
+  also records the Normal-mode commands you type, but never the text you insert or a command's operand, count
+  or register (a unit test holds it to that), unless you turn on
   [text recording](docs/reference.md#diagnostics); if mvim ever mistook the mode, some of your words could
   reach it as commands.
 - **Clipboard.** mvim pastes through the clipboard into fields it cannot write, and restores the clipboard
@@ -186,9 +187,8 @@ working in.
 Open an [issue](https://github.com/celve/mvim/issues) with your macOS version, mvim's version from Finder's
 Get Info (or the output of `git rev-parse --short HEAD` for a build from source), the app (and the site, in a
 browser), the keys you typed, what happened and what you expected, and a screenshot of the **Capabilities**
-menu. A command that
-fails is always logged, so attach the last hour of mvim's log, after reading it, since it names apps and
-sites:
+menu. A command that fails is always logged, so attach the last hour of mvim's log, after reading it, since it
+names apps and sites:
 
 ```sh
 log show --predicate 'subsystem == "io.github.celve.mvim"' --last 1h --info --debug > mvim.log
@@ -199,8 +199,8 @@ see [Diagnostics](docs/reference.md#diagnostics).
 
 ## Development
 
-mvim builds with Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen), and `make test` runs the
-engine's tests with no Xcode project and no permissions. The [reference](docs/reference.md) covers
+mvim builds with Xcode 26 or later and [XcodeGen](https://github.com/yonaskolb/XcodeGen), and `make test` runs
+the engine's tests with no Xcode project and no permissions. The [reference](docs/reference.md) covers
 [building from source](docs/reference.md#building-from-source), [signing](docs/reference.md#signing),
 [publishing an update](docs/reference.md#publishing-an-update), [the log](docs/reference.md#diagnostics) and
 [what mvim learns](docs/reference.md#learned-beliefs).
