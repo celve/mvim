@@ -983,3 +983,5 @@ your option) any later version. It is distributed WITHOUT ANY WARRANTY; see [LIC
 the full terms.
 
 Builds embed [Sparkle](https://sparkle-project.org), which carries its own MIT license.
+The icon's letter is the u of [Nunito](https://github.com/googlefonts/nunito) Bold, a font under the SIL Open Font
+License.
