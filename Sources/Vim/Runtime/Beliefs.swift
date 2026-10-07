@@ -1,8 +1,8 @@
 import Foundation
 
-/// The user's overrides and the learned beliefs, in a JSON file the user may edit; mvim rereads it at every resolve.
+/// The user's overrides and the learned beliefs, in a JSON file the user may edit; uvim rereads it at every resolve.
 final class Beliefs {
-    static let shared = Beliefs(url: .applicationSupportDirectory.appending(path: "mvim/beliefs.json"), defaults: .standard)
+    static let shared = Beliefs(url: .applicationSupportDirectory.appending(path: "uvim/beliefs.json"), defaults: .standard)
     /// Where the menu kept overrides before the file.
     static let overridesKey = "capabilityOverrides"
     /// Where the beliefs lived before the file.
@@ -50,7 +50,7 @@ final class Beliefs {
         self.defaults = defaults
     }
 
-    /// What mvim applies: the file, else the last version that read, with why the file itself is not used.
+    /// What uvim applies: the file, else the last version that read, with why the file itself is not used.
     func current() -> (contents: Contents, problem: Error?) {
         do {
             return (try load(), nil)
@@ -76,7 +76,7 @@ final class Beliefs {
             if contents == before { return }
             if try write(contents, over: before) { return }
         }
-        throw Failure(description: "kept changing while mvim wrote it")
+        throw Failure(description: "kept changing while uvim wrote it")
     }
 
     /// Nil when there is no file.

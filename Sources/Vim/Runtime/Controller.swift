@@ -143,7 +143,7 @@ public final class Controller {
     /// The beliefs file, for the menu to open.
     public var beliefsURL: URL { Beliefs.shared.url }
 
-    /// The overrides mvim applies; not from the file while it does not read, but from the last version that did.
+    /// The overrides uvim applies; not from the file while it does not read, but from the last version that did.
     public func appliedOverrides() -> (overrides: SurfaceLadder.UserStore, fromFile: Bool) {
         let current = Beliefs.shared.current()
         return (current.contents.overrides, current.problem == nil)

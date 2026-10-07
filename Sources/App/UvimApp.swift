@@ -3,11 +3,11 @@ import Core
 import SwiftUI
 import Vim
 
-/// mvim's composition root: a menu-bar agent (LSUIElement) whose only UI is
+/// uvim's composition root: a menu-bar agent (LSUIElement) whose only UI is
 /// the status menu. The tap feeds the `Controller`; everything else is
 /// permission plumbing.
 @main
-struct MvimApp: App {
+struct UvimApp: App {
     @StateObject private var model = AppModel()
     private let updater = Updater.start()
 
@@ -44,13 +44,13 @@ struct MvimApp: App {
                 model.openPrivacyPane("Privacy_ListenEvent")
             }
             Divider()
-            // Checked answers "will mvim start at login?" — a revoked item is not.
+            // Checked answers "will uvim start at login?" — a revoked item is not.
             Toggle("Start at Login", isOn: Binding(
                 get: { model.loginItem == .on },
                 set: { model.setLaunchAtLogin($0) }
             ))
             if model.loginItem == .blocked {
-                Button("Approve mvim in Login Items Settings") { model.openLoginItemsSettings() }
+                Button("Approve uvim in Login Items Settings") { model.openLoginItemsSettings() }
             }
             Button(model.beliefsReadable ? "Open Beliefs File" : "Open Beliefs File — unreadable, last good version in use") {
                 model.openBeliefsFile()
@@ -60,7 +60,7 @@ struct MvimApp: App {
                 UpdateItems(updater: updater)
             }
             Divider()
-            Button("Quit mvim") { NSApplication.shared.terminate(nil) }
+            Button("Quit uvim") { NSApplication.shared.terminate(nil) }
         } label: {
             Image(systemName: model.icon.symbolName)
         }
@@ -72,7 +72,7 @@ private struct UpdateItems: View {
     @ObservedObject var updater: Updater
 
     var body: some View {
-        Button(updater.pendingVersion.map { "Update to mvim \($0)…" } ?? "Check for Updates…") {
+        Button(updater.pendingVersion.map { "Update to uvim \($0)…" } ?? "Check for Updates…") {
             updater.checkForUpdates()
         }
         .disabled(!updater.canCheckForUpdates)
@@ -83,7 +83,7 @@ private struct UpdateItems: View {
     }
 }
 
-/// The Capabilities item: a badge counts what mvim learned for this field, and the submenu opens on it.
+/// The Capabilities item: a badge counts what uvim learned for this field, and the submenu opens on it.
 struct CapabilitiesItem: View {
     /// Subtitles and badges were checked on macOS 26 only; older systems get everything in the title.
     static var richItemsAvailable: Bool {
@@ -138,7 +138,7 @@ struct CapabilitiesItem: View {
                 }
                 Divider()
             }
-            Toggle("Auto — mvim decides", isOn: Binding(
+            Toggle("Auto — uvim decides", isOn: Binding(
                 get: { row.choice == .auto }, set: { if $0 { choose(nil, nil, row.capability) } }
             ))
             Divider()
@@ -173,7 +173,7 @@ final class AppModel: ObservableObject {
         let bundleID: String
     }
 
-    /// The menu-bar icon: the only mode display where mvim draws no block cursor.
+    /// The menu-bar icon: the only mode display where uvim draws no block cursor.
     enum Icon {
         case off, permissionMissing, idle, insert, normal, visual, replace
 
@@ -232,7 +232,7 @@ final class AppModel: ObservableObject {
         var id: String { capability.rawValue }
     }
 
-    /// What mvim learned behind a row: in force here, or on trial because it was judged under other offsets.
+    /// What uvim learned behind a row: in force here, or on trial because it was judged under other offsets.
     struct Lesson: Equatable {
         let inForce: Bool
         let header: String
@@ -242,7 +242,7 @@ final class AppModel: ObservableObject {
         let beliefs: [Belief]
     }
 
-    /// The Capabilities submenu: the rows mvim learned something about for this kind of field, then the rest.
+    /// The Capabilities submenu: the rows uvim learned something about for this kind of field, then the rest.
     struct CapabilityMenu: Equatable {
         var learnedHeader: String?
         var learned: [CapabilityRow] = []
@@ -368,8 +368,8 @@ final class AppModel: ObservableObject {
         inputMonitoringGranted = CGPreflightListenEventAccess()
         tapInstalled = InputHub.shared.isTapInstalled
         loginItem = LoginItem.state
-        // mvim is LSUIElement, so opening the menu keeps the target app
-        // frontmost; if frontmost somehow IS mvim, keep the last snapshot.
+        // uvim is LSUIElement, so opening the menu keeps the target app
+        // frontmost; if frontmost somehow IS uvim, keep the last snapshot.
         if let app = NSWorkspace.shared.frontmostApplication,
            app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
            let bundleID = app.bundleIdentifier {

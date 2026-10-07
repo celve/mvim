@@ -1,6 +1,6 @@
 /// Finds the field typing reaches where Chromium reports its highlighted popup row as focused; pure, so `make test` covers it.
 public enum TypingTarget {
-    /// The roles mvim engages on.
+    /// The roles uvim engages on.
     public static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox"]
 
     /// Deep enough for a row in a tree's nested groups.

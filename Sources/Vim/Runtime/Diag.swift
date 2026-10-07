@@ -14,7 +14,7 @@ enum Diag {
     private static let cmdLevel = OSLog(subsystem: Log.subsystem, category: "cmd")
     private static let gateLevel = OSLog(subsystem: Log.subsystem, category: "gate")
 
-    static let recordsTextKey = "mvimRecordText"
+    static let recordsTextKey = "recordText"
 
     /// Records field content; read once per process, so both edges need a relaunch.
     static let recordsText = UserDefaults.standard.bool(forKey: recordsTextKey)
@@ -53,8 +53,8 @@ enum Diag {
         }
         if recordsText {
             self.bind.log("""
-                TEXT RECORDING ON — to stop: defaults delete io.github.celve.mvim \
-                \(recordsTextKey, privacy: .public), then RELAUNCH mvim (read once per process)
+                TEXT RECORDING ON — to stop: defaults delete io.github.celve.uvim \
+                \(recordsTextKey, privacy: .public), then RELAUNCH uvim (read once per process)
                 """)
         }
     }
@@ -155,7 +155,7 @@ enum Diag {
         }
     }
 
-    /// The beliefs file would not read or write; mvim applies the last version that read.
+    /// The beliefs file would not read or write; uvim applies the last version that read.
     static func beliefsFile(_ error: Error) {
         learn.error("beliefs-file \(String(describing: error), privacy: .public)")
     }

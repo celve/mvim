@@ -16,9 +16,9 @@
     {
       "layers" : [
         {
-          "glass" : true,
-          "image-name" : "m.svg",
-          "name" : "m"
+          "glass" : false,
+          "image-name" : "u.svg",
+          "name" : "u"
         }
       ],
       "shadow" : {

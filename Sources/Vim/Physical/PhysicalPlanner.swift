@@ -95,7 +95,7 @@ public enum PhysicalPlanner {
             guard var lowered = lower(step, context: &context, profile: profile) else {
                 return Planning(plan: .rejected, rejection: Rejection(index: index, step: step), operand: nil)
             }
-            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, which a caret mvim did not place may be (LIN-1683).
+            // ⇧→ and ⇧⌃E do nothing from inside a code span's start, which a caret uvim did not place may be (LIN-1683).
             if let caret, let first = lowered.firstIndex(where: moves), case .press(let chord, _) = lowered[first],
                let prefix = outside(before: chord, at: caret, context: context, profile: profile) {
                 lowered.insert(contentsOf: prefix, at: first)
