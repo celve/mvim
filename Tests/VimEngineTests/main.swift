@@ -4988,9 +4988,10 @@ let objectiveC = UnreachableLines.Memo(value: "Before\nC\nabc\nAfter", markers: 
 precondition(objectiveC.carried(value: "Before\nObjective-C\nabc\nAfter", markers: "BeforeObjective-CabcAfter", blocks: 3, roots: 17)
              == .failure(.boundary), "LIN-1874 round 1: a code label becoming Objective-C")
 let linedTyped = (linedValue.replacing("Intro\n", with: "Introx\n"), linedPlain.replacing("Intro", with: "Introx"))
-precondition(linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil) == .failure(.blocks)
+let linedUncounted = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: nil, found: linedMemo.found)
+precondition(linedUncounted.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil) == .failure(.blocks)
              && linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: 3, proseMirror: true) == .failure(.roots),
-             "an unread count or a ProseMirror field's unread roots prove nothing unchanged")
+             "a count unread both times, or a ProseMirror field's roots unread both times, prove nothing unchanged")
 
 // Chrome 153's blank line: typing elsewhere shifts it, and anything else walks again.
 let blankMemo = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: [43])
@@ -5010,7 +5011,8 @@ precondition(blankCarried { $0[1] += "x" } == .failure(.boundary), "typed where 
 precondition(blankCarried { $0[2] = "x" } == .failure(.edit) && blankCarried { $0[0] = "Hx"; $0[6] = "Ly" } == .failure(.edit),
              "typed in the blank line, or in two places")
 precondition(blankCarried { $0.insert("New", at: 1) } == .failure(.blocks))
-precondition(blankMemo.carried(value: blankValue + "x", markers: blankMarkers + "x", blocks: nil) == .failure(.blocks))
+precondition(EmptyParagraphs.Memo(value: "ab\nc", markers: "ab\nc", blocks: nil, found: [2])
+             .carried(value: "axb\nc", markers: "axb\nc", blocks: nil) == .failure(.blocks))
 let failedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil)
 precondition(blankCarried({ $0[0] = "Headingxy one" }, memo: failedBlank) == .failure(.failed), "a failed read is read again")
 let exhaustedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil,
