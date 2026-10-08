@@ -5072,6 +5072,12 @@ let dia7AtStart = treeBuild(dia7Value.replacing("\nTwo chips ", with: "\nxyTwo c
                             memo: dia7Before.memo, unreachable: dia7Before.unreachable)
 precondition(dia7AtStart.walks == [.boundary] && dia7AtStart.unreachable?.origin == .walked(.boundary),
              "where a chip's paragraph starts, the text may be the paragraph before's, so it walks as before")
+// Enter in a list adds an item but no root block, and the marker text gains only "•z": AXValue's new lines refuse it.
+let newItemRaw = dia7Raw.replacing("Plain itemClosing", with: "Plain item\u{2022}zClosing")
+let newItemValue = dia7Value.replacing("Plain item\nClosing", with: "Plain item\n\u{2022}\nz\nClosing")
+precondition(Discovery.Run(from: dia7Raw, to: newItemRaw)?.inserted == 2
+             && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value)
+             && dia7Before.memo?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value))
 
 // A Linear session, typing at each line's end then ⌃[: s shifts, b e n walk for a boundary, an edit, the blocks.
 let linearCarried = ["xy": "ssssbbsesseesesseebes", "<BS>": "sssssssessensessneses"]
