@@ -269,9 +269,10 @@ the rows you see and cross from block to block, `gg` and `G` press ⌘↑ and �
 caret changes block, and what needs the whole text, such as `J`, a search or `gi`, beeps. After Esc
 in Notion selects a block, `j` and `k` move that selection. An editor whose blocks are separate
 fields with nothing editable around them gives uvim nothing to read, so there turn **Text covers
-whole document** and **New field starts a session** off for the site yourself. The Notion app also
-comes with the block cursor off, since Notion shows its formatting toolbar over any selection; in a
-browser the cursor is drawn until you turn **Draw block cursor** off for the site.
+whole document** and **New field starts a session** off for the site yourself. uvim draws no block
+cursor in a field it reads as one block: the cursor is a selection it would have to collapse before
+each ↓ or ↑, in Notion a key pressed right behind that often does not move, and Notion shows its
+formatting toolbar over any selection.
 
 An input or a plain text area keeps uvim while a row of its popup list is highlighted, as in Linear's
 ⌘K menu or a search box's suggestions, though Chromium then calls that row, not the field, the focused
@@ -699,11 +700,11 @@ A bind line's `caps=` gives each capability a code, `+` or `-`, and where the an
 `p` read from the field, `s` a shipped default, `u` your choice, `l` learned. A field in web
 content can be one block of a bigger document, as each block of a Notion page is: it then names
 another editable field as its outermost one (`AXHighestEditableAncestor`), and its bind line says
-`enclosed=1`. `wholeDocument` and `fieldIsSession` resolve off for it, `WD-p FS-p`, unless a
-default or your choice answers first: the Notion app, which ships with defaults, reads
-`WD-s FS-s enclosed=1`. Focus moving between two fields that name the same outermost one, or
-between a field and the one it names, binds as `sameDocument` and keeps the mode. A native field,
-and a web field with nothing editable around it, names none.
+`enclosed=1`. `drawCursor`, `wholeDocument` and `fieldIsSession` resolve off for it,
+`DC-p WD-p FS-p`, unless a default or your choice answers first: the Notion app, which ships with
+defaults, reads `DC-s WD-s FS-s enclosed=1`. Focus moving between two fields that name the same
+outermost one, or between a field and the one it names, binds as `sameDocument` and keeps the
+mode. A native field, and a web field with nothing editable around it, names none.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,

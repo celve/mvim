@@ -547,30 +547,38 @@ precondition(Capability.fieldIsSession.species == .policy)
 precondition(Capability.fieldIsSession.parent == nil)
 
 // A field that names a bigger editable field around itself is one block of it, with no seed (LIN-1855).
-precondition(Capability.blockScoped == [.wholeDocument, .fieldIsSession])
-let enclosedField = CapabilityResolver.resolve(probed: axProfile, enclosed: true, config: [:], learned: [])
-precondition(enclosedField.report.entries[.wholeDocument] == .init(status: .unavailable, source: .probed))
-precondition(enclosedField.report.entries[.fieldIsSession] == .init(status: .unavailable, source: .probed))
-precondition(enclosedField.report.traceGrid.contains("WS+p IT+p DC+p WD-p FS-p"))
+precondition(Capability.blockScoped == [.drawCursor, .wholeDocument, .fieldIsSession])
+let shippedSeeds: [Capability: ConfigChoice] = [.nativeMotions: ConfigChoice(seededOff: true)]
+let enclosedField = CapabilityResolver.resolve(probed: axProfile, enclosed: true, config: shippedSeeds, learned: [])
+for capability in Capability.blockScoped {
+    precondition(enclosedField.report.entries[capability] == .init(status: .unavailable, source: .probed))
+}
+precondition(enclosedField.report.traceGrid.contains("WS+p IT+p DC-p WD-p FS-p"))
 precondition(physical("j", text: "one", caret: 0, profile: enclosedField.profile).steps == [
     .press(.down, count: 1),
     .commit(.setCursor(nil)),
 ])
-precondition(physical("j", text: "one", caret: 0, profile: CapabilityResolver.resolve(probed: axProfile, config: [:], learned: []).profile)
+for keys in ["j", "k", "3j", "gg", "G", "l", "w", "x", "ciw", "dd", "dj", "yj", "J"] {
+    precondition(physical(keys, text: "say hello world", caret: 6, profile: enclosedField.profile).steps
+        == physical(keys, text: "say hello world", caret: 6, profile: blockProfile).steps, "\(keys) plans as in Notion's seeded block")
+}
+precondition(physical("j", text: "one", caret: 0, profile: CapabilityResolver.resolve(probed: axProfile, config: shippedSeeds, learned: []).profile)
     .steps.contains(.setSelection(0..<0)), "without the read the caret is written where it is")
-let enclosedChoices: [Capability: ConfigChoice] = [
-    .wholeDocument: ConfigChoice(override: .on), .fieldIsSession: ConfigChoice(override: .on),
-]
+let enclosedChoices = Dictionary(uniqueKeysWithValues: Capability.blockScoped.map { ($0, ConfigChoice(override: .on)) })
 let userOverPage = CapabilityResolver.resolve(probed: axProfile, enclosed: true, config: enclosedChoices, learned: []).report
-precondition(userOverPage.entries[.wholeDocument] == .init(status: .available, source: .user))
-precondition(userOverPage.entries[.fieldIsSession] == .init(status: .available, source: .user))
+for capability in Capability.blockScoped {
+    precondition(userOverPage.entries[capability] == .init(status: .available, source: .user))
+}
 let seededEnclosed = CapabilityResolver.resolve(
     probed: axProfile, enclosed: true, config: [.fieldIsSession: ConfigChoice(seededOff: true)], learned: []
 ).report
 precondition(seededEnclosed.entries[.fieldIsSession] == .init(status: .unavailable, source: .seeded), "a seeded surface reports as it did")
-precondition(CapabilityResolver.resolve(
-    probed: axProfile, enclosed: true, config: [.readText: ConfigChoice(override: .off)], learned: []
-).report.entries[.wholeDocument] == .init(status: .unavailable, source: .user), "a missing parent still answers first")
+let parentsOff = CapabilityResolver.resolve(
+    probed: axProfile, enclosed: true,
+    config: [.readText: ConfigChoice(override: .off), .writeSelection: ConfigChoice(override: .off)], learned: []
+).report
+precondition(parentsOff.entries[.wholeDocument] == .init(status: .unavailable, source: .user)
+    && parentsOff.entries[.drawCursor] == .init(status: .unavailable, source: .user), "a missing parent still answers first")
 
 // The bug this atom exists for: the model says there is no line below, so
 // the exact lane resolves `j` to the offset it started at and executes a

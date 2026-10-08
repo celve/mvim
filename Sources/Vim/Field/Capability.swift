@@ -32,7 +32,8 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// The standing-cursor *role* of `writeSelection`'s mechanism: may the
     /// Normal-mode block cursor be left drawn as a persistent selection?
     /// Never probed; "available" means *permitted*, resolved by the runtime
-    /// (writeSelection minus seeds and user config). Selection-reactive apps
+    /// (writeSelection minus seeds, user config and the probe's enclosing
+    /// field). Selection-reactive apps
     /// (Notion's floating toolbar) attach UI to any standing selection, so
     /// presentation must be deniable separately from actuation, which
     /// transient command selections keep using regardless. Subtractive only.
@@ -108,8 +109,9 @@ public extension Capability {
         .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey, .wordKeys, .paragraphKeys,
     ]
 
-    /// What a field denies by naming a bigger editable field around itself: it is one block of that document.
-    static let blockScoped: Set<Capability> = [.wholeDocument, .fieldIsSession]
+    /// What a field denies by naming a bigger editable field around itself: it is one block of that document,
+    /// where the app's own ↓ and ↑ do the moving and a drawn cursor would have to be collapsed before each.
+    static let blockScoped: Set<Capability> = [.drawCursor, .wholeDocument, .fieldIsSession]
 
     /// The mechanism a policy atom rides on: no mechanism, no question. Its
     /// absence makes the policy unavailable regardless of seeds or the user
