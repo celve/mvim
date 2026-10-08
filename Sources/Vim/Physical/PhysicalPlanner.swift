@@ -1709,8 +1709,8 @@ private extension PhysicalPlanner {
             case .end:
                 target = selection.upperBound
             case .head:
-                guard let anchor = context.anchor else { return nil }
-                target = selection.lowerBound == anchor ? selection.upperBound : selection.lowerBound
+                // With no anchor the app owns the selection and nothing reads its direction, so its start stands in.
+                target = context.anchor == selection.lowerBound ? selection.upperBound : selection.lowerBound
             }
             let towardStart = target == selection.lowerBound
             context.selection = target..<target

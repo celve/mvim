@@ -1,9 +1,10 @@
 /// The atoms the physical planner consults about a focused field.
 ///
 /// Two species live here. **Mechanism** atoms are proven by the AX probe and
-/// each maps to one concrete AX call. **Policy** atoms are never probed —
-/// they are *decided*, subtractively, by shipped seeds and the user, against
-/// a parent mechanism whose absence moots the question. The unifying
+/// each maps to one concrete AX call. **Policy** atoms are *decided*,
+/// subtractively, by shipped seeds, the user and, for `blockScoped`, the
+/// probe's enclosing field, against a parent mechanism whose absence moots
+/// the question. The unifying
 /// invariant is not "an AX mechanism" but "a per-field boolean the planner
 /// consults that a user can see and demote in one menu".
 ///
@@ -31,13 +32,14 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// The standing-cursor *role* of `writeSelection`'s mechanism: may the
     /// Normal-mode block cursor be left drawn as a persistent selection?
     /// Never probed; "available" means *permitted*, resolved by the runtime
-    /// (writeSelection minus seeds and user config). Selection-reactive apps
+    /// (writeSelection minus seeds, user config and the probe's enclosing
+    /// field). Selection-reactive apps
     /// (Notion's floating toolbar) attach UI to any standing selection, so
     /// presentation must be deniable separately from actuation, which
     /// transient command selections keep using regardless. Subtractive only.
     case drawCursor
 
-    /// False in block editors (Notion), whose `AXValue` is one block; seeded only, as no probe or settle can tell.
+    /// False in block editors (Notion), whose `AXValue` is one block: the probe's enclosing field or a seed says so, as no settle can tell.
     case wholeDocument
 
     /// Is each focused field its own vim session?
@@ -59,7 +61,8 @@ public enum Capability: String, CaseIterable, Equatable, Hashable, Sendable {
     /// can want one without the other, and each is togglable per app.
     ///
     /// The one atom with no parent mechanism — no AX call gates whether a
-    /// focus change ends a session. Never probed, never learned.
+    /// focus change ends a session. Never learned: a seed, the user or the
+    /// probe's enclosing field denies it.
     case fieldIsSession
 
     /// ⌃A and ⇧⌃A: to the start of the caret's paragraph, which is uvim's line.
@@ -106,6 +109,9 @@ public extension Capability {
         .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey, .wordKeys, .paragraphKeys,
     ]
 
+    /// What a field denies by naming a bigger editable field around itself: one block of that document, moved in by the app's ↓ and ↑.
+    static let blockScoped: Set<Capability> = [.drawCursor, .wholeDocument, .fieldIsSession]
+
     /// The mechanism a policy atom rides on: no mechanism, no question. Its
     /// absence makes the policy unavailable regardless of seeds or the user
     /// — `.on` un-seeds curation, it never conjures a missing mechanism.
@@ -116,8 +122,8 @@ public extension Capability {
     /// The policies deny different things: `drawCursor` off means "you may
     /// not", `wholeDocument` and `fieldIsSession` off mean "it is not true".
     /// The subtractive law is kept verbatim for all three so the semantics
-    /// do not fork — and since none is probed, `.on` and auto coincide
-    /// except against a seed.
+    /// do not fork — `.on` and auto coincide except against a seed or an
+    /// enclosing field.
     var parent: Capability? {
         switch self {
         case .drawCursor: return .writeSelection
@@ -157,7 +163,7 @@ public struct CapabilityProfile: Equatable, Sendable {
 /// Why each atom resolved as it did. Here, not beside the impure `FieldProber`, so `make test` reaches it.
 public struct CapabilityReport: Equatable, Sendable {
     public enum Source: Equatable, Sendable {
-        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism; for a native key, the probe's claim.
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism; for a native key, the probe's claim; for a `blockScoped` atom off, its enclosing field.
         case probed
         /// A shipped `CapabilityConfig` seed.
         case seeded

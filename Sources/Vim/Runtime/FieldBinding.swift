@@ -3,16 +3,17 @@ import Core
 
 /// Reads prove the read capabilities; settable flags only claim the writes, which beliefs then correct.
 public enum FieldProber {
-    /// Three IPCs, not six: the four read trials ride one batch, and the two
-    /// settable flags use a different API (`AXUIElementIsAttributeSettable`)
-    /// that has no multi-attribute form.
-    public static func probe(_ element: AXUIElement) -> CapabilityProfile {
+    /// Three IPCs, not seven: the four read trials and the enclosing field ride
+    /// one batch, and the two settable flags use a different API
+    /// (`AXUIElementIsAttributeSettable`) that has no multi-attribute form.
+    public static func probe(_ element: AXUIElement) -> (profile: CapabilityProfile, enclosing: AXUIElement?) {
         var available: Set<Capability> = []
         let reads = AX.attributes([
             kAXValueAttribute,               // 0
             kAXSelectedTextRangeAttribute,   // 1
             kAXNumberOfCharactersAttribute,  // 2
             kAXSelectedTextAttribute,        // 3
+            "AXHighestEditableAncestor",     // 4: a browser's outermost editable field around a web field
         ], of: element)
         if reads.string(0) != nil { available.insert(.readText) }
         if reads.range(1) != nil { available.insert(.readCaret) }
@@ -22,13 +23,15 @@ public enum FieldProber {
         if AX.isInsertable(element) { available.insert(.insertText) }
         // No read can try a key; the settle after one is its trial.
         if available.contains(.readText), available.contains(.readCaret) { available.formUnion(Capability.nativeKeys) }
-        return CapabilityProfile(available: available)
+        // Chromium names a field with nothing editable around it as itself, and WebKit names nothing.
+        let enclosing = reads.element(4).flatMap { CFEqual($0, element) ? nil : $0 }
+        return (CapabilityProfile(available: available), enclosing)
     }
 
     /// Config and beliefs key on the field's surface, not its app: a browser's search box and a page `<input>` differ.
     public static func resolve(
         _ element: AXUIElement, surface: Surface, versions: Versions, chromium: Bool
-    ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs) {
+    ) -> (profile: CapabilityProfile, report: CapabilityReport, beliefs: ResolvedBeliefs, enclosing: AXUIElement?) {
         let probed = probe(element)
         let current = Beliefs.shared.current()
         if let problem = current.problem { Diag.beliefsFile(problem) }
@@ -45,8 +48,10 @@ public enum FieldProber {
             rungs: surface.rungs, rung: surface.roleRung, versions: versions, chromium: chromium,
             children: Snapshotter.hasParagraphs(element), userPinsOffsets: choices[.readCaret]?.override != nil
         )
-        let resolved = CapabilityResolver.resolve(probed: probed, config: choices, beliefs: beliefs)
-        return (resolved.profile, resolved.report, beliefs)
+        let resolved = CapabilityResolver.resolve(
+            probed: probed.profile, enclosed: probed.enclosing != nil, config: choices, beliefs: beliefs
+        )
+        return (resolved.profile, resolved.report, beliefs, probed.enclosing)
     }
 
     /// The engage verdict for one element, from a single AX round trip.
