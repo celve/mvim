@@ -204,7 +204,7 @@ public enum Snapshotter {
                 )
                 unreachable = UnreachableLines.Memo(
                     value: value, markers: markers, blocks: blocks, roots: snapshotReads.roots, found: walked.found,
-                    exhausted: walked.exhausted, origin: .walked(why)
+                    exhausted: walked.exhausted, candidates: candidates, origin: .walked(why)
                 )
             }
         }

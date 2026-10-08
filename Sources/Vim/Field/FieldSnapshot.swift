@@ -204,7 +204,8 @@ public extension FieldSnapshot {
             )
             if !candidates.isEmpty {
                 let carried = knownUnreachable?.carried(
-                    value: value, markers: raw, blocks: reads.blocks, roots: reads.roots, proseMirror: reads.proseMirror
+                    value: value, markers: raw, blocks: reads.blocks, roots: reads.roots, proseMirror: reads.proseMirror,
+                    candidates: candidates
                 )
                 switch carried ?? .failure(.first) {
                 case .failure(let why): return .needs(.unreachable(value: value, markers: raw, candidates: candidates, why: why))

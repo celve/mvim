@@ -81,6 +81,8 @@ public enum Discovery {
         case value
         /// The last walk failed a read, which the next may not.
         case failed
+        /// A line took or lost the shape of a list marker or a chip, so a walk would check other lines than the last one did.
+        case candidates
         /// A result sits where the run may lie on either side of it.
         case boundary
     }
@@ -133,6 +135,16 @@ public enum Discovery {
             guard end > 0 else { return false }
             let next = breaks.valueOffsets(end - 1).upperBound + 1
             return next <= shown.earliest && value[next..<shown.earliest].contains(10)
+        }
+
+        /// Where the run lies against text starting, or ending, at `x`: settled only at the run's own offset, across a line break.
+        func start(_ x: Int, _ run: Run) -> Run.Lands { x == run.at && parted(before: x) ? .before : .either }
+        func end(_ x: Int, _ run: Run) -> Run.Lands { x == run.earliest && parted(after: x) ? .after : .either }
+
+        func shifted(_ range: Range<Int>, _ run: Run) -> Range<Int>? {
+            guard let lower = run.shifted(range.lowerBound, lands: start(range.lowerBound, run)),
+                  let upper = run.shifted(range.upperBound, lands: end(range.upperBound, run)), lower <= upper else { return nil }
+            return lower..<upper
         }
 
         /// The plain extent of the list marker starting at `start`: its whole line, or the prefix before its item's text.

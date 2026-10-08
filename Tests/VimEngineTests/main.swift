@@ -4955,12 +4955,17 @@ precondition(repeatedRun.earliest == 3 && repeatedRun.at == 4 && repeatedRun.shi
 // A marker, a chip with text either side, and a code block's label then code, each its own AXValue line.
 let linedPlain = "Intro\u{2022}Item \u{2060}\u{00A0}CHIP tailCtlcode"
 let linedValue = "Intro\n\u{2022}\nItem \n\u{2060}\u{00A0}CHIP\n tail\nCtl\n\ncode"
+func linedCandidates(_ value: String, _ plain: String) -> UnreachableLines.Candidates {
+    UnreachableLines.candidates(text: value, breaks: ParagraphBreaks(value: value, fieldText: plain)!, raw: plain)
+}
 let linedMemo = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: 3, found: UnreachableLines.Found(
     markers: [5], chips: [.init(range: 11..<17, paragraph: 6..<22)], joins: [22], controls: [22..<25]
-))
+), candidates: linedCandidates(linedValue, linedPlain))
+precondition(linedMemo.candidates.markers == [5..<6] && linedMemo.candidates.chips == [11..<17])
 func lined(_ value: (String, String), _ plain: (String, String)) -> Result<UnreachableLines.Found?, Discovery.Rewalk> {
-    linedMemo.carried(value: linedValue.replacing(value.0, with: value.1), markers: linedPlain.replacing(plain.0, with: plain.1),
-                      blocks: 3).map(\.found)
+    let typed = (linedValue.replacing(value.0, with: value.1), linedPlain.replacing(plain.0, with: plain.1))
+    return linedMemo.carried(value: typed.0, markers: typed.1, blocks: 3, candidates: linedCandidates(typed.0, typed.1))
+        .map(\.found)
 }
 let linedChip = UnreachableLines.Chip(range: 11..<17, paragraph: 6..<23)
 precondition(lined(("Intro\n", "Introx\n"), ("Intro", "Introx")) == .success(UnreachableLines.Found(
@@ -4975,23 +4980,46 @@ precondition(lined((" tail\nCtl", " tailx\nCtl"), (" tailCtl", " tailxCtl")) == 
 )), "a paragraph ending before a code block takes the text, and the block moves")
 precondition(lined(("Ctl\n\ncode", "Ctl\n\nxcode"), ("Ctlcode", "Ctlxcode")).map { $0?.controls } == .success([22..<25]),
              "code typed after the label")
-for (value, plain) in [(("CHIP\n tail", "CHIPx\n tail"), ("CHIP tail", "CHIPx tail")),
-                       ((" tail\nCtl", " tail\nxCtl"), (" tailCtl", " tailxCtl")),
-                       (("Ctl\n\ncode", "Ctlx\n\ncode"), ("Ctlcode", "Ctlxcode")),
-                       (("CHIP\n", "CHxIP\n"), ("CHIP tail", "CHxIP tail")),
-                       (("\u{2022}\nItem", "\u{2022}x\nItem"), ("\u{2022}Item", "\u{2022}xItem")),
-                       (("Ctl\n\ncode", "Cxtl\n\ncode"), ("Ctlcode", "Cxtlcode"))] {
-    precondition(lined(value, plain) == .failure(.boundary), "\(value.1.debugDescription): a label the page changed walks")
+for (value, plain, why) in [(("CHIP\n tail", "CHIPx\n tail"), ("CHIP tail", "CHIPx tail"), Discovery.Rewalk.boundary),
+                            ((" tail\nCtl", " tail\nxCtl"), (" tailCtl", " tailxCtl"), .boundary),
+                            (("Ctl\n\ncode", "Ctlx\n\ncode"), ("Ctlcode", "Ctlxcode"), .boundary),
+                            (("CHIP\n", "CHxIP\n"), ("CHIP tail", "CHxIP tail"), .boundary),
+                            (("\u{2022}\nItem", "\u{2022}x\nItem"), ("\u{2022}Item", "\u{2022}xItem"), .candidates),
+                            (("Ctl\n\ncode", "Cxtl\n\ncode"), ("Ctlcode", "Cxtlcode"), .boundary)] {
+    precondition(lined(value, plain) == .failure(why), "\(value.1.debugDescription): a label the page changed walks")
 }
 let objectiveC = UnreachableLines.Memo(value: "Before\nC\nabc\nAfter", markers: "BeforeCabcAfter", blocks: 3, roots: 17,
                                        found: UnreachableLines.Found(markers: [], chips: [], controls: [6..<7]))
-precondition(objectiveC.carried(value: "Before\nObjective-C\nabc\nAfter", markers: "BeforeObjective-CabcAfter", blocks: 3, roots: 17)
+precondition(objectiveC.carried(value: "Before\nObjective-C\nabc\nAfter", markers: "BeforeObjective-CabcAfter", blocks: 3, roots: 17,
+                                candidates: objectiveC.candidates)
              == .failure(.boundary), "LIN-1874 round 1: a code label becoming Objective-C")
 let linedTyped = (linedValue.replacing("Intro\n", with: "Introx\n"), linedPlain.replacing("Intro", with: "Introx"))
 let linedUncounted = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: nil, found: linedMemo.found)
-precondition(linedUncounted.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil) == .failure(.blocks)
-             && linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: 3, proseMirror: true) == .failure(.roots),
+let linedNow = linedCandidates(linedTyped.0, linedTyped.1)
+precondition(linedUncounted.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil, candidates: linedNow) == .failure(.blocks)
+             && linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: 3, proseMirror: true, candidates: linedNow)
+             == .failure(.roots),
              "a count unread both times, or a ProseMirror field's roots unread both times, prove nothing unchanged")
+// Chromium's own list: the page makes a paragraph an item with one run of marker text and no new block.
+let nativeValue = "Top\n\u{2022} First\nMiddle\nPlain"
+let nativePlain = "Top\u{2022} FirstMiddlePlain"
+let nativeMemo = UnreachableLines.Memo(value: nativeValue, markers: nativePlain, blocks: 4,
+                                       found: UnreachableLines.Found(markers: [3], chips: []),
+                                       candidates: linedCandidates(nativeValue, nativePlain))
+for (name, value, plain) in [("listed", "Top\n\u{2022} First\nMiddle\n\u{2022} Plain", "Top\u{2022} FirstMiddle\u{2022} Plain"),
+                             ("typed like one", "Top\n\u{2022} First\nMi. ddle\nPlain", "Top\u{2022} FirstMi. ddlePlain")] {
+    precondition(nativeMemo.carried(value: value, markers: plain, blocks: 4, candidates: linedCandidates(value, plain))
+                 == .failure(.candidates), "a paragraph \(name) gives a walk a line the last one never checked")
+}
+let typedNumber = UnreachableLines.Memo(value: "Top\n1. Buy", markers: "Top1. Buy", blocks: 2,
+                                        found: UnreachableLines.Found(markers: [], chips: []),
+                                        candidates: linedCandidates("Top\n1. Buy", "Top1. Buy"))
+precondition(typedNumber.carried(value: "Top\n\u{2022} 1. Buy", markers: "Top\u{2022} 1. Buy", blocks: 2,
+                                 candidates: linedCandidates("Top\n\u{2022} 1. Buy", "Top\u{2022} 1. Buy")) == .failure(.candidates),
+             "and a line that already looked like an item, listed, is one line with another marker")
+precondition(try! nativeMemo.carried(value: "Topx\n\u{2022} First\nMiddle\nPlain", markers: "Topx\u{2022} FirstMiddlePlain", blocks: 4,
+                                     candidates: linedCandidates("Topx\n\u{2022} First\nMiddle\nPlain", "Topx\u{2022} FirstMiddlePlain"))
+             .get().found?.markers == [4], "typing before the list still carries")
 
 // Chrome 153's blank line: typing elsewhere shifts it, and anything else walks again.
 let blankMemo = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: [43])
@@ -5061,7 +5089,8 @@ func treeBuild(
         case .unreachable(let value, let raw, let candidates, let why):
             walks.append(why)
             unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: tree.count, roots: reads.roots,
-                                                found: unreachableScanned(tree, candidates), origin: .walked(why))
+                                                found: unreachableScanned(tree, candidates), candidates: candidates,
+                                                origin: .walked(why))
         }
     }) {
         FieldSnapshot.build(reads, capabilities: keyProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
@@ -5099,8 +5128,8 @@ precondition(dia7AtStart.walks == [.boundary] && dia7AtStart.unreachable?.origin
 let newItemRaw = dia7Raw.replacing("Plain itemClosing", with: "Plain item\u{2022}zClosing")
 let newItemValue = dia7Value.replacing("Plain item\nClosing", with: "Plain item\n\u{2022}\nz\nClosing")
 precondition(Discovery.Run(from: dia7Raw, to: newItemRaw)?.inserted == 2
-             && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count, roots: dia7Tree.count)
-             == .failure(.value)
+             && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count, roots: dia7Tree.count,
+                                                candidates: dia7Before.unreachable!.candidates) == .failure(.value)
              && dia7Before.memo?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value))
 
 // A Linear session, typing at each line's end then ⌃[: s shifts, b e n walk for a boundary, an edit, the blocks.

@@ -768,7 +768,7 @@ extension Sim {
             ) : nil
             unreachable = UnreachableLines.Memo(
                 value: value, markers: markers, blocks: blocks, roots: roots, found: found, exhausted: found == nil,
-                origin: .walked(why)
+                candidates: candidates, origin: .walked(why)
             )
         }
     }
