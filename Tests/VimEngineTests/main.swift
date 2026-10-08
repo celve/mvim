@@ -5119,11 +5119,16 @@ precondition(UnreachableLines.Memo(value: native.value, markers: native.raw, blo
                  .carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: 4,
                           candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.unread),
              "a result whose reads were not kept, the Sim's, walks")
-let nativeMiscounted = UnreachableLines.Memo(value: native.value, markers: native.raw, blocks: 5, found: nativeMemo.found,
-                                             candidates: nativeMemo.candidates, reads: nativeMemo.reads)
-precondition(nativeMiscounted.carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: 5,
-                                      candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.unread),
-             "reads of a tree with other root blocks than the count")
+let twoRoots = unreachableWalk("\u{2022} one\nTwo", "\u{2022} oneTwo",
+                               fakeTree("0/L/0/5 0.0/G/0/5 0.0.0/M/0/2 0.0.1/T/2/5 1/G/5/8 1.0/T/5/8", linear: false),
+                               linedCandidates("\u{2022} one\nTwo", "\u{2022} oneTwo"), roots: nil)
+precondition(UnreachableLines.Memo(value: twoRoots.value, markers: twoRoots.markers, blocks: 1, found: twoRoots.found,
+                                   candidates: twoRoots.candidates, reads: twoRoots.reads)
+                 .carried(value: "\u{2022} one\nTwox", markers: "\u{2022} oneTwox", blocks: 1,
+                          candidates: linedCandidates("\u{2022} one\nTwox", "\u{2022} oneTwox")) == .failure(.unread)
+             && twoRoots.carried(value: "\u{2022} one\nTwox", markers: "\u{2022} oneTwox", blocks: 2,
+                                 candidates: linedCandidates("\u{2022} one\nTwox", "\u{2022} oneTwox")).map(\.found?.markers)
+                 == .success([0]), "reads of a tree with other root blocks than the count")
 
 // Chrome 153's blank line: typing elsewhere replays the walk, and anything else walks again.
 func blankTree(_ paragraphs: [String]) -> [FakeNode] {
