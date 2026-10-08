@@ -52,19 +52,18 @@ public extension VimState.Field {
     /// block-relative, so carrying them would point them at another block's
     /// text.
     ///
-    /// Visual is carried verbatim even though `Mode.visual` holds an anchor —
-    /// the one offset that rides inside the mode. Dropping to Normal would
-    /// break `v j j d` (the second `j` would move the caret instead of
-    /// extending), and the stale anchor is inert on the paths a block editor
-    /// actually takes: `lowerExtend`'s exact lane is precisely what a denied
-    /// `wholeDocument` routes around, and a blind extend leaves the selection
-    /// opaque anyway.
+    /// Visual is carried, since dropping to Normal would break `v j j d`
+    /// (the second `j` would move the caret instead of extending), but
+    /// without its anchor — the one offset that rides inside the mode. With
+    /// none, extends press the app's own shifted keys and operators act on
+    /// the selection the new field reads, whatever its `wholeDocument` says.
     func carried(across transition: FocusTransition) -> VimState.Field {
         switch transition {
         case .sameElement:
             return self
         case .sameDocument:
-            return VimState.Field(mode: mode)
+            guard case .visual(let context) = mode else { return VimState.Field(mode: mode) }
+            return VimState.Field(mode: .visual(VimState.VisualContext(kind: context.kind, anchor: nil)))
         case .newSession:
             return .entry
         }

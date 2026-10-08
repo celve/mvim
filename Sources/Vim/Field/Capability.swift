@@ -109,8 +109,7 @@ public extension Capability {
         .lineStartKey, .lineEndKey, .documentStartKey, .documentEndKey, .wordKeys, .paragraphKeys,
     ]
 
-    /// What a field denies by naming a bigger editable field around itself: it is one block of that document,
-    /// where the app's own ↓ and ↑ do the moving and a drawn cursor would have to be collapsed before each.
+    /// What a field denies by naming a bigger editable field around itself: one block of that document, moved in by the app's ↓ and ↑.
     static let blockScoped: Set<Capability> = [.drawCursor, .wholeDocument, .fieldIsSession]
 
     /// The mechanism a policy atom rides on: no mechanism, no question. Its
@@ -164,8 +163,7 @@ public struct CapabilityProfile: Equatable, Sendable {
 /// Why each atom resolved as it did. Here, not beside the impure `FieldProber`, so `make test` reaches it.
 public struct CapabilityReport: Equatable, Sendable {
     public enum Source: Equatable, Sendable {
-        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism; for a native key, the probe's claim;
-        /// for a `blockScoped` atom that is off, the enclosing field the probe read.
+        /// The AX trial — or, for `drawCursor`, its writeSelection mechanism; for a native key, the probe's claim; for a `blockScoped` atom off, its enclosing field.
         case probed
         /// A shipped `CapabilityConfig` seed.
         case seeded

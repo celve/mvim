@@ -2388,12 +2388,13 @@ precondition(crossed.marks.isEmpty)
 precondition(crossed.lastVisual == nil)
 precondition(crossed.cursor == nil)
 
-// Visual carries verbatim — dropping to Normal would break `v j j d`.
+// Visual carries, since dropping to Normal would break `v j j d`, but not its anchor: an offset in the field focus left.
 let visualContext = VimState.VisualContext(kind: .character, anchor: 0)
 precondition(
     VimState.Field(mode: .visual(visualContext)).carried(across: .sameDocument).mode
-        == .visual(visualContext)
+        == .visual(VimState.VisualContext(kind: .character, anchor: nil))
 )
+precondition(VimState.Field(mode: .visual(visualContext)).carried(across: .sameElement).mode == .visual(visualContext))
 
 // newSession: the entry policy, whatever the old field held.
 precondition(populated.carried(across: .newSession) == VimState.Field.entry)
@@ -2448,6 +2449,30 @@ precondition(edge(forcedApp, forcedApp) == .sameElement)
 precondition(edge(forcedApp, Focus(element: 0, pid: 1, site: "", forcedWindow: 8)) == .newSession)
 precondition(edge(forcedApp, Focus(element: 0, pid: 2, site: "", forcedWindow: 7)) == .newSession)
 precondition(edge(forcedApp, field(0)) == .newSession && edge(field(0), forcedApp) == .newSession)
+
+// End-to-end: `v` at 1 in a block, then focus takes the rule's own edge into its page or another block (LIN-1855).
+func crossedInVisual(_ crossing: FocusTransition, to text: String, caret: Int, profile: CapabilityProfile, _ keys: String...) -> Sim {
+    var sim = Sim(text: "abc", caret: 1, profile: enclosedField.profile)
+    sim.emulatesKeys = true
+    sim.type("v")
+    sim.refocus(crossing, text: text, caret: caret)
+    sim.profile = profile
+    for key in keys {
+        if key.hasPrefix("<") { sim.feed(key) } else { sim.type(key) }
+    }
+    return sim
+}
+let blockToPage = edge(field(1, in: 100, offByPage), field(100))
+let blockToBlock = edge(field(1, in: 100, offByPage), field(2, in: 100, offByPage))
+let pageProfile = CapabilityResolver.resolve(probed: axProfile, config: shippedSeeds, learned: []).profile
+let pageText = "header\nabcdefghij\nfooter"
+let intoPage = crossedInVisual(blockToPage, to: pageText, caret: 10, profile: pageProfile, "j", "d")
+precondition(intoPage.text == "header\nabcter" && intoPage.bells == 0, "the block's anchor must not select in the page")
+precondition(crossedInVisual(blockToPage, to: pageText, caret: 10, profile: pageProfile, "l", "l", "d").text == "header\nabcfghij\nfooter")
+precondition(crossedInVisual(blockToBlock, to: "second block", caret: 7, profile: enclosedField.profile, "l", "d").text == "second lock",
+             "nor in another block, where `l` is planned in the block's own text")
+let leftVisual = crossedInVisual(blockToPage, to: pageText, caret: 10, profile: pageProfile, "j", "<Esc>")
+precondition(leftVisual.state.field.mode == .normal && leftVisual.text == pageText && leftVisual.bells == 0, "Esc still leaves Visual")
 
 // End-to-end through the Sim: engaging Normal then crossing a block keeps
 // Normal — the bug this exists for — while a genuinely new field opens in

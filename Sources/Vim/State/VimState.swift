@@ -161,10 +161,10 @@ public extension VimState {
     struct VisualContext: Equatable, Sendable {
         public var kind: VisualKind
 
-        /// Text offset of the fixed end of the selection.
-        public var anchor: Int
+        /// Text offset of the selection's fixed end; nil once focus crossed to another field, where it names nothing.
+        public var anchor: Int?
 
-        public init(kind: VisualKind, anchor: Int) {
+        public init(kind: VisualKind, anchor: Int?) {
             self.kind = kind
             self.anchor = anchor
         }
