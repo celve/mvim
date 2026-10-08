@@ -233,7 +233,9 @@ What else differs there:
   are not lines, and a mention chip is one character on its paragraph's line.
 - In a field uvim cannot read at all, and under **Force**, moves are approximate, deletes and yanks go
   through ⌘X and ⌘C so the clipboard is the register, and search, marks and Visual mode beep.
-- **Notion** comes with its own defaults, since each of its blocks is a separate field.
+- Where each block of a page is a field of its own inside the page's, as in **Notion**, uvim reads that from
+  the page: `j` and `k` press ↓ and ↑, so they move by the rows you see and from one block to the next, and
+  the mode stays as you go.
 - An input or a plain text area keeps uvim while a row of its popup list is highlighted, as in Linear's ⌘K
   menu, so pick the row from Insert mode: in Normal mode the arrow keys and ⏎ are Vim's motions. A rich-text
   editor loses uvim meanwhile, except an empty one, which is a known limit: there Normal mode takes the keys
@@ -258,8 +260,18 @@ not, and a mention chip is one character on its paragraph's line, so `j` and `k`
 shows, and columns start after a list item's `• ` or `1. `. In a field uvim cannot read at all, and
 under **Force**, moves are
 approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
-search, marks and Visual mode beep. **Notion** comes with its own defaults, since each of its blocks
-is a separate field.
+search, marks and Visual mode beep.
+
+Some editors make each block of a page a field of its own inside one editable page, as **Notion**
+does. uvim reads that from the page, in a browser or an Electron app, with no list of sites: such a
+field names a bigger editable field around itself. There `j` and `k` press ↓ and ↑, so they move by
+the rows you see and cross from block to block, `gg` and `G` press ⌘↑ and ⌘↓, the mode stays as the
+caret changes block, and what needs the whole text, such as `J`, a search or `gi`, beeps. After Esc
+in Notion selects a block, `j` and `k` move that selection. An editor whose blocks are separate
+fields with nothing editable around them gives uvim nothing to read, so there turn **Text covers
+whole document** and **New field starts a session** off for the site yourself. The Notion app also
+comes with the block cursor off, since Notion shows its formatting toolbar over any selection; in a
+browser the cursor is drawn until you turn **Draw block cursor** off for the site.
 
 An input or a plain text area keeps uvim while a row of its popup list is highlighted, as in Linear's
 ⌘K menu or a search box's suggestions, though Chromium then calls that row, not the field, the focused
@@ -682,6 +694,16 @@ time or at all, `nil` when it answered with no parent), `hopCap` (the element ca
 without a page), `budget` (the walk's time budget ran out). For those last two, `@` is
 the first element the walk did not read. A walk that found its site logs `stop=site@N` at
 `.debug`.
+
+A bind line's `caps=` gives each capability a code, `+` or `-`, and where the answer came from:
+`p` read from the field, `s` a shipped default, `u` your choice, `l` learned. A field in web
+content can be one block of a bigger document, as each block of a Notion page is: it then names
+another editable field as its outermost one (`AXHighestEditableAncestor`), and its bind line says
+`enclosed=1`. `wholeDocument` and `fieldIsSession` resolve off for it, `WD-p FS-p`, unless a
+default or your choice answers first: the Notion app, which ships with defaults, reads
+`WD-s FS-s enclosed=1`. Focus moving between two fields that name the same outermost one, or
+between a field and the one it names, binds as `sameDocument` and keeps the mode. A native field,
+and a web field with nothing editable around it, names none.
 
 **Text is not recorded**, and that is a unit test rather than a convention. `keys=` shows
 what you typed only where it is provably free of variable, data-bearing input — no operand,

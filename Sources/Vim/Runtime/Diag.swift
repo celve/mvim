@@ -44,6 +44,10 @@ enum Diag {
         if binding.isChromium {
             line += " chromium=1"
         }
+        // The grid hides the read where a seed or the user answers first.
+        if binding.enclosing != nil {
+            line += " enclosed=1"
+        }
         if recordsText, let identifier = binding.surface.identifier {
             line += " id=\(identifier)"
         }

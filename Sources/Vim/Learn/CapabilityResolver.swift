@@ -15,16 +15,17 @@ public struct ConfigChoice: Equatable, Sendable {
 
 /// Probed truth minus learned failures and the user's Off; policies then follow their parent mechanisms.
 public enum CapabilityResolver {
+    /// `enclosed` is the probe's other answer: the field names a bigger editable field around itself.
     public static func resolve(
-        probed: CapabilityProfile, config: [Capability: ConfigChoice], beliefs: ResolvedBeliefs
+        probed: CapabilityProfile, enclosed: Bool = false, config: [Capability: ConfigChoice], beliefs: ResolvedBeliefs
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
         var learned = beliefs.broken
         if beliefs.readModel.answer == .untrusted { learned.insert(.readCaret) }
-        return resolve(probed: probed, config: config, learned: learned)
+        return resolve(probed: probed, enclosed: enclosed, config: config, learned: learned)
     }
 
     public static func resolve(
-        probed: CapabilityProfile, config: [Capability: ConfigChoice], learned: Set<Capability>
+        probed: CapabilityProfile, enclosed: Bool = false, config: [Capability: ConfigChoice], learned: Set<Capability>
     ) -> (profile: CapabilityProfile, report: CapabilityReport) {
         var entries: [Capability: CapabilityReport.Entry] = [:]
         // An explicit On overrules evidence as it un-seeds curation.
@@ -38,7 +39,7 @@ public enum CapabilityResolver {
                 entries[capability] = CapabilityReport.Entry(status: probed.has(capability) ? .available : .unavailable, source: .probed)
             }
         }
-        // On un-seeds a policy but cannot revive a missing mechanism; a parentless policy is ungated.
+        // On un-seeds a policy and overrules the probe's enclosing field, but cannot revive a missing mechanism; a parentless policy is ungated.
         let unavailable = CapabilityReport.Entry(status: .unavailable, source: .probed)
         for capability in Capability.allCases where capability.species == .policy {
             let mechanism = capability.parent.map { entries[$0] ?? unavailable }
@@ -49,6 +50,8 @@ public enum CapabilityResolver {
                 entries[capability] = CapabilityReport.Entry(status: .unavailable, source: .user)
             } else if choice.seededOff, choice.override != .on {
                 entries[capability] = CapabilityReport.Entry(status: .unavailable, source: .seeded)
+            } else if enclosed, Capability.blockScoped.contains(capability), choice.override != .on {
+                entries[capability] = CapabilityReport.Entry(status: .unavailable, source: .probed)
             } else {
                 entries[capability] = CapabilityReport.Entry(status: .available, source: choice.override == .on ? .user : .probed)
             }

@@ -560,7 +560,8 @@ final class AppModel: ObservableObject {
         }
         switch (entry.status, entry.source) {
         case (.unavailable, .seeded): return "Off by default"
-        case (.unavailable, .probed): return "Not offered here"
+        case (.unavailable, .probed):
+            return Capability.blockScoped.contains(capability) ? "Off: this field is one block of a document" : "Not offered here"
         default: break
         }
         guard capability == .readCaret, let readModel else { return nil }

@@ -534,17 +534,43 @@ precondition(physical("/lo<CR>", text: "say hello", caret: 0, profile: axProfile
 // A cross-module string contract: `CapabilityConfig` seeds and stored beliefs name the raw value.
 precondition(Capability.wholeDocument.rawValue == "wholeDocument")
 precondition(Capability.drawCursor.rawValue == "drawCursor")
-// Policy atoms are resolved from a parent mechanism, never probed.
+// Policy atoms are decided, against a parent mechanism.
 precondition(Capability.wholeDocument.species == .policy)
 precondition(Capability.wholeDocument.parent == .readText)
 precondition(Capability.drawCursor.species == .policy)
 precondition(Capability.drawCursor.parent == .writeSelection)
 precondition(Capability.allCases.filter { $0.species == .mechanism }.allSatisfy { $0.parent == nil })
-// The ungated policy: nothing about a field can moot whether a focus change
-// ends a session, so it answers to seeds and the user alone.
+// The ungated policy: no mechanism can moot whether a focus change ends a
+// session.
 precondition(Capability.fieldIsSession.rawValue == "fieldIsSession")
 precondition(Capability.fieldIsSession.species == .policy)
 precondition(Capability.fieldIsSession.parent == nil)
+
+// A field that names a bigger editable field around itself is one block of it, with no seed (LIN-1855).
+precondition(Capability.blockScoped == [.wholeDocument, .fieldIsSession])
+let enclosedField = CapabilityResolver.resolve(probed: axProfile, enclosed: true, config: [:], learned: [])
+precondition(enclosedField.report.entries[.wholeDocument] == .init(status: .unavailable, source: .probed))
+precondition(enclosedField.report.entries[.fieldIsSession] == .init(status: .unavailable, source: .probed))
+precondition(enclosedField.report.traceGrid.contains("WS+p IT+p DC+p WD-p FS-p"))
+precondition(physical("j", text: "one", caret: 0, profile: enclosedField.profile).steps == [
+    .press(.down, count: 1),
+    .commit(.setCursor(nil)),
+])
+precondition(physical("j", text: "one", caret: 0, profile: CapabilityResolver.resolve(probed: axProfile, config: [:], learned: []).profile)
+    .steps.contains(.setSelection(0..<0)), "without the read the caret is written where it is")
+let enclosedChoices: [Capability: ConfigChoice] = [
+    .wholeDocument: ConfigChoice(override: .on), .fieldIsSession: ConfigChoice(override: .on),
+]
+let userOverPage = CapabilityResolver.resolve(probed: axProfile, enclosed: true, config: enclosedChoices, learned: []).report
+precondition(userOverPage.entries[.wholeDocument] == .init(status: .available, source: .user))
+precondition(userOverPage.entries[.fieldIsSession] == .init(status: .available, source: .user))
+let seededEnclosed = CapabilityResolver.resolve(
+    probed: axProfile, enclosed: true, config: [.fieldIsSession: ConfigChoice(seededOff: true)], learned: []
+).report
+precondition(seededEnclosed.entries[.fieldIsSession] == .init(status: .unavailable, source: .seeded), "a seeded surface reports as it did")
+precondition(CapabilityResolver.resolve(
+    probed: axProfile, enclosed: true, config: [.readText: ConfigChoice(override: .off)], learned: []
+).report.entries[.wholeDocument] == .init(status: .unavailable, source: .user), "a missing parent still answers first")
 
 // The bug this atom exists for: the model says there is no line below, so
 // the exact lane resolves `j` to the offset it started at and executes a
@@ -2372,6 +2398,49 @@ precondition(!FocusTransition.sameElement.clearsChangeInFlight)
 precondition(FocusTransition.sameElement.preservesDrawnCursor)
 precondition(!FocusTransition.sameDocument.preservesDrawnCursor)
 
+// The rule itself (LIN-1855): elements are numbers here, 100 and 200 two pages, and a site is its role.
+typealias Focus = FocusTransition.Focus<Int, String>
+let offByPage = CapabilityReport.Entry(status: .unavailable, source: .probed)
+let offBySeed = CapabilityReport.Entry(status: .unavailable, source: .seeded)
+let offByUser = CapabilityReport.Entry(status: .unavailable, source: .user)
+let onByDefault = CapabilityReport.Entry(status: .available, source: .probed)
+let onByUser = CapabilityReport.Entry(status: .available, source: .user)
+func field(
+    _ element: Int, in page: Int? = nil, _ session: CapabilityReport.Entry = onByDefault, role: String = "AXTextArea", pid: Int32 = 1,
+    window: Int? = nil
+) -> Focus {
+    Focus(element: element, pid: pid, site: role, session: session, enclosing: page, window: window)
+}
+func edge(_ old: Focus?, _ new: Focus?) -> FocusTransition { FocusTransition.between(old, new) }
+precondition(edge(nil, field(1)) == .newSession && edge(field(1), nil) == .newSession)
+precondition(edge(field(1, in: 100, offByPage), field(1, in: 100, offByPage)) == .sameElement)
+precondition(edge(field(1, in: 100, offByPage), field(2, in: 100, offByPage)) == .sameDocument)
+precondition(edge(field(1, in: 100, offByPage), field(2, in: 200, offByPage)) == .newSession)
+precondition(edge(field(1, in: 100, offByPage), field(2, in: 100, offByPage, role: "AXTextField")) == .sameDocument)
+precondition(edge(field(1, in: 100, offByPage), field(100)) == .sameDocument && edge(field(100), field(1, in: 100, offByPage)) == .sameDocument,
+             "a block and the page it names are one document")
+precondition(edge(field(1), field(2)) == .newSession)
+precondition(edge(field(1, in: 100, onByUser), field(2, in: 100, offByPage)) == .newSession)
+precondition(edge(field(1, in: 100, offByPage), field(100, onByUser)) == .newSession, "the user's On keeps a field a session")
+precondition(edge(field(1, offBySeed, window: 7), field(2, offByUser, window: 7)) == .sameDocument)
+precondition(edge(field(1, offBySeed, window: 7), field(2, offBySeed, window: 8)) == .newSession)
+precondition(edge(field(1, offBySeed, window: 7), field(2, offBySeed, role: "AXTextField", window: 7)) == .newSession)
+precondition(edge(field(1, offBySeed, window: 7), field(2, offBySeed, pid: 2, window: 7)) == .newSession)
+precondition(edge(field(1, offBySeed), field(2, offBySeed)) == .newSession, "an unread window fails closed")
+precondition(edge(field(1, in: 100, offByPage, window: 7), field(2, in: 200, offByPage, window: 7)) == .newSession,
+             "the page's own answer never makes the window the document")
+precondition(edge(field(1, in: 100, offBySeed, window: 7), field(2, in: 200, offBySeed, window: 7)) == .sameDocument)
+precondition(edge(field(1, in: 100, offBySeed, window: 7), field(2, offBySeed, window: 7)) == .sameDocument)
+precondition(edge(field(1, in: 100, offBySeed, window: 7), field(2, in: 100, offBySeed, window: 8)) == .sameDocument)
+precondition(FocusTransition.windowIsDocument(offBySeed) && FocusTransition.windowIsDocument(offByUser))
+precondition(!FocusTransition.windowIsDocument(offByPage) && !FocusTransition.windowIsDocument(onByUser)
+    && !FocusTransition.windowIsDocument(onByDefault) && !FocusTransition.windowIsDocument(nil))
+let forcedApp = Focus(element: 0, pid: 1, site: "", forcedWindow: 7)
+precondition(edge(forcedApp, forcedApp) == .sameElement)
+precondition(edge(forcedApp, Focus(element: 0, pid: 1, site: "", forcedWindow: 8)) == .newSession)
+precondition(edge(forcedApp, Focus(element: 0, pid: 2, site: "", forcedWindow: 7)) == .newSession)
+precondition(edge(forcedApp, field(0)) == .newSession && edge(field(0), forcedApp) == .newSession)
+
 // End-to-end through the Sim: engaging Normal then crossing a block keeps
 // Normal — the bug this exists for — while a genuinely new field opens in
 // Insert.
@@ -3621,7 +3690,51 @@ for _ in 0..<400 {
     let resolved = CapabilityResolver.resolve(probed: profile, config: config, beliefs: resolving(store))
     precondition(resolved.report.entries == previousTable(probed: profile, config: config, learned: demoted))
     precondition(resolved.profile.statuses == previousTable(probed: profile, config: config, learned: demoted).mapValues(\.status))
+    let enclosed = CapabilityResolver.resolve(probed: profile, enclosed: true, config: config, beliefs: resolving(store)).report.entries
+    for (capability, entry) in resolved.report.entries {
+        let read = Capability.blockScoped.contains(capability) && entry == .init(status: .available, source: .probed)
+        precondition(enclosed[capability] == (read ? .init(status: .unavailable, source: .probed) : entry),
+                     "an enclosing field turns off only what nothing else decided")
+    }
 }
+
+// The focus rule before enclosing fields, which it must still match where no field names one.
+func previousEdge(_ old: Focus?, _ new: Focus?) -> FocusTransition {
+    guard let old, let new else { return .newSession }
+    if old.forcedWindow != nil || new.forcedWindow != nil {
+        return old.forcedWindow != nil && new.forcedWindow != nil && old.pid == new.pid && old.forcedWindow == new.forcedWindow
+            ? .sameElement
+            : .newSession
+    }
+    if old.element == new.element { return .sameElement }
+    guard old.session?.status == .unavailable, new.session?.status == .unavailable, old.pid == new.pid, old.site == new.site,
+          let oldWindow = old.window, let newWindow = new.window, oldWindow == newWindow else { return .newSession }
+    return .sameDocument
+}
+func randomFocus(enclosing: Bool) -> Focus? {
+    if coin(12) == 0 { return nil }
+    let pid = Int32(coin(2))
+    if coin(6) == 0 { return Focus(element: 0, pid: pid, site: "", forcedWindow: UInt32(coin(2))) }
+    let page: Int? = enclosing && coin(2) == 0 ? 100 + Int(coin(2)) : nil
+    // `main` denied `fieldIsSession` by a seed or the user only; the page's answer is new.
+    let session = [onByDefault, onByUser, offBySeed, offByUser, offByPage][Int(coin(enclosing ? 5 : 4))]
+    let window: Int? = FocusTransition.windowIsDocument(session) && coin(4) != 0 ? 7 + Int(coin(2)) : nil
+    return Focus(
+        element: coin(3) == 0 ? 100 + Int(coin(2)) : Int(coin(4)), pid: pid, site: ["AXTextArea", "AXTextField"][Int(coin(2))],
+        session: session, enclosing: page, window: window
+    )
+}
+var addedEdges = 0
+for _ in 0..<4000 {
+    let (old, new) = (randomFocus(enclosing: false), randomFocus(enclosing: false))
+    precondition(edge(old, new) == previousEdge(old, new), "no field names another, so the rule is the one before")
+    let (block, other) = (randomFocus(enclosing: true), randomFocus(enclosing: true))
+    if edge(block, other) != previousEdge(block, other) {
+        precondition(previousEdge(block, other) == .newSession && edge(block, other) == .sameDocument, "enclosing fields only join")
+        addedEdges += 1
+    }
+}
+precondition(addedEdges > 100)
 var withheld = BeliefStore()
 _ = withheld.record(offsets: .untrusted, at: learnRung, versions: learnVersions, provenance: Provenance(), tally: Tally())
 let untrustedReport = CapabilityResolver.resolve(probed: axProfile, config: [:], beliefs: resolving(withheld)).report

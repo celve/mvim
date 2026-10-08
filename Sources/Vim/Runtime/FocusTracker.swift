@@ -38,6 +38,11 @@ public final class FocusTracker {
         /// session.
         public let window: AXUIElement?
 
+        /// The outermost editable field around `element` where the page names
+        /// another one: a block editor's page, which every block of it names
+        /// (LIN-1855).
+        public let enclosing: AXUIElement?
+
         /// What capability config is keyed by — the text engine behind the
         /// field, not the app hosting it. Resolved once at publish time and
         /// frozen; recomputing it mid-session would let the key drift out from
@@ -193,7 +198,8 @@ public final class FocusTracker {
             // profile scoped while the held window is still nil — carrying it
             // would leave `sameDocument` unreachable until the next full
             // resolve.
-            window: Self.documentWindow(of: bound.element, profile: resolved.profile),
+            window: Self.documentWindow(of: bound.element, report: resolved.report),
+            enclosing: resolved.enclosing,
             surface: surface,
             versions: identity.versions,
             capabilityReport: resolved.report,
@@ -222,9 +228,10 @@ public final class FocusTracker {
         // runs on the block-crossing keystroke — and a parent walk per
         // keystroke is exactly what the round-trip budget cannot absorb.
         // Sound because retarget only survives a `.sameDocument` verdict below,
-        // which demands the same window in the same app: the page cannot have
-        // navigated out from under it. The element half is still recomputed,
-        // since that is the thing that just changed.
+        // which demands the same enclosing field, or the same window in the
+        // same app: the page cannot have navigated out from under it. The
+        // element half is still recomputed, since that is the thing that just
+        // changed.
         let surface = Surface(
             bundleID: identity.bundleID,
             origin: current.surface.origin,
@@ -239,7 +246,8 @@ public final class FocusTracker {
             isOverlay: current.isOverlay,
             isForced: false,
             windowID: current.windowID,
-            window: Self.documentWindow(of: element, profile: resolved.profile),
+            window: Self.documentWindow(of: element, report: resolved.report),
+            enclosing: resolved.enclosing,
             surface: surface,
             versions: identity.versions,
             capabilityReport: resolved.report,
@@ -313,7 +321,8 @@ public final class FocusTracker {
             isOverlay: isOverlay,
             isForced: false,
             windowID: 0,
-            window: Self.documentWindow(of: element, profile: resolved.profile),
+            window: Self.documentWindow(of: element, report: resolved.report),
+            enclosing: resolved.enclosing,
             surface: surface,
             versions: identity.versions,
             capabilityReport: resolved.report,
@@ -373,33 +382,18 @@ public final class FocusTracker {
         return (app.bundleIdentifier, Versions(app: version, engine: engine))
     }
 
-    /// Has the app explicitly denied `fieldIsSession` — i.e. told us its
-    /// elements are not documents?
-    ///
-    /// `has()` cannot distinguish "resolved and denied" from "never
-    /// resolved" (an empty profile answers false to everything), and only an
-    /// explicit denial carries the claim. **The single definition on
-    /// purpose:** `transition` uses it to decide whether to consult `window`
-    /// and `documentWindow` uses it to decide whether to resolve one. Were
-    /// they to drift, the window would be nil in exactly the case that needs
-    /// it, and `sameDocument` would become unreachable.
-    private static func deniesFieldIsSession(_ profile: CapabilityProfile) -> Bool {
-        profile.statuses[.fieldIsSession] == .unavailable
-    }
-
-    /// The `sameDocument` window, resolved only when it can actually be
-    /// consulted — `transition` short-circuits on the denial above before it
-    /// ever dereferences `window`. Everywhere else these one-to-two round
-    /// trips bought a value nothing read.
+    /// The `sameDocument` window, resolved only where `FocusTransition.between`
+    /// consults it: the one predicate decides both, so they cannot drift.
+    /// Everywhere else these one-to-two round trips bought a value nothing read.
     ///
     /// Resolved eagerly (at publish) rather than lazily (at transition) on
     /// purpose: by transition time the outgoing element may already be
     /// destroyed, and a nil there would read as "different document" and end
     /// the very block-editor session `handleAXNotification` exists to keep.
     private static func documentWindow(
-        of element: AXUIElement, profile: CapabilityProfile
+        of element: AXUIElement, report: CapabilityReport
     ) -> AXUIElement? {
-        deniesFieldIsSession(profile) ? AX.window(of: element) : nil
+        FocusTransition.windowIsDocument(report.entries[.fieldIsSession]) ? AX.window(of: element) : nil
     }
 
     /// The forced fallback: no engageable element anywhere, but the
@@ -443,6 +437,7 @@ public final class FocusTracker {
             isForced: true,
             windowID: window.id,
             window: nil,   // forced identity is (pid, windowID); there is no real element
+            enclosing: nil,
 
             // App-only: a forced binding has no real element, so there is no
             // role and nothing to resolve an origin from.
@@ -471,39 +466,23 @@ public final class FocusTracker {
         onRebind?(new, edge)
     }
 
-    /// Which edge focus just traversed. Fails closed to `.newSession` — the
-    /// long-standing behavior — whenever anything is unknown.
-    ///
-    /// The `sameDocument` case generalizes what forced bindings already do
-    /// below: identity is the *document*, never the element. A block editor
-    /// hands out one element per block, so element identity would call every
-    /// line move a new editing session.
+    /// Which edge focus just traversed, by the pure rule `make test` covers.
     private func transition(from old: Binding?, to new: Binding?) -> FocusTransition {
-        guard let old, let new else { return .newSession }
-        if old.isForced || new.isForced {
-            return old.isForced && new.isForced && old.pid == new.pid && old.windowID == new.windowID
-                ? .sameElement
-                : .newSession
-        }
-        if CFEqual(old.element, new.element) { return .sameElement }
-        // Both sides must have denied `fieldIsSession` — see the predicate
-        // for why an explicit denial, not `has()`, is the test. It leads the
-        // guard because it also gates whether `window` was resolved at all.
-        let scoped = { (binding: Binding) in
-            Self.deniesFieldIsSession(binding.capabilities)
-        }
-        // `site`, never the whole surface: the identifier is per-element, and a
-        // block editor hands out one element per block, so comparing whole
-        // surfaces would call every line move a new session — the exact failure
-        // `fieldIsSession` exists to prevent. Site keeps the old role check and
-        // adds the origin, so crossing from a page into the chrome (same window,
-        // same role) correctly reads as a new session.
-        guard scoped(old), scoped(new),
-              old.pid == new.pid,
-              old.surface.site == new.surface.site,
-              let oldWindow = old.window, let newWindow = new.window,
-              CFEqual(oldWindow, newWindow) else { return .newSession }
-        return .sameDocument
+        FocusTransition.between(old.map(Self.focus), new.map(Self.focus))
+    }
+
+    /// Site keeps the old role check and adds the origin, so crossing from a
+    /// page into the chrome (same window, same role) reads as a new session.
+    private static func focus(_ binding: Binding) -> FocusTransition.Focus<AXUIElement, Surface> {
+        FocusTransition.Focus(
+            element: binding.element,
+            pid: binding.pid,
+            site: binding.surface.site,
+            forcedWindow: binding.isForced ? binding.windowID : nil,
+            session: binding.capabilityReport?.entries[.fieldIsSession],
+            enclosing: binding.enclosing,
+            window: binding.window
+        )
     }
 
     private func policy(for pid: pid_t) -> VimPolicy {
