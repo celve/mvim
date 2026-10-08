@@ -196,7 +196,7 @@ public enum Snapshotter {
                 let walked = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)
                 memo = EmptyParagraphs.Memo(
                     value: value, markers: markers, blocks: blocks, found: walked.found, exhausted: walked.exhausted,
-                    origin: .walked(why)
+                    reads: walked.reads, origin: .walked(why)
                 )
             case .unreachable(let value, let markers, let candidates, let why):
                 let walked = UnreachableDiscovery.found(
@@ -204,7 +204,7 @@ public enum Snapshotter {
                 )
                 unreachable = UnreachableLines.Memo(
                     value: value, markers: markers, blocks: blocks, roots: snapshotReads.roots, found: walked.found,
-                    exhausted: walked.exhausted, candidates: candidates, origin: .walked(why)
+                    exhausted: walked.exhausted, candidates: candidates, reads: walked.reads, origin: .walked(why)
                 )
             }
         }

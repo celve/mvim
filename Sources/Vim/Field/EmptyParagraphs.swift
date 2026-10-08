@@ -8,19 +8,21 @@ public enum EmptyParagraphs {
         public let gap: Int
     }
 
-    /// Discovery's reads for one field text, kept until the text or its blocks change, or shifted across typing.
+    /// Discovery's reads for one field text, kept until the text or its blocks change, or replayed across typing.
     public struct Memo: Equatable, Sendable {
         public let value: String
         public let markers: String
         public let blocks: Int?
         /// Nil when discovery failed, so the field keeps `AXValue`'s lines.
         public let found: [Int]?
-        /// It failed by running out of reads, as a walk of the same blocks would again.
+        /// It failed by running out of reads.
         public let exhausted: Bool
+        /// What the walk read, nil where none were kept.
+        public let reads: Discovery.Reads?
         public let origin: Discovery.Origin
 
         public init(
-            value: String, markers: String, blocks: Int?, found: [Int]?, exhausted: Bool = false,
+            value: String, markers: String, blocks: Int?, found: [Int]?, exhausted: Bool = false, reads: Discovery.Reads? = nil,
             origin: Discovery.Origin = .walked(.first)
         ) {
             self.value = value
@@ -28,6 +30,7 @@ public enum EmptyParagraphs {
             self.blocks = blocks
             self.found = found
             self.exhausted = exhausted
+            self.reads = reads
             self.origin = origin
         }
 
@@ -35,21 +38,23 @@ public enum EmptyParagraphs {
             self.value == value && self.markers == markers && self.blocks == blocks
         }
 
-        /// Itself while it holds, else shifted across the one run typed since, or why discovery walks again.
+        /// Itself while it holds, else its walk replayed across the one run typed since, or why discovery walks again.
         public func carried(value: String, markers: String, blocks: Int?) -> Result<Memo, Discovery.Rewalk> {
             if holds(value: value, markers: markers, blocks: blocks) { return .success(self) }
-            guard blocks != nil, self.blocks == blocks else { return .failure(.blocks) }
+            guard let blocks, self.blocks == blocks else { return .failure(.blocks) }
             return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { edit in
-                let run = edit.run
-                var shifted: [Int]?
-                if let found {
-                    guard let moved = run.shifted(found) else { return .failure(.boundary) }
-                    shifted = moved
-                } else if !exhausted {
-                    return .failure(.failed)
+                guard found != nil || exhausted else { return .failure(.failed) }
+                guard let reads else { return .failure(.unread) }
+                guard let lines = Discovery.Lines(value: self.value, markers: self.markers, shown: edit.shown) else {
+                    return .failure(.boundary)
                 }
+                let replay = Discovery.Replay(reads.moved(across: edit.run, lines: lines))
+                var scan = EmptyBlockScan<[Int]>(budget: reads.budget, block: replay.block, offset: replay.offset)
+                let found = scan.run(blocks: replay.roots(blocks), plain: Array(FieldReads.withoutAttachments(markers).utf16))
+                if let why = replay.refusal { return .failure(why) }
                 return .success(Memo(
-                    value: value, markers: markers, blocks: blocks, found: shifted, exhausted: exhausted, origin: .shifted(run)
+                    value: value, markers: markers, blocks: blocks, found: found, exhausted: scan.exhausted, reads: replay.reads,
+                    origin: .shifted(edit.run)
                 ))
             }
         }

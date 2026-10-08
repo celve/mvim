@@ -58,7 +58,7 @@ public enum UnreachableLines {
 
         public var isEmpty: Bool { markers.isEmpty && chips.isEmpty && carets.isEmpty && !roots && !stops }
 
-        /// A walk after `run` would check these marker and chip lines, moved, and no other; a drawn caret always brings an object.
+        /// A walk after `run` would check these marker and chip lines, moved, and no other.
         func carry(to now: Candidates, across run: Discovery.Run, lines: Discovery.Lines) -> Bool {
             guard roots == now.roots, stops == now.stops, markers.count == now.markers.count, chips.count == now.chips.count
             else { return false }
@@ -104,44 +104,9 @@ public enum UnreachableLines {
             self.joins = joins
             self.controls = controls
         }
-
-        /// These after `run`, or nil where one cannot tell which side of it a result is on.
-        func shifted(across run: Discovery.Run, lines: Discovery.Lines) -> Found? {
-            // The page can change a marker's, chip's or code label's own text, which may unmake it, so the run must stay off them.
-            let items = markers.map { lines.marker(at: $0) } + chips.map { Optional($0.range) } + controls.map { Optional($0) }
-            guard items.allSatisfy({ $0.map { lines.clear(of: $0, run) } ?? false }) else { return nil }
-            let blockStarts = Set(markers + controls.map(\.lowerBound))
-            // Text before a list or a code block, on its own line, can only be the end of the paragraph before it.
-            let closes = run.removed == 0 && blockStarts.contains(run.at) && lines.start(run.at, run) == .before
-            func paragraph(_ range: Range<Int>) -> Range<Int>? {
-                guard let start = run.shifted(range.lowerBound),
-                      let end = run.shifted(range.upperBound, lands: closes ? .before : .either), start <= end else { return nil }
-                return start..<end
-            }
-            guard let markers = Self.all(markers, { run.shifted($0, lands: lines.start($0, run)) }),
-                  let chips = Self.all(chips, { chip in
-                      lines.shifted(chip.range, run).flatMap { atom in
-                          paragraph(chip.paragraph).map { Chip(range: atom, paragraph: $0) }
-                      }
-                  }),
-                  let carets = Self.all(carets, { caret in
-                      run.shifted(caret.offset).map { Caret(offset: $0, place: caret.place) }
-                  }),
-                  let joins = Self.all(joins, {
-                      run.shifted($0, lands: blockStarts.contains($0) ? lines.start($0, run) : .either)
-                  }),
-                  let controls = Self.all(controls, { lines.shifted($0, run) })
-            else { return nil }
-            return Found(markers: markers, chips: chips, carets: carets, joins: joins, controls: controls)
-        }
-
-        private static func all<T>(_ items: [T], _ move: (T) -> T?) -> [T]? {
-            let moved = items.compactMap(move)
-            return moved.count == items.count ? moved : nil
-        }
     }
 
-    /// Discovery for one field text, kept until the text or its blocks change, or shifted across typing.
+    /// Discovery for one field text, kept until the text or its blocks change, or replayed across typing.
     public struct Memo: Equatable, Sendable {
         public let value: String
         public let markers: String
@@ -150,15 +115,18 @@ public enum UnreachableLines {
         public let roots: Int?
         /// Nil when discovery failed, so markers and chips stay lines.
         public let found: Found?
-        /// It failed by running out of reads, as a walk of the same blocks would again.
+        /// It failed by running out of reads.
         public let exhausted: Bool
-        /// The lines the walk checked, or would check for this text.
+        /// The lines the walk checked.
         public let candidates: Candidates
+        /// What the walk read, nil where none were kept.
+        public let reads: Discovery.Reads?
         public let origin: Discovery.Origin
 
         public init(
             value: String, markers: String, blocks: Int?, roots: Int? = nil, found: Found?, exhausted: Bool = false,
-            candidates: Candidates = Candidates(markers: [], chips: []), origin: Discovery.Origin = .walked(.first)
+            candidates: Candidates = Candidates(markers: [], chips: []), reads: Discovery.Reads? = nil,
+            origin: Discovery.Origin = .walked(.first)
         ) {
             self.value = value
             self.markers = markers
@@ -167,6 +135,7 @@ public enum UnreachableLines {
             self.found = found
             self.exhausted = exhausted
             self.candidates = candidates
+            self.reads = reads
             self.origin = origin
         }
 
@@ -174,28 +143,28 @@ public enum UnreachableLines {
             self.value == value && self.markers == markers && self.blocks == blocks && self.roots == roots
         }
 
-        /// Itself while it holds, else shifted across the one run typed since, or why discovery walks again.
+        /// Itself while it holds, else its walk replayed across the one run typed since, or why discovery walks again.
         public func carried(
             value: String, markers: String, blocks: Int?, roots: Int? = nil, proseMirror: Bool = false, candidates: Candidates
         ) -> Result<Memo, Discovery.Rewalk> {
             if holds(value: value, markers: markers, blocks: blocks, roots: roots) { return .success(self) }
-            guard blocks != nil, self.blocks == blocks else { return .failure(.blocks) }
+            guard let blocks, self.blocks == blocks else { return .failure(.blocks) }
             guard self.roots == roots, roots != nil || !proseMirror else { return .failure(.roots) }
             return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { edit in
                 guard found != nil || exhausted else { return .failure(.failed) }
+                guard let reads else { return .failure(.unread) }
                 guard let lines = Discovery.Lines(value: self.value, markers: self.markers, shown: edit.shown) else {
                     return .failure(.boundary)
                 }
-                // The page can make a paragraph a list item with one run of marker text, a line no earlier walk checked.
+                // The page can make a paragraph a list item with one run of marker text, a change no kept read shows.
                 guard self.candidates.carry(to: candidates, across: edit.run, lines: lines) else { return .failure(.candidates) }
-                var shifted: Found?
-                if let found {
-                    guard let moved = found.shifted(across: edit.run, lines: lines) else { return .failure(.boundary) }
-                    shifted = moved
-                }
+                let replay = Discovery.Replay(reads.moved(across: edit.run, lines: lines))
+                var scan = UnreachableScan<[Int]>(budget: reads.budget, block: replay.block, offset: replay.offset)
+                let found = scan.run(blocks: replay.roots(blocks), candidates: candidates)
+                if let why = replay.refusal { return .failure(why) }
                 return .success(Memo(
-                    value: value, markers: markers, blocks: blocks, roots: roots, found: shifted, exhausted: exhausted,
-                    candidates: candidates, origin: .shifted(edit.run)
+                    value: value, markers: markers, blocks: blocks, roots: roots, found: found, exhausted: scan.exhausted,
+                    candidates: candidates, reads: replay.reads, origin: .shifted(edit.run)
                 ))
             }
         }

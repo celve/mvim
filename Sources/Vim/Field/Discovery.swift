@@ -42,11 +42,6 @@ public enum Discovery {
             }
         }
 
-        func shifted(_ offsets: [Int], lands: Lands = .either) -> [Int]? {
-            let moved = offsets.compactMap { shifted($0, lands: lands) }
-            return moved.count == offsets.count ? moved : nil
-        }
-
         public var traceField: String { "@\(at)\(removed > 0 ? "-\(removed)" : "+\(inserted)")" }
 
         /// The common prefix and suffix, whichever goes first taking all it can.
@@ -83,8 +78,10 @@ public enum Discovery {
         case failed
         /// A line took or lost the shape of a list marker or a chip, so a walk would check other lines than the last one did.
         case candidates
-        /// A result sits where the run may lie on either side of it.
+        /// The walk read a node's start or end where the run may lie on either side of it.
         case boundary
+        /// A walk now would read what the last one did not, or its reads were not kept.
+        case unread
     }
 
     /// How a result came to be.
@@ -111,7 +108,7 @@ public enum Discovery {
         return .success((run, shown))
     }
 
-    /// The `AXValue` a run went into, which shows each list marker, chip and code label on a line of its own.
+    /// The `AXValue` a run went into, whose line breaks show which side of a node's start or end the run is on.
     struct Lines {
         let value: [UInt16]
         let breaks: ParagraphBreaks
@@ -147,24 +144,132 @@ public enum Discovery {
             return lower..<upper
         }
 
-        /// The plain extent of the list marker starting at `start`: its whole line, or the prefix before its item's text.
-        func marker(at start: Int) -> Range<Int>? {
-            let first = breaks.valueOffsets(start).upperBound
-            guard first <= value.count else { return nil }
-            let line = Array(value[first...].prefix { $0 != 10 })
-            let length = UnreachableLines.isMarkerShaped(line) ? line.count : UnreachableLines.prefixLength(line)
-            return length.map { start..<(start + $0) }
+        /// Where a node starting or ending at plain `x` is after the run; nil where the run may lie on either side of it.
+        func boundary(_ x: Int, _ run: Run) -> Int? {
+            // Every node boundary at the run's offset moves with the leaf the run went into, which only a line break shows.
+            if run.removed > 0, x == run.earliest { return x }
+            switch (start(x, run), end(x, run)) {
+            case (.before, .after): return nil
+            case (.before, _): return run.shifted(x, lands: .before)
+            case (_, let lands): return run.shifted(x, lands: lands)
+            }
+        }
+    }
+
+    /// What a walk read, by tree path: what the same tree answers after typing moved its text, so the walk can be replayed.
+    public struct Reads: Equatable, Sendable {
+        struct Shape: Equatable, Sendable {
+            let role: String?
+            let subrole: String?
+            let children: Int
+            let classes: [String]
+            let quoteLevel: Int
         }
 
-        /// The run stays off `item`'s own text, or meets it only at an edge a line break parts it from.
-        func clear(of item: Range<Int>, _ run: Run) -> Bool {
-            guard run.removed == 0 else { return run.earliest >= item.upperBound || run.at + run.removed <= item.lowerBound }
-            let first = max(run.earliest, item.lowerBound)
-            let last = min(run.at, item.upperBound)
-            guard first <= last else { return true }
-            guard first == last else { return false }
-            if first == item.lowerBound { return parted(before: first) }
-            return first == item.upperBound && parted(after: first)
+        struct Key: Hashable, Sendable {
+            let path: [Int]
+            let end: Bool
+        }
+
+        /// The scan's budget, which a replay spends as the walk did.
+        public let budget: Int
+        var roots: Int?
+        var shapes: [[Int]: Shape] = [:]
+        var offsets: [Key: Int] = [:]
+        /// Offsets `moved` dropped, for lying where the run may be on either side of them.
+        var blurred: Set<Key> = []
+
+        public init(budget: Int) {
+            self.budget = budget
+        }
+
+        func moved(across run: Run, lines: Lines) -> Reads {
+            var moved = self
+            moved.offsets = [:]
+            for (key, offset) in offsets {
+                if let new = lines.boundary(offset, run) { moved.offsets[key] = new } else { moved.blurred.insert(key) }
+            }
+            return moved
+        }
+    }
+
+    /// A node with its path from the field, which a walk's reads are kept by.
+    public struct Pathed<Node> {
+        public let node: Node
+        let path: [Int]
+    }
+
+    /// The reads a scan walks a tree by, kept as it reads them.
+    public final class Recorder<Node> {
+        public private(set) var reads: Reads
+        private let readBlock: (Node) -> EmptyBlockScan<Node>.Block?
+        private let readOffset: (Node, _ end: Bool) -> Int?
+
+        public init(
+            budget: Int, block: @escaping (Node) -> EmptyBlockScan<Node>.Block?, offset: @escaping (Node, _ end: Bool) -> Int?
+        ) {
+            reads = Reads(budget: budget)
+            readBlock = block
+            readOffset = offset
+        }
+
+        public func roots(_ nodes: [Node]) -> [Pathed<Node>] {
+            reads.roots = nodes.count
+            return nodes.enumerated().map { Pathed(node: $1, path: [$0]) }
+        }
+
+        public func block(_ pathed: Pathed<Node>) -> EmptyBlockScan<Pathed<Node>>.Block? {
+            guard let read = readBlock(pathed.node) else { return nil }
+            reads.shapes[pathed.path] = Reads.Shape(
+                role: read.role, subrole: read.subrole, children: read.children.count, classes: read.classes,
+                quoteLevel: read.quoteLevel
+            )
+            return EmptyBlockScan.Block(
+                role: read.role, subrole: read.subrole,
+                children: read.children.enumerated().map { Pathed(node: $1, path: pathed.path + [$0]) }, classes: read.classes,
+                quoteLevel: read.quoteLevel
+            )
+        }
+
+        public func offset(_ pathed: Pathed<Node>, _ end: Bool) -> Int? {
+            guard let offset = readOffset(pathed.node, end) else { return nil }
+            reads.offsets[Reads.Key(path: pathed.path, end: end)] = offset
+            return offset
+        }
+    }
+
+    /// A walk's reads answering a scan over paths; the first it lacks stops the scan and says why.
+    final class Replay {
+        let reads: Reads
+        private(set) var refusal: Rewalk?
+
+        init(_ reads: Reads) {
+            self.reads = reads
+        }
+
+        func roots(_ count: Int) -> [[Int]] {
+            if reads.roots != count { refusal = .unread }
+            return (0..<count).map { [$0] }
+        }
+
+        func block(_ path: [Int]) -> EmptyBlockScan<[Int]>.Block? {
+            guard let shape = reads.shapes[path] else {
+                refusal = .unread
+                return nil
+            }
+            return EmptyBlockScan.Block(
+                role: shape.role, subrole: shape.subrole, children: (0..<shape.children).map { path + [$0] },
+                classes: shape.classes, quoteLevel: shape.quoteLevel
+            )
+        }
+
+        func offset(_ path: [Int], _ end: Bool) -> Int? {
+            let key = Reads.Key(path: path, end: end)
+            guard let offset = reads.offsets[key] else {
+                refusal = reads.blurred.contains(key) ? .boundary : .unread
+                return nil
+            }
+            return offset
         }
     }
 }

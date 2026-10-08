@@ -146,7 +146,7 @@ public extension FieldSnapshot {
         }
     }
 
-    /// Everything after the learner; `memo` and `unreachable` are the last discoveries, returned held, shifted or walked again.
+    /// Everything after the learner; `memo` and `unreachable` are the last discoveries, returned held, carried or walked again.
     static func build(
         _ reads: Reads, capabilities: CapabilityProfile, answer: OffsetsAnswer, anchor: Int?, cursor: Range<Int>?,
         memo known: EmptyParagraphs.Memo?, unreachable knownUnreachable: UnreachableLines.Memo? = nil

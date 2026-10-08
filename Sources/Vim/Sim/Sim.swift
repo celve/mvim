@@ -43,7 +43,7 @@ public struct Sim {
     /// Chromium rich text whose every `\n` ends a paragraph, as Chrome 153 shows it: see `ChromiumParagraphs` (LIN-1612).
     public var emptyParagraphs = false
 
-    /// Off, discovery runs out of reads and the snapshot keeps `AXValue`'s lines.
+    /// Off, discovery fails and the snapshot keeps `AXValue`'s lines.
     public var findsEmptyParagraphs = true
 
     /// In Chromium modes, the field ends in an inline icon: a U+FFFC only the marker text has.
@@ -52,7 +52,7 @@ public struct Sim {
     /// With `emptyParagraphs`, Linear's editor: blocks each line draws before its text, and each U+2060 a chip.
     public var listLines: [ListLine]?
 
-    /// Off, discovery of list markers and chips runs out of reads, and they stay lines.
+    /// Off, discovery of list markers and chips fails, and they stay lines.
     public var findsUnreachable = true
 
     /// A caret written at a chip's start, where Linear's next arrow does nothing.
@@ -148,11 +148,6 @@ public struct Sim {
     /// The last discoveries, kept as the Controller keeps them.
     private var foundEmptyParagraphs: EmptyParagraphs.Memo?
     private var foundUnreachable: UnreachableLines.Memo?
-
-    /// How the last discoveries came to be, walked or shifted.
-    public var discoveries: (emptyParagraphs: Discovery.Origin?, unreachable: Discovery.Origin?) {
-        (foundEmptyParagraphs?.origin, foundUnreachable?.origin)
-    }
 
     public init(
         text: String,
@@ -753,9 +748,7 @@ extension Sim {
             reads.inEmptyParagraph = chromium.inEmptyParagraph(selection)
         case .emptyParagraphs(let value, let markers, let why):
             let found = findsEmptyParagraphs ? chromium.shown.found : nil
-            memo = EmptyParagraphs.Memo(
-                value: value, markers: markers, blocks: blocks, found: found, exhausted: found == nil, origin: .walked(why)
-            )
+            memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found, origin: .walked(why))
         case .unreachable(let value, let markers, let candidates, let why):
             let shown = chromium
             let found = findsUnreachable ? UnreachableLines.Found(
@@ -767,8 +760,7 @@ extension Sim {
                 joins: shown.joins, controls: shown.controls
             ) : nil
             unreachable = UnreachableLines.Memo(
-                value: value, markers: markers, blocks: blocks, roots: roots, found: found, exhausted: found == nil,
-                candidates: candidates, origin: .walked(why)
+                value: value, markers: markers, blocks: blocks, roots: roots, found: found, origin: .walked(why)
             )
         }
     }

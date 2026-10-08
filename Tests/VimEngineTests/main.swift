@@ -4952,86 +4952,202 @@ precondition(repeatedRun.earliest == 3 && repeatedRun.at == 4 && repeatedRun.shi
              && repeatedRun.shifted(3, lands: .before) == nil && repeatedRun.shifted(4, lands: .before) == 5,
              "a B typed beside a B may be on either side of the paragraph starting at 3")
 
-// A marker, a chip with text either side, and a code block's label then code, each its own AXValue line.
-let linedPlain = "Intro\u{2022}Item \u{2060}\u{00A0}CHIP tailCtlcode"
-let linedValue = "Intro\n\u{2022}\nItem \n\u{2060}\u{00A0}CHIP\n tail\nCtl\n\ncode"
+// A node boundary at the run's offset moves with the leaf the run went into, which only a line break in AXValue shows.
+func runLines(_ old: (value: String, markers: String), _ new: (value: String, markers: String)) -> (Discovery.Run, Discovery.Lines) {
+    let edit = try! Discovery.run(markers: old.markers, value: old.value, to: new.markers, value: new.value).get()
+    return (edit.run, Discovery.Lines(value: old.value, markers: old.markers, shown: edit.shown)!)
+}
+let (endRun, endLines) = runLines(("ab\ncd", "abcd"), ("abx\ncd", "abxcd"))
+let (startRun, startLines) = runLines(("ab\ncd", "abcd"), ("ab\nxcd", "abxcd"))
+let (inlineRun, inlineLines) = runLines(("abcd", "abcd"), ("abxcd", "abxcd"))
+precondition([1, 2, 3].map { endLines.boundary($0, endRun) } == [1, 3, 4] && startLines.boundary(2, startRun) == 2
+             && inlineLines.boundary(2, inlineRun) == nil, "before a break it moves, after one it stays, and with none it is either")
+let (cutRun, cutLines) = runLines(("abbc\nd", "abbcd"), ("abc\nd", "abcd"))
+precondition([1, 2, 3].map { cutLines.boundary($0, cutRun) } == [1, nil, 2], "a b deleted beside a b leaves the one between")
+
+/// The runtime's walks over a fake tree, keeping what they read.
+func emptyWalk(_ value: String, _ raw: String, _ tree: [FakeNode], budget: Int = EmptyParagraphs.readBudget,
+               why: Discovery.Rewalk = .first) -> EmptyParagraphs.Memo {
+    let recorder = Discovery.Recorder<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
+    var scan = EmptyBlockScan(budget: budget, block: recorder.block, offset: recorder.offset)
+    let found = scan.run(blocks: recorder.roots(tree), plain: Array(MarkerText.plain(raw).utf16))
+    return EmptyParagraphs.Memo(value: value, markers: raw, blocks: tree.count, found: found, exhausted: scan.exhausted,
+                                reads: recorder.reads, origin: .walked(why))
+}
+func unreachableWalk(_ value: String, _ raw: String, _ tree: [FakeNode], _ candidates: UnreachableLines.Candidates, roots: Int?,
+                     budget: Int = UnreachableLines.readBudget, why: Discovery.Rewalk = .first) -> UnreachableLines.Memo {
+    let recorder = Discovery.Recorder<FakeNode>(budget: budget, block: \.block, offset: { node, end in end ? node.end : node.start })
+    var scan = UnreachableScan(budget: budget, block: recorder.block, offset: recorder.offset)
+    let found = scan.run(blocks: recorder.roots(tree), candidates: candidates)
+    return UnreachableLines.Memo(value: value, markers: raw, blocks: tree.count, roots: roots, found: found,
+                                 exhausted: scan.exhausted, candidates: candidates, reads: recorder.reads, origin: .walked(why))
+}
+/// `spec` with `count` units typed (or deleted, below zero) into the text node at `path`: it and its ancestors change
+/// length, and every node after it moves.
+func typed(_ spec: String, _ count: Int, into path: String) -> String {
+    let tokens = spec.split(whereSeparator: { $0 == " " || $0 == "\n" }).map { $0.split(separator: "/").map(String.init) }
+    let target = tokens.firstIndex { $0[0] == path }!
+    return tokens.enumerated().map { index, token in
+        let start = Int(token[2])!
+        let end = Int(token[3])!
+        if index == target || path.hasPrefix(token[0] + ".") { return [token[0], token[1], token[2], String(end + count)] }
+        return index > target ? [token[0], token[1], String(start + count), String(end + count)] : token
+    }.map { $0.joined(separator: "/") }.joined(separator: " ")
+}
+/// A Chromium build over a fake tree, walking it where a memo does not carry; `walks` says why each walk ran.
+func treeBuild(
+    _ value: String, _ raw: String, _ tree: [FakeNode], memo known: EmptyParagraphs.Memo? = nil,
+    unreachable knownUnreachable: UnreachableLines.Memo? = nil, caret: Int = 0, proseMirror: Bool = true
+) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?, walks: [Discovery.Rewalk]) {
+    let aligned = ParagraphBreaks(value: value, fieldText: MarkerText.plain(raw))!
+    var reads = FieldSnapshot.Reads(
+        field: FieldReads(text: value, plain: caret..<caret, markers: MarkerReads(
+            breaks: aligned, value: aligned.valueRange(caret..<caret) { _ in .start(skipping: 0) }
+        )),
+        length: value.utf16.count, webContent: true, blocks: tree.count, marked: caret..<caret, markerText: raw
+    )
+    reads.proseMirror = proseMirror
+    reads.roots = proseMirror ? tree.count : nil
+    var memo = known
+    var unreachable = knownUnreachable
+    var walks: [Discovery.Rewalk] = []
+    let built = FieldSnapshot.Step.run(taking: { need in
+        switch need {
+        case .side(let end): reads.sides.updateValue(.start(skipping: 0), forKey: end)
+        case .emptyParagraph: reads.inEmptyParagraph = false
+        case .emptyParagraphs(let value, let raw, let why):
+            walks.append(why)
+            memo = emptyWalk(value, raw, tree, why: why)
+        case .unreachable(let value, let raw, let candidates, let why):
+            walks.append(why)
+            unreachable = unreachableWalk(value, raw, tree, candidates, roots: reads.roots, why: why)
+        }
+    }) {
+        FieldSnapshot.build(reads, capabilities: keyProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
+                            unreachable: unreachable)
+    }
+    return (built.snapshot, built.memo, built.unreachable, walks)
+}
 func linedCandidates(_ value: String, _ plain: String) -> UnreachableLines.Candidates {
-    UnreachableLines.candidates(text: value, breaks: ParagraphBreaks(value: value, fieldText: plain)!, raw: plain)
+    UnreachableLines.candidates(text: value, breaks: ParagraphBreaks(value: value, fieldText: MarkerText.plain(plain))!, raw: plain)
 }
-let linedMemo = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: 3, found: UnreachableLines.Found(
-    markers: [5], chips: [.init(range: 11..<17, paragraph: 6..<22)], joins: [22], controls: [22..<25]
-), candidates: linedCandidates(linedValue, linedPlain))
-precondition(linedMemo.candidates.markers == [5..<6] && linedMemo.candidates.chips == [11..<17])
-func lined(_ value: (String, String), _ plain: (String, String)) -> Result<UnreachableLines.Found?, Discovery.Rewalk> {
-    let typed = (linedValue.replacing(value.0, with: value.1), linedPlain.replacing(plain.0, with: plain.1))
-    return linedMemo.carried(value: typed.0, markers: typed.1, blocks: 3, candidates: linedCandidates(typed.0, typed.1))
-        .map(\.found)
+/// Builds a field before and after an edit, carried and walked; nil when they differ.
+func carriedEdit(
+    _ before: (value: String, raw: String, spec: String), _ after: (value: String, raw: String, spec: String),
+    carets: (Int, Int) = (0, 0), proseMirror: Bool = true, linear: Bool = true
+) -> [Discovery.Rewalk]? {
+    let old = treeBuild(before.value, before.raw, fakeTree(before.spec, linear: linear), caret: carets.0, proseMirror: proseMirror)
+    let tree = fakeTree(after.spec, linear: linear)
+    let carried = treeBuild(after.value, after.raw, tree, memo: old.memo, unreachable: old.unreachable, caret: carets.1,
+                            proseMirror: proseMirror)
+    let walked = treeBuild(after.value, after.raw, tree, caret: carets.1, proseMirror: proseMirror)
+    guard carried.snapshot == walked.snapshot, carried.memo?.found == walked.memo?.found,
+          carried.memo?.exhausted == walked.memo?.exhausted, carried.unreachable?.found == walked.unreachable?.found
+    else { return nil }
+    return carried.walks
 }
-let linedChip = UnreachableLines.Chip(range: 11..<17, paragraph: 6..<23)
-precondition(lined(("Intro\n", "Introx\n"), ("Intro", "Introx")) == .success(UnreachableLines.Found(
-    markers: [6], chips: [.init(range: 12..<18, paragraph: 7..<23)], joins: [23], controls: [23..<26]
-)), "text on the line before a marker is before it")
-precondition(lined(("Item \n", "Item x\n"), ("Item \u{2060}", "Item x\u{2060}")).map { $0?.chips }
-             == .success([.init(range: 12..<18, paragraph: 6..<23)])
-             && lined(("CHIP\n tail", "CHIP\nx tail"), ("CHIP tail", "CHIPx tail")).map { $0?.chips } == .success([linedChip]),
-             "a chip moves with text on the line before it and keeps text on the line after it")
-precondition(lined((" tail\nCtl", " tailx\nCtl"), (" tailCtl", " tailxCtl")) == .success(UnreachableLines.Found(
-    markers: [5], chips: [linedChip], joins: [23], controls: [23..<26]
-)), "a paragraph ending before a code block takes the text, and the block moves")
-precondition(lined(("Ctl\n\ncode", "Ctl\n\nxcode"), ("Ctlcode", "Ctlxcode")).map { $0?.controls } == .success([22..<25]),
-             "code typed after the label")
-for (value, plain, why) in [(("CHIP\n tail", "CHIPx\n tail"), ("CHIP tail", "CHIPx tail"), Discovery.Rewalk.boundary),
-                            ((" tail\nCtl", " tail\nxCtl"), (" tailCtl", " tailxCtl"), .boundary),
-                            (("Ctl\n\ncode", "Ctlx\n\ncode"), ("Ctlcode", "Ctlxcode"), .boundary),
-                            (("CHIP\n", "CHxIP\n"), ("CHIP tail", "CHxIP tail"), .boundary),
-                            (("\u{2022}\nItem", "\u{2022}x\nItem"), ("\u{2022}Item", "\u{2022}xItem"), .candidates),
-                            (("Ctl\n\ncode", "Cxtl\n\ncode"), ("Ctlcode", "Cxtlcode"), .boundary)] {
-    precondition(lined(value, plain) == .failure(why), "\(value.1.debugDescription): a label the page changed walks")
+func edited(_ value: String, _ raw: String, _ spec: String, _ path: String, _ from: String, _ to: String)
+    -> (value: String, raw: String, spec: String) {
+    (value.replacing(from, with: to, maxReplacements: 1), raw.replacing(from, with: to, maxReplacements: 1),
+     typed(spec, to.utf16.count - from.utf16.count, into: path))
 }
-let objectiveC = UnreachableLines.Memo(value: "Before\nC\nabc\nAfter", markers: "BeforeCabcAfter", blocks: 3, roots: 17,
-                                       found: UnreachableLines.Found(markers: [], chips: [], controls: [6..<7]))
-precondition(objectiveC.carried(value: "Before\nObjective-C\nabc\nAfter", markers: "BeforeObjective-CabcAfter", blocks: 3, roots: 17,
-                                candidates: objectiveC.candidates)
-             == .failure(.boundary), "LIN-1874 round 1: a code label becoming Objective-C")
-let linedTyped = (linedValue.replacing("Intro\n", with: "Introx\n"), linedPlain.replacing("Intro", with: "Introx"))
-let linedUncounted = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: nil, found: linedMemo.found)
-let linedNow = linedCandidates(linedTyped.0, linedTyped.1)
-precondition(linedUncounted.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil, candidates: linedNow) == .failure(.blocks)
-             && linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: 3, proseMirror: true, candidates: linedNow)
-             == .failure(.roots),
-             "a count unread both times, or a ProseMirror field's roots unread both times, prove nothing unchanged")
+for (name, value, raw, spec, path, from, to) in [
+    ("the end of a list item, where the next marker starts", dia1Value, dia1Raw, dia1Spec, "1.0.1.0", "Numbered one",
+     "Numbered onexy"),
+    ("a list marker the page renumbers", dia1Value, dia1Raw, dia1Spec, "9.1.0.0", "10.", "100."),
+    ("before a chip", dia7Value, dia7Raw, dia7Spec, "1.0", "Two chips ", "Two chips xy"),
+    ("where a chip's paragraph starts", dia7Value, dia7Raw, dia7Spec, "1.0", "Two chips ", "xyTwo chips "),
+    ("after a chip", dia7Value, dia7Raw, dia7Spec, "1.4", " end.", "xy end."),
+    ("in a paragraph with chips", dia7Value, dia7Raw, dia7Spec, "1.4", " end.", " exynd."),
+    ("a chip's title the page changes", dia7Value, dia7Raw, dia7Spec, "1.1.0.4", "LIN-1645 Why", "LIN-1645 xWhy"),
+] {
+    let after = edited(value, raw, spec, path, from, to)
+    precondition(after.value != value && after.raw != raw, name)
+    precondition(carriedEdit((value, raw, spec), after) == [], "\(name): the walk replayed builds what a walk does")
+}
+// A code block's label Linear changes as you type, at its start, its end and inside it.
+let codeLabel = (value: "Before\nC\nabc\nAfter", raw: "BeforeCabcAfter",
+                 spec: "0/G/0/6 0.0/T/0/6 1/B/6/10 1.0/N/6/7 1.1/D/7/10 1.1.0/T/7/10 2/G/10/15 2.0/T/10/15")
+let objectiveC = (value: "Before\nObjective-C\nabc\nAfter", raw: "BeforeObjective-CabcAfter", spec: typed(codeLabel.spec, 10, into: "1.0"))
+let cssLabel = (value: "Before\nCSS\nabc\nAfter", raw: "BeforeCSSabcAfter", spec: typed(codeLabel.spec, 2, into: "1.0"))
+precondition(carriedEdit(codeLabel, objectiveC) == [] && carriedEdit(codeLabel, cssLabel) == [],
+             "LIN-1874 round 1: a code label becoming Objective-C or CSS")
+// LIN-1874 round 3: a line the walk did not confirm, a chip over two lines, becomes one when the page deletes the second.
+let splitChip = (value: "Top\n\u{2060}\u{00A0}A\nB\nEnd", raw: "Top\u{2060}\u{00A0}ABEnd",
+                 spec: "0/G/0/3 0.0/T/0/3 1/G/3/7 1.0/A/3/7 1.0.0/K/3/7 1.0.0.0/T/3/6 1.0.0.1/T/6/7 2/G/7/10 2.0/T/7/10")
+let splitObject = (value: "Top\n\u{2060}\u{00A0}A\nB\n\u{2022} Other", raw: "Top\u{2060}\u{00A0}AB\u{FFFC}\u{2022} Other",
+                   spec: "0/G/0/3 0.0/T/0/3 1/G/3/7 1.0/A/3/7 1.0.0/G/3/6 1.0.0.0/T/3/6 1.0.1/G/6/7 1.0.1.0/T/6/7 "
+                       + "1.0.1.1/I/7/7 2/L/7/14 2.0/G/7/14 2.0.0/M/7/9 2.0.1/T/9/14")
+precondition(unreachableScanned(fakeTree(splitChip.spec), linedCandidates(splitChip.value, splitChip.raw))?.chips == [])
+// With an object left on the emptied line, that line is a caret's no walk read, so it walks.
+for (field, path, walks) in [(splitChip, "1.0.0.1", [Discovery.Rewalk]()), (splitObject, "1.0.1.0", [.unread])] {
+    let after = (field.value.replacing("A\nB\n", with: "A\n\n"), field.raw.replacing("AB", with: "A"), typed(field.spec, -1, into: path))
+    precondition(carriedEdit(field, after) == walks, "\(after.0.debugDescription): the chip is confirmed")
+}
+// And a caret the selection makes a candidate where an object already was: the walk never read there, so it walks.
+let caretTail = (value: "ab\nnext", raw: "ab\u{FFFC}\nnext", spec: "0/G/0/3 0.0/D/0/2 0.0.0/T/0/2 0.1/E/2/3 1/G/3/7 1.0/T/3/7")
+precondition(carriedEdit(caretTail, ("a\nnext", "a\u{FFFC}\nnext", typed(caretTail.spec, -1, into: "0.0.0")), carets: (0, 1))
+             == [.unread])
+
 // Chromium's own list: the page makes a paragraph an item with one run of marker text and no new block.
-let nativeValue = "Top\n\u{2022} First\nMiddle\nPlain"
-let nativePlain = "Top\u{2022} FirstMiddlePlain"
-let nativeMemo = UnreachableLines.Memo(value: nativeValue, markers: nativePlain, blocks: 4,
-                                       found: UnreachableLines.Found(markers: [3], chips: []),
-                                       candidates: linedCandidates(nativeValue, nativePlain))
+let native = (value: "Top\n\u{2022} First\nMiddle\nPlain", raw: "Top\u{2022} FirstMiddlePlain",
+              spec: "0/G/0/3 0.0/T/0/3 1/L/3/10 1.0/G/3/10 1.0.0/M/3/5 1.0.1/T/5/10 2/G/10/16 2.0/T/10/16 3/G/16/21 3.0/T/16/21")
+let nativeMemo = unreachableWalk(native.value, native.raw, fakeTree(native.spec, linear: false),
+                                 linedCandidates(native.value, native.raw), roots: nil)
+precondition(nativeMemo.found?.markers == [3])
 for (name, value, plain) in [("listed", "Top\n\u{2022} First\nMiddle\n\u{2022} Plain", "Top\u{2022} FirstMiddle\u{2022} Plain"),
                              ("typed like one", "Top\n\u{2022} First\nMi. ddle\nPlain", "Top\u{2022} FirstMi. ddlePlain")] {
     precondition(nativeMemo.carried(value: value, markers: plain, blocks: 4, candidates: linedCandidates(value, plain))
                  == .failure(.candidates), "a paragraph \(name) gives a walk a line the last one never checked")
 }
-let typedNumber = UnreachableLines.Memo(value: "Top\n1. Buy", markers: "Top1. Buy", blocks: 2,
-                                        found: UnreachableLines.Found(markers: [], chips: []),
-                                        candidates: linedCandidates("Top\n1. Buy", "Top1. Buy"))
-precondition(typedNumber.carried(value: "Top\n\u{2022} 1. Buy", markers: "Top\u{2022} 1. Buy", blocks: 2,
-                                 candidates: linedCandidates("Top\n\u{2022} 1. Buy", "Top\u{2022} 1. Buy")) == .failure(.candidates),
-             "and a line that already looked like an item, listed, is one line with another marker")
-precondition(try! nativeMemo.carried(value: "Topx\n\u{2022} First\nMiddle\nPlain", markers: "Topx\u{2022} FirstMiddlePlain", blocks: 4,
-                                     candidates: linedCandidates("Topx\n\u{2022} First\nMiddle\nPlain", "Topx\u{2022} FirstMiddlePlain"))
-             .get().found?.markers == [4], "typing before the list still carries")
+let typedNumber = unreachableWalk("Top\n1. Buy", "Top1. Buy", fakeTree("0/G/0/3 0.0/T/0/3 1/G/3/9 1.0/T/3/9", linear: false),
+                                  linedCandidates("Top\n1. Buy", "Top1. Buy"), roots: nil)
+precondition(typedNumber.found?.markers == [] && typedNumber.carried(
+    value: "Top\n\u{2022} 1. Buy", markers: "Top\u{2022} 1. Buy", blocks: 2,
+    candidates: linedCandidates("Top\n\u{2022} 1. Buy", "Top\u{2022} 1. Buy")
+) == .failure(.candidates), "and a line that already looked like an item, listed, is one line with another marker")
+precondition(carriedEdit(native, edited(native.value, native.raw, native.spec, "0.0", "Top", "Topx"), proseMirror: false,
+                         linear: false) == [], "typing before the list still carries")
+let nativeTyped = (value: native.value.replacing("Top", with: "Topx"), raw: native.raw.replacing("Top", with: "Topx"))
+precondition(nativeMemo.carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: 4, proseMirror: true,
+                                candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.roots)
+             && UnreachableLines.Memo(value: native.value, markers: native.raw, blocks: nil, found: nativeMemo.found)
+                 .carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: nil,
+                          candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.blocks),
+             "a count unread both times, or a ProseMirror field's roots unread both times, prove nothing unchanged")
+precondition(UnreachableLines.Memo(value: native.value, markers: native.raw, blocks: 4, found: nativeMemo.found)
+                 .carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: 4,
+                          candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.unread),
+             "a result whose reads were not kept, the Sim's, walks")
+let nativeMiscounted = UnreachableLines.Memo(value: native.value, markers: native.raw, blocks: 5, found: nativeMemo.found,
+                                             candidates: nativeMemo.candidates, reads: nativeMemo.reads)
+precondition(nativeMiscounted.carried(value: nativeTyped.value, markers: nativeTyped.raw, blocks: 5,
+                                      candidates: linedCandidates(nativeTyped.value, nativeTyped.raw)) == .failure(.unread),
+             "reads of a tree with other root blocks than the count")
 
-// Chrome 153's blank line: typing elsewhere shifts it, and anything else walks again.
-let blankMemo = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: [43])
+// Chrome 153's blank line: typing elsewhere replays the walk, and anything else walks again.
+func blankTree(_ paragraphs: [String]) -> [FakeNode] {
+    var at = 0
+    return paragraphs.map { text in
+        defer { at += max(text.utf16.count, 1) }
+        return text.isEmpty ? blank(at) : paragraph(at, at + text.utf16.count)
+    }
+}
+let blankMemo = emptyWalk(blankValue, blankMarkers, blankTree(blankParagraphs))
 func blankCarried(
     _ edit: (inout [String]) -> Void, memo: EmptyParagraphs.Memo = blankMemo
 ) -> Result<EmptyParagraphs.Memo, Discovery.Rewalk> {
     var paragraphs = blankParagraphs
     edit(&paragraphs)
     let shown = EmptyParagraphs.chromium(paragraphs)
-    return memo.carried(value: shown.value, markers: shown.markers, blocks: paragraphs.count)
+    let carried = memo.carried(value: shown.value, markers: shown.markers, blocks: paragraphs.count)
+    if case .success(let kept) = carried {
+        let walked = emptyWalk(shown.value, shown.markers, blankTree(paragraphs), budget: memo.reads?.budget ?? 0)
+        precondition(kept.found == walked.found && kept.exhausted == walked.exhausted, "\(paragraphs)")
+    }
+    return carried
 }
-precondition(blankCarried { _ in } == .success(blankMemo))
+precondition(blankMemo.found == [43] && blankCarried { _ in } == .success(blankMemo))
 let blankShifted = try! blankCarried { $0[0] = "Headingxy one" }.get()
 precondition(blankShifted.found == [45] && blankCarried { $0[3] = "Second" }.map(\.found) == .success([43]))
 precondition(blankShifted.origin == .shifted(Discovery.Run(from: blankMarkers, to: "Headingxy one" + blankMarkers.dropFirst(11))!))
@@ -5043,132 +5159,24 @@ precondition(EmptyParagraphs.Memo(value: "ab\nc", markers: "ab\nc", blocks: nil,
              .carried(value: "axb\nc", markers: "axb\nc", blocks: nil) == .failure(.blocks))
 let failedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil)
 precondition(blankCarried({ $0[0] = "Headingxy one" }, memo: failedBlank) == .failure(.failed), "a failed read is read again")
-let exhaustedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil,
-                                          exhausted: true)
-precondition(try! blankCarried({ $0[0] = "Headingxy one" }, memo: exhaustedBlank).get().exhausted,
-             "a walk past its budget is not")
+for budget in [3, 8] {
+    let exhausted = emptyWalk(blankValue, blankMarkers, blankTree(blankParagraphs), budget: budget)
+    precondition(exhausted.found == nil && exhausted.exhausted, "\(budget)")
+    precondition(try! blankCarried({ $0[0] = "Headingxy one" }, memo: exhausted).get().exhausted,
+                 "a walk past its budget, replayed, runs out again: \(budget)")
+}
 let blankTypedMarkers = EmptyParagraphs.chromium(blankParagraphs.dropLast() + ["Last paragraph herexy."]).markers
 precondition(blankMemo.carried(value: blankValue + "y", markers: blankTypedMarkers, blocks: blankParagraphs.count)
              == .failure(.value))
 
-/// `spec` with `count` units typed into the text node at `path`: it and its ancestors grow, and every node after it moves.
-func typed(_ spec: String, _ count: Int, into path: String) -> String {
-    let tokens = spec.split(whereSeparator: { $0 == " " || $0 == "\n" }).map { $0.split(separator: "/").map(String.init) }
-    let target = tokens.firstIndex { $0[0] == path }!
-    return tokens.enumerated().map { index, token in
-        let start = Int(token[2])!
-        let end = Int(token[3])!
-        if index == target || path.hasPrefix(token[0] + ".") { return [token[0], token[1], token[2], String(end + count)] }
-        return index > target ? [token[0], token[1], String(start + count), String(end + count)] : token
-    }.map { $0.joined(separator: "/") }.joined(separator: " ")
-}
-/// A Linear build over a fake tree, walking it where a memo does not carry; `walks` says why each walk ran.
-func treeBuild(
-    _ value: String, _ raw: String, _ tree: [FakeNode], memo known: EmptyParagraphs.Memo? = nil,
-    unreachable knownUnreachable: UnreachableLines.Memo? = nil
-) -> (snapshot: FieldSnapshot, memo: EmptyParagraphs.Memo?, unreachable: UnreachableLines.Memo?, walks: [Discovery.Rewalk]) {
-    let plain = MarkerText.plain(raw)
-    let aligned = ParagraphBreaks(value: value, fieldText: plain)!
-    var reads = FieldSnapshot.Reads(
-        field: FieldReads(text: value, plain: 0..<0, markers: MarkerReads(breaks: aligned, value: 0..<0)),
-        length: value.utf16.count, webContent: true, blocks: tree.count, marked: 0..<0, markerText: raw
-    )
-    reads.proseMirror = true
-    reads.roots = tree.count
-    var memo = known
-    var unreachable = knownUnreachable
-    var walks: [Discovery.Rewalk] = []
-    let built = FieldSnapshot.Step.run(taking: { need in
-        switch need {
-        case .side(let end): reads.sides.updateValue(.start(skipping: 0), forKey: end)
-        case .emptyParagraph: reads.inEmptyParagraph = false
-        case .emptyParagraphs(let value, let raw, let why):
-            walks.append(why)
-            memo = EmptyParagraphs.Memo(value: value, markers: raw, blocks: tree.count, found: scanned(tree, plain),
-                                        origin: .walked(why))
-        case .unreachable(let value, let raw, let candidates, let why):
-            walks.append(why)
-            unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: tree.count, roots: reads.roots,
-                                                found: unreachableScanned(tree, candidates), candidates: candidates,
-                                                origin: .walked(why))
-        }
-    }) {
-        FieldSnapshot.build(reads, capabilities: keyProfile, answer: .textContent, anchor: nil, cursor: nil, memo: memo,
-                            unreachable: unreachable)
-    }
-    return (built.snapshot, built.memo, built.unreachable, walks)
-}
-for (name, value, raw, spec, node, from, to) in [
-    ("the end of a list item, where the next marker starts", dia1Value, dia1Raw, dia1Spec, "1.0.1.0", "Numbered one",
-     "Numbered onexy"),
-    ("before a chip", dia7Value, dia7Raw, dia7Spec, "1.0", "Two chips ", "Two chips xy"),
-    ("after a chip", dia7Value, dia7Raw, dia7Spec, "1.4", " end.", "xy end."),
-    ("in a paragraph with chips", dia7Value, dia7Raw, dia7Spec, "1.4", " end.", " exynd."),
-] {
-    let before = treeBuild(value, raw, fakeTree(spec))
-    precondition(before.walks == [.first, .first], name)
-    let tree = fakeTree(typed(spec, 2, into: node))
-    let typedValue = value.replacing(from, with: to)
-    let typedRaw = raw.replacing(from, with: to)
-    precondition(typedValue.utf16.count == value.utf16.count + 2 && typedRaw.utf16.count == raw.utf16.count + 2, name)
-    let shifted = treeBuild(typedValue, typedRaw, tree, memo: before.memo, unreachable: before.unreachable)
-    let walked = treeBuild(typedValue, typedRaw, tree)
-    precondition(shifted.walks == [] && shifted.snapshot == walked.snapshot,
-                 "typed \(name): the shifted results build what a walk does")
-    precondition(shifted.memo?.found == walked.memo?.found && shifted.unreachable?.found == walked.unreachable?.found, name)
-    if case .shifted = shifted.unreachable?.origin {} else { preconditionFailure(name) }
-}
-let dia7Before = treeBuild(dia7Value, dia7Raw, dia7Tree)
-let dia7AtStart = treeBuild(dia7Value.replacing("\nTwo chips ", with: "\nxyTwo chips "),
-                            dia7Raw.replacing(".Two chips ", with: ".xyTwo chips "), fakeTree(typed(dia7Spec, 2, into: "1.0")),
-                            memo: dia7Before.memo, unreachable: dia7Before.unreachable)
-precondition(dia7AtStart.walks == [.boundary] && dia7AtStart.unreachable?.origin == .walked(.boundary),
-             "where a chip's paragraph starts, the text may be the paragraph before's, so it walks as before")
 // Enter in a list adds an item but no root block, and the marker text gains only "•z": AXValue's new lines refuse it.
+let dia7Before = treeBuild(dia7Value, dia7Raw, dia7Tree)
 let newItemRaw = dia7Raw.replacing("Plain itemClosing", with: "Plain item\u{2022}zClosing")
 let newItemValue = dia7Value.replacing("Plain item\nClosing", with: "Plain item\n\u{2022}\nz\nClosing")
 precondition(Discovery.Run(from: dia7Raw, to: newItemRaw)?.inserted == 2
              && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count, roots: dia7Tree.count,
                                                 candidates: dia7Before.unreachable!.candidates) == .failure(.value)
              && dia7Before.memo?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value))
-
-// A Linear session, typing at each line's end then ⌃[: s shifts, b e n walk for a boundary, an edit, the blocks.
-let linearCarried = ["xy": "ssssbbsesseesesseebes", "<BS>": "sssssssessensessneses"]
-for line in 0..<linearDoc.count {
-    for (typing, profile) in [(["x", "y"], keyProfile), (["x", "y"], writeKeys), (["<BS>"], keyProfile)] {
-        var linear = linearSim(profile)
-        var plain = Sim(text: linear.text, caret: 0, profile: profile)
-        plain.emulatesKeys = true
-        let keys = "jgg" + (line > 0 ? "\(line)j" : "") + "A"
-        linear.type(keys)
-        plain.type(keys)
-        for token in typing + ["<C-[>"] {
-            linear.feed(token)
-            plain.feed(token)
-        }
-        let expected = ["s": "shifted", "b": "walked=boundary", "e": "walked=edit", "n": "walked=blocks"][
-            String(Array(linearCarried[typing.joined()]!)[line])
-        ]!
-        precondition(linear.discoveries.unreachable?.traceField.hasPrefix(expected) == true,
-                     "line \(line): \(linear.discoveries)")
-        for key in "jjjjkkkkkkjj" {
-            linear.type(String(key))
-            plain.type(String(key))
-            precondition(linear.caret == plain.caret && linear.text == plain.text, "line \(line) at \(key)")
-        }
-        precondition(linear.settleFailures == 0 && linear.bells == 0, "line \(line)")
-    }
-}
-var blankTyping = blankSim(e78Paragraphs, caret: 3)
-blankTyping.type("axy")
-blankTyping.feed("<C-[>")
-guard case .shifted? = blankTyping.discoveries.emptyParagraphs else { preconditionFailure("\(blankTyping.discoveries)") }
-blankTyping.type("jjj")
-precondition(blankTyping.caret == 215 && blankTyping.settleFailures == 0, "j still lands in the blank line")
-blankTyping.type("A")
-blankTyping.feed("<CR>")
-blankTyping.feed("<C-[>")
-precondition(blankTyping.discoveries.emptyParagraphs == .walked(.blocks), "a new paragraph walks again")
 
 precondition(ChromiumParagraphs(text: "a \u{2060} b\nc \u{2060}\n\u{2060} d", lines: [Sim.ListLine(), Sim.ListLine(), Sim.ListLine()]).shown
              == ("a \n\u{2060}\u{00A0}LIN-1 chip\n b\nc \n\u{2060}\u{00A0}LIN-1 chip\n\u{2060}\u{00A0}LIN-1 chip\n d",
