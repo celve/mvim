@@ -4,12 +4,12 @@ import Core
 /// `EmptyBlockScan` over a Chromium field's accessibility tree, for `EmptyParagraphs.restore` (LIN-1612).
 enum EmptyParagraphDiscovery {
     /// Plain offsets in `markers` of the `<br>`s of line-starting empty blocks; nil on a failed read or past `budget` reads.
-    static func found(in element: AXUIElement, markers: String, budget: Int) -> (found: [Int], reads: Int)? {
+    static func found(in element: AXUIElement, markers: String, budget: Int) -> (found: [Int]?, exhausted: Bool) {
         let plain = Array(markers.utf16).filter { $0 != 0xFFFC }
-        guard plain.contains(10) else { return ([], 0) }
-        guard let tree = FieldTree(element, markers: markers) else { return nil }
+        guard plain.contains(10) else { return ([], false) }
+        guard let tree = FieldTree(element, markers: markers) else { return (nil, false) }
         var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, plain: plain).map { ($0, scan.reads + 2) }
+        return (scan.run(blocks: tree.blocks, plain: plain), scan.exhausted)
     }
 }
 
@@ -18,11 +18,11 @@ enum UnreachableDiscovery {
     /// Nil on a failed read or past `budget` reads.
     static func found(
         in element: AXUIElement, markers: String, candidates: UnreachableLines.Candidates, budget: Int
-    ) -> (found: UnreachableLines.Found, reads: Int)? {
-        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), 0) }
-        guard let tree = FieldTree(element, markers: markers) else { return nil }
+    ) -> (found: UnreachableLines.Found?, exhausted: Bool) {
+        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), false) }
+        guard let tree = FieldTree(element, markers: markers) else { return (nil, false) }
         var scan = UnreachableScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, candidates: candidates).map { ($0, scan.reads + 2) }
+        return (scan.run(blocks: tree.blocks, candidates: candidates), scan.exhausted)
     }
 }
 

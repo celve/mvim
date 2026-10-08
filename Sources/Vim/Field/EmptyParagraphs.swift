@@ -8,23 +8,49 @@ public enum EmptyParagraphs {
         public let gap: Int
     }
 
-    /// Discovery's reads for one field text, kept until the text or its blocks change.
+    /// Discovery's reads for one field text, kept until the text or its blocks change, or shifted across typing.
     public struct Memo: Equatable, Sendable {
         public let value: String
         public let markers: String
         public let blocks: Int?
         /// Nil when discovery failed, so the field keeps `AXValue`'s lines.
         public let found: [Int]?
+        /// It failed by running out of reads, as a walk of the same blocks would again.
+        public let exhausted: Bool
+        public let origin: Discovery.Origin
 
-        public init(value: String, markers: String, blocks: Int?, found: [Int]?) {
+        public init(
+            value: String, markers: String, blocks: Int?, found: [Int]?, exhausted: Bool = false,
+            origin: Discovery.Origin = .walked(.first)
+        ) {
             self.value = value
             self.markers = markers
             self.blocks = blocks
             self.found = found
+            self.exhausted = exhausted
+            self.origin = origin
         }
 
         public func holds(value: String, markers: String, blocks: Int?) -> Bool {
             self.value == value && self.markers == markers && self.blocks == blocks
+        }
+
+        /// Itself while it holds, else shifted across the one run typed since, or why discovery walks again.
+        public func carried(value: String, markers: String, blocks: Int?) -> Result<Memo, Discovery.Rewalk> {
+            if holds(value: value, markers: markers, blocks: blocks) { return .success(self) }
+            guard self.blocks == blocks else { return .failure(.blocks) }
+            return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { run in
+                var shifted: [Int]?
+                if let found {
+                    guard let moved = run.shifted(found) else { return .failure(.boundary) }
+                    shifted = moved
+                } else if !exhausted {
+                    return .failure(.failed)
+                }
+                return .success(Memo(
+                    value: value, markers: markers, blocks: blocks, found: shifted, exhausted: exhausted, origin: .shifted(run)
+                ))
+            }
         }
     }
 

@@ -24,6 +24,8 @@ public struct EmptyBlockScan<Node> {
     private let offset: (Node, _ end: Bool) -> Int?
     private let budget: Int
     public private(set) var reads = 0
+    /// The scan failed by running out of reads, not on a read.
+    public private(set) var exhausted = false
 
     public init(budget: Int, block: @escaping (Node) -> Block?, offset: @escaping (Node, _ end: Bool) -> Int?) {
         self.budget = budget
@@ -42,7 +44,10 @@ public struct EmptyBlockScan<Node> {
     public mutating func run(blocks: [Node], plain: [UInt16]) -> [Int]? {
         let candidates = plain.indices.filter { plain[$0] == 10 }
         guard !candidates.isEmpty else { return [] }
-        guard reads + blocks.count <= budget else { return nil }
+        guard reads + blocks.count <= budget else {
+            exhausted = true
+            return nil
+        }
         var found: [Int] = []
         for node in blocks {
             guard spend(1), let read = block(node) else { return nil }
@@ -108,6 +113,7 @@ public struct EmptyBlockScan<Node> {
 
     private mutating func spend(_ count: Int) -> Bool {
         reads += count
-        return reads <= budget
+        exhausted = reads > budget
+        return !exhausted
     }
 }

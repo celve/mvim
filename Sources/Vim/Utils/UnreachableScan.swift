@@ -6,6 +6,8 @@ public struct UnreachableScan<Node> {
     private let offset: (Node, _ end: Bool) -> Int?
     private let budget: Int
     public private(set) var reads = 0
+    /// The scan failed by running out of reads, not on a read.
+    public private(set) var exhausted = false
 
     /// Reads by tree path, so candidates in one list or paragraph share them.
     private var blocks: [[Int]: EmptyBlockScan<Node>.Block] = [:]
@@ -260,6 +262,7 @@ public struct UnreachableScan<Node> {
 
     private mutating func spend(_ count: Int) -> Bool {
         reads += count
-        return reads <= budget
+        exhausted = reads > budget
+        return !exhausted
     }
 }
