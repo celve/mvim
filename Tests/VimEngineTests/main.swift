@@ -4952,26 +4952,45 @@ precondition(repeatedRun.earliest == 3 && repeatedRun.at == 4 && repeatedRun.shi
              && repeatedRun.shifted(3, lands: .before) == nil && repeatedRun.shifted(4, lands: .before) == 5,
              "a B typed beside a B may be on either side of the paragraph starting at 3")
 
-let startsFound = UnreachableLines.Found(markers: [10], chips: [], joins: [10, 30], controls: [30..<34])
-let plainForty = (0..<40).map { String(UnicodeScalar(UInt8(65 + $0 % 26))) }.joined()
-func typedAt(_ offset: Int) -> Discovery.Run {
-    let units = Array(plainForty.utf16)
-    return Discovery.Run(from: plainForty, to: String(decoding: units[..<offset] + [0x23] + units[offset...], as: UTF16.self))!
+// A marker, a chip with text either side, and a code block's label then code, each its own AXValue line.
+let linedPlain = "Intro\u{2022}Item \u{2060}\u{00A0}CHIP tailCtlcode"
+let linedValue = "Intro\n\u{2022}\nItem \n\u{2060}\u{00A0}CHIP\n tail\nCtl\n\ncode"
+let linedMemo = UnreachableLines.Memo(value: linedValue, markers: linedPlain, blocks: 3, found: UnreachableLines.Found(
+    markers: [5], chips: [.init(range: 11..<17, paragraph: 6..<22)], joins: [22], controls: [22..<25]
+))
+func lined(_ value: (String, String), _ plain: (String, String)) -> Result<UnreachableLines.Found?, Discovery.Rewalk> {
+    linedMemo.carried(value: linedValue.replacing(value.0, with: value.1), markers: linedPlain.replacing(plain.0, with: plain.1),
+                      blocks: 3).map(\.found)
 }
-precondition(startsFound.shifted(across: typedAt(10)) == UnreachableLines.Found(
-    markers: [11], chips: [], joins: [11, 31], controls: [31..<35]
-), "text typed where a list or a code block starts is before it")
-precondition(startsFound.shifted(across: typedAt(34))?.controls == [30..<34], "and where a code block's label ends, after it")
-precondition(UnreachableLines.Found(markers: [], chips: [], joins: [10]).shifted(across: typedAt(10)) == nil,
-             "a quote may take it")
-let chipFound = UnreachableLines.Found(markers: [20], chips: [.init(range: 5..<12, paragraph: 0..<20)])
-precondition(chipFound.shifted(across: typedAt(5))?.chips == [.init(range: 6..<13, paragraph: 0..<21)]
-             && chipFound.shifted(across: typedAt(12))?.chips == [.init(range: 5..<12, paragraph: 0..<21)],
-             "a chip moves with text typed before it and keeps text typed after it")
-precondition(chipFound.shifted(across: typedAt(20))?.chips == [.init(range: 5..<12, paragraph: 0..<21)],
-             "a paragraph ending where a list item starts takes the text")
-precondition(chipFound.shifted(across: typedAt(0)) == nil
-             && UnreachableLines.Found(markers: [], chips: chipFound.chips).shifted(across: typedAt(20)) == nil)
+let linedChip = UnreachableLines.Chip(range: 11..<17, paragraph: 6..<23)
+precondition(lined(("Intro\n", "Introx\n"), ("Intro", "Introx")) == .success(UnreachableLines.Found(
+    markers: [6], chips: [.init(range: 12..<18, paragraph: 7..<23)], joins: [23], controls: [23..<26]
+)), "text on the line before a marker is before it")
+precondition(lined(("Item \n", "Item x\n"), ("Item \u{2060}", "Item x\u{2060}")).map { $0?.chips }
+             == .success([.init(range: 12..<18, paragraph: 6..<23)])
+             && lined(("CHIP\n tail", "CHIP\nx tail"), ("CHIP tail", "CHIPx tail")).map { $0?.chips } == .success([linedChip]),
+             "a chip moves with text on the line before it and keeps text on the line after it")
+precondition(lined((" tail\nCtl", " tailx\nCtl"), (" tailCtl", " tailxCtl")) == .success(UnreachableLines.Found(
+    markers: [5], chips: [linedChip], joins: [23], controls: [23..<26]
+)), "a paragraph ending before a code block takes the text, and the block moves")
+precondition(lined(("Ctl\n\ncode", "Ctl\n\nxcode"), ("Ctlcode", "Ctlxcode")).map { $0?.controls } == .success([22..<25]),
+             "code typed after the label")
+for (value, plain) in [(("CHIP\n tail", "CHIPx\n tail"), ("CHIP tail", "CHIPx tail")),
+                       ((" tail\nCtl", " tail\nxCtl"), (" tailCtl", " tailxCtl")),
+                       (("Ctl\n\ncode", "Ctlx\n\ncode"), ("Ctlcode", "Ctlxcode")),
+                       (("CHIP\n", "CHxIP\n"), ("CHIP tail", "CHxIP tail")),
+                       (("\u{2022}\nItem", "\u{2022}x\nItem"), ("\u{2022}Item", "\u{2022}xItem")),
+                       (("Ctl\n\ncode", "Cxtl\n\ncode"), ("Ctlcode", "Cxtlcode"))] {
+    precondition(lined(value, plain) == .failure(.boundary), "\(value.1.debugDescription): a label the page changed walks")
+}
+let objectiveC = UnreachableLines.Memo(value: "Before\nC\nabc\nAfter", markers: "BeforeCabcAfter", blocks: 3, roots: 17,
+                                       found: UnreachableLines.Found(markers: [], chips: [], controls: [6..<7]))
+precondition(objectiveC.carried(value: "Before\nObjective-C\nabc\nAfter", markers: "BeforeObjective-CabcAfter", blocks: 3, roots: 17)
+             == .failure(.boundary), "LIN-1874 round 1: a code label becoming Objective-C")
+let linedTyped = (linedValue.replacing("Intro\n", with: "Introx\n"), linedPlain.replacing("Intro", with: "Introx"))
+precondition(linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: nil) == .failure(.blocks)
+             && linedMemo.carried(value: linedTyped.0, markers: linedTyped.1, blocks: 3, proseMirror: true) == .failure(.roots),
+             "an unread count or a ProseMirror field's unread roots prove nothing unchanged")
 
 // Chrome 153's blank line: typing elsewhere shifts it, and anything else walks again.
 let blankMemo = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: [43])
@@ -4991,6 +5010,7 @@ precondition(blankCarried { $0[1] += "x" } == .failure(.boundary), "typed where 
 precondition(blankCarried { $0[2] = "x" } == .failure(.edit) && blankCarried { $0[0] = "Hx"; $0[6] = "Ly" } == .failure(.edit),
              "typed in the blank line, or in two places")
 precondition(blankCarried { $0.insert("New", at: 1) } == .failure(.blocks))
+precondition(blankMemo.carried(value: blankValue + "x", markers: blankMarkers + "x", blocks: nil) == .failure(.blocks))
 let failedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil)
 precondition(blankCarried({ $0[0] = "Headingxy one" }, memo: failedBlank) == .failure(.failed), "a failed read is read again")
 let exhaustedBlank = EmptyParagraphs.Memo(value: blankValue, markers: blankMarkers, blocks: blankParagraphs.count, found: nil,
@@ -5024,6 +5044,7 @@ func treeBuild(
         length: value.utf16.count, webContent: true, blocks: tree.count, marked: 0..<0, markerText: raw
     )
     reads.proseMirror = true
+    reads.roots = tree.count
     var memo = known
     var unreachable = knownUnreachable
     var walks: [Discovery.Rewalk] = []
@@ -5037,7 +5058,7 @@ func treeBuild(
                                         origin: .walked(why))
         case .unreachable(let value, let raw, let candidates, let why):
             walks.append(why)
-            unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: tree.count,
+            unreachable = UnreachableLines.Memo(value: value, markers: raw, blocks: tree.count, roots: reads.roots,
                                                 found: unreachableScanned(tree, candidates), origin: .walked(why))
         }
     }) {
@@ -5076,7 +5097,8 @@ precondition(dia7AtStart.walks == [.boundary] && dia7AtStart.unreachable?.origin
 let newItemRaw = dia7Raw.replacing("Plain itemClosing", with: "Plain item\u{2022}zClosing")
 let newItemValue = dia7Value.replacing("Plain item\nClosing", with: "Plain item\n\u{2022}\nz\nClosing")
 precondition(Discovery.Run(from: dia7Raw, to: newItemRaw)?.inserted == 2
-             && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value)
+             && dia7Before.unreachable?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count, roots: dia7Tree.count)
+             == .failure(.value)
              && dia7Before.memo?.carried(value: newItemValue, markers: newItemRaw, blocks: dia7Tree.count) == .failure(.value))
 
 // A Linear session, typing at each line's end then ⌃[: s shifts, b e n walk for a boundary, an edit, the blocks.

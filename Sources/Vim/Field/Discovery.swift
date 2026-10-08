@@ -8,11 +8,9 @@ public enum Discovery {
         public let inserted: Int
         public let removed: Int
 
-        /// Where text typed at an offset goes, by what starts or ends there.
+        /// Where text that went in at an offset lies against what starts or ends there.
         public enum Lands: Equatable, Sendable {
-            /// Before it: the start of a list marker, a chip or a code block's controls, which typing cannot enter.
             case before
-            /// After it: the end of a chip or of a code block's label, which typing cannot enter either.
             case after
             case either
         }
@@ -100,12 +98,61 @@ public enum Discovery {
         }
     }
 
-    /// The run typed between a result's texts and the field's, the same length in both.
-    static func run(markers old: String, value oldValue: String, to markers: String, value: String) -> Result<Run, Rewalk> {
+    /// The run typed between a result's texts and the field's, and the same run in `AXValue`'s own offsets.
+    static func run(
+        markers old: String, value oldValue: String, to markers: String, value: String
+    ) -> Result<(run: Run, shown: Run), Rewalk> {
         guard let run = Run(from: old, to: markers) else { return .failure(.edit) }
         guard let shown = Run(from: oldValue, to: value), shown.inserted == run.inserted, shown.removed == run.removed else {
             return .failure(.value)
         }
-        return .success(run)
+        return .success((run, shown))
+    }
+
+    /// The `AXValue` a run went into, which shows each list marker, chip and code label on a line of its own.
+    struct Lines {
+        let value: [UInt16]
+        let breaks: ParagraphBreaks
+        let shown: Run
+
+        init?(value: String, markers: String, shown: Run) {
+            guard let breaks = ParagraphBreaks(value: value, fieldText: FieldReads.withoutAttachments(markers)) else { return nil }
+            self.value = Array(value.utf16)
+            self.breaks = breaks
+            self.shown = shown
+        }
+
+        /// A line break lies between the run and the text starting at plain `start`, so the run is not that text's.
+        func parted(before start: Int) -> Bool {
+            let first = min(breaks.valueOffsets(start).upperBound, value.count)
+            return shown.removed == 0 && shown.at <= first && value[shown.at..<first].contains(10)
+        }
+
+        /// A line break lies between the text ending at plain `end` and the run.
+        func parted(after end: Int) -> Bool {
+            guard end > 0 else { return false }
+            let next = breaks.valueOffsets(end - 1).upperBound + 1
+            return next <= shown.earliest && value[next..<shown.earliest].contains(10)
+        }
+
+        /// The plain extent of the list marker starting at `start`: its whole line, or the prefix before its item's text.
+        func marker(at start: Int) -> Range<Int>? {
+            let first = breaks.valueOffsets(start).upperBound
+            guard first <= value.count else { return nil }
+            let line = Array(value[first...].prefix { $0 != 10 })
+            let length = UnreachableLines.isMarkerShaped(line) ? line.count : UnreachableLines.prefixLength(line)
+            return length.map { start..<(start + $0) }
+        }
+
+        /// The run stays off `item`'s own text, or meets it only at an edge a line break parts it from.
+        func clear(of item: Range<Int>, _ run: Run) -> Bool {
+            guard run.removed == 0 else { return run.earliest >= item.upperBound || run.at + run.removed <= item.lowerBound }
+            let first = max(run.earliest, item.lowerBound)
+            let last = min(run.at, item.upperBound)
+            guard first <= last else { return true }
+            guard first == last else { return false }
+            if first == item.lowerBound { return parted(before: first) }
+            return first == item.upperBound && parted(after: first)
+        }
     }
 }

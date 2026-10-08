@@ -96,26 +96,32 @@ public enum UnreachableLines {
         }
 
         /// These after `run`, or nil where one cannot tell which side of it a result is on.
-        func shifted(across run: Discovery.Run) -> Found? {
+        func shifted(across run: Discovery.Run, lines: Discovery.Lines) -> Found? {
+            // The page can change a marker's, chip's or code label's own text, which may unmake it, so the run must stay off them.
+            let items = markers.map { lines.marker(at: $0) } + chips.map { Optional($0.range) } + controls.map { Optional($0) }
+            guard items.allSatisfy({ $0.map { lines.clear(of: $0, run) } ?? false }) else { return nil }
+            // AXValue gives each marker, chip and code label its own line, so only a break proves the run outside one.
+            func start(_ x: Int) -> Discovery.Run.Lands { x == run.at && lines.parted(before: x) ? .before : .either }
+            func end(_ x: Int) -> Discovery.Run.Lands { x == run.earliest && lines.parted(after: x) ? .after : .either }
             let blockStarts = Set(markers + controls.map(\.lowerBound))
-            // Text typed where a list or a code block starts can only be the end of the paragraph before it.
-            let closes = run.removed == 0 && blockStarts.contains(run.at)
+            // Text before a list or a code block, on its own line, can only be the end of the paragraph before it.
+            let closes = run.removed == 0 && blockStarts.contains(run.at) && start(run.at) == .before
             func range(_ range: Range<Int>, _ lower: Discovery.Run.Lands, _ upper: Discovery.Run.Lands) -> Range<Int>? {
                 guard let start = run.shifted(range.lowerBound, lands: lower),
                       let end = run.shifted(range.upperBound, lands: upper), start <= end else { return nil }
                 return start..<end
             }
-            guard let markers = run.shifted(markers, lands: .before),
+            guard let markers = Self.all(markers, { run.shifted($0, lands: start($0)) }),
                   let chips = Self.all(chips, { chip in
-                      range(chip.range, .before, .after).flatMap { atom in
+                      range(chip.range, start(chip.range.lowerBound), end(chip.range.upperBound)).flatMap { atom in
                           range(chip.paragraph, .either, closes ? .before : .either).map { Chip(range: atom, paragraph: $0) }
                       }
                   }),
                   let carets = Self.all(carets, { caret in
                       run.shifted(caret.offset).map { Caret(offset: $0, place: caret.place) }
                   }),
-                  let joins = Self.all(joins, { run.shifted($0, lands: blockStarts.contains($0) ? .before : .either) }),
-                  let controls = Self.all(controls, { range($0, .before, .after) })
+                  let joins = Self.all(joins, { run.shifted($0, lands: blockStarts.contains($0) ? start($0) : .either) }),
+                  let controls = Self.all(controls, { range($0, start($0.lowerBound), end($0.upperBound)) })
             else { return nil }
             return Found(markers: markers, chips: chips, carets: carets, joins: joins, controls: controls)
         }
@@ -157,21 +163,24 @@ public enum UnreachableLines {
         }
 
         /// Itself while it holds, else shifted across the one run typed since, or why discovery walks again.
-        public func carried(value: String, markers: String, blocks: Int?, roots: Int? = nil) -> Result<Memo, Discovery.Rewalk> {
+        public func carried(
+            value: String, markers: String, blocks: Int?, roots: Int? = nil, proseMirror: Bool = false
+        ) -> Result<Memo, Discovery.Rewalk> {
             if holds(value: value, markers: markers, blocks: blocks, roots: roots) { return .success(self) }
-            guard self.blocks == blocks else { return .failure(.blocks) }
-            guard self.roots == roots else { return .failure(.roots) }
-            return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { run in
+            guard blocks != nil, self.blocks == blocks else { return .failure(.blocks) }
+            guard self.roots == roots, roots != nil || !proseMirror else { return .failure(.roots) }
+            return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { edit in
                 var shifted: Found?
                 if let found {
-                    guard let moved = found.shifted(across: run) else { return .failure(.boundary) }
+                    guard let lines = Discovery.Lines(value: self.value, markers: self.markers, shown: edit.shown),
+                          let moved = found.shifted(across: edit.run, lines: lines) else { return .failure(.boundary) }
                     shifted = moved
                 } else if !exhausted {
                     return .failure(.failed)
                 }
                 return .success(Memo(
                     value: value, markers: markers, blocks: blocks, roots: roots, found: shifted, exhausted: exhausted,
-                    origin: .shifted(run)
+                    origin: .shifted(edit.run)
                 ))
             }
         }

@@ -38,8 +38,9 @@ public enum EmptyParagraphs {
         /// Itself while it holds, else shifted across the one run typed since, or why discovery walks again.
         public func carried(value: String, markers: String, blocks: Int?) -> Result<Memo, Discovery.Rewalk> {
             if holds(value: value, markers: markers, blocks: blocks) { return .success(self) }
-            guard self.blocks == blocks else { return .failure(.blocks) }
-            return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { run in
+            guard blocks != nil, self.blocks == blocks else { return .failure(.blocks) }
+            return Discovery.run(markers: self.markers, value: self.value, to: markers, value: value).flatMap { edit in
+                let run = edit.run
                 var shifted: [Int]?
                 if let found {
                     guard let moved = run.shifted(found) else { return .failure(.boundary) }

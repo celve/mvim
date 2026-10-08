@@ -203,7 +203,9 @@ public extension FieldSnapshot {
                 text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil, proseMirror: reads.proseMirror
             )
             if !candidates.isEmpty {
-                let carried = knownUnreachable?.carried(value: value, markers: raw, blocks: reads.blocks, roots: reads.roots)
+                let carried = knownUnreachable?.carried(
+                    value: value, markers: raw, blocks: reads.blocks, roots: reads.roots, proseMirror: reads.proseMirror
+                )
                 switch carried ?? .failure(.first) {
                 case .failure(let why): return .needs(.unreachable(value: value, markers: raw, candidates: candidates, why: why))
                 case .success(let kept): unreachable = kept
