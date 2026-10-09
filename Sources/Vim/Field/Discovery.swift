@@ -113,25 +113,37 @@ public enum Discovery {
         let value: [UInt16]
         let breaks: ParagraphBreaks
         let shown: Run
+        private let added: Set<Int>
 
         init?(value: String, markers: String, shown: Run) {
             guard let breaks = ParagraphBreaks(value: value, fieldText: FieldReads.withoutAttachments(markers)) else { return nil }
             self.value = Array(value.utf16)
             self.breaks = breaks
             self.shown = shown
+            added = Set(breaks.offsets)
         }
 
         /// A line break lies between the run and the text starting at plain `start`, so the run is not that text's.
         func parted(before start: Int) -> Bool {
             let first = min(breaks.valueOffsets(start).upperBound, value.count)
-            return shown.removed == 0 && shown.at <= first && value[shown.at..<first].contains(10)
+            return shown.removed == 0 && shown.at <= first && onlyAdded(shown.at..<first)
         }
 
         /// A line break lies between the text ending at plain `end` and the run.
         func parted(after end: Int) -> Bool {
             guard end > 0 else { return false }
             let next = breaks.valueOffsets(end - 1).upperBound + 1
-            return next <= shown.earliest && value[next..<shown.earliest].contains(10)
+            return next <= shown.earliest && onlyAdded(next..<shown.earliest)
+        }
+
+        /// `window` is line breaks Chromium added, in a run of newlines holding none of the text's, whose order `breaks` only guesses.
+        private func onlyAdded(_ window: Range<Int>) -> Bool {
+            guard !window.isEmpty else { return false }
+            var lower = window.lowerBound
+            var upper = window.upperBound
+            while lower > 0, value[lower - 1] == 10 { lower -= 1 }
+            while upper < value.count, value[upper] == 10 { upper += 1 }
+            return (lower..<upper).allSatisfy(added.contains)
         }
 
         /// Where the run lies against text starting, or ending, at `x`: settled only at the run's own offset, across a line break.

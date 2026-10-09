@@ -4964,6 +4964,11 @@ precondition([1, 2, 3].map { endLines.boundary($0, endRun) } == [1, 3, 4] && sta
              && inlineLines.boundary(2, inlineRun) == nil, "before a break it moves, after one it stays, and with none it is either")
 let (cutRun, cutLines) = runLines(("abbc\nd", "abbcd"), ("abc\nd", "abcd"))
 precondition([1, 2, 3].map { cutLines.boundary($0, cutRun) } == [1, nil, 2], "a b deleted beside a b leaves the one between")
+// A run of newlines holding one of the text's own: which of them Chromium added is a guess, so neither order proves a side.
+for typedValue in ["TopX\n\n", "Top\nX\n"] {
+    let (seamRun, seamLines) = runLines(("Top\n\n", "Top\u{FFFC}\n\u{FFFC}"), (typedValue, "Top\u{FFFC}X\n\u{FFFC}"))
+    precondition(seamLines.boundary(3, seamRun) == nil, typedValue.debugDescription)
+}
 
 /// The runtime's walks over a fake tree, keeping what they read.
 func emptyWalk(_ value: String, _ raw: String, _ tree: [FakeNode], budget: Int = EmptyParagraphs.readBudget,
@@ -5088,6 +5093,22 @@ for (field, path, walks) in [(splitChip, "1.0.0.1", [Discovery.Rewalk]()), (spli
 let caretTail = (value: "ab\nnext", raw: "ab\u{FFFC}\nnext", spec: "0/G/0/3 0.0/D/0/2 0.0.0/T/0/2 0.1/E/2/3 1/G/3/7 1.0/T/3/7")
 precondition(carriedEdit(caretTail, ("a\nnext", "a\u{FFFC}\nnext", typed(caretTail.spec, -1, into: "0.0.0")), carets: (0, 1))
              == [.unread])
+// LIN-1874 round 4: a text newline beside an added line break, typed before, in either order the run of newlines allows.
+for (field, path, before, raw) in [
+    ((value: "Top\n\n", raw: "Top\u{FFFC}\n\u{FFFC}", spec: "0/G/0/3 0.0/T/0/3 1/E/3/3 2/G/3/4 2.0/T/3/4 3/I/4/4"), "2.0",
+     "Top", "Top\u{FFFC}X\n\u{FFFC}"),
+    ((value: "Top\n\nabc\nAfter", raw: "Top\nabcAfter",
+      spec: "0/G/0/3 0.0/T/0/3 1/B/3/7 1.0/N/3/4 1.0.0/T/3/4 1.1/D/4/7 1.1.0/T/4/7 2/G/7/12 2.0/T/7/12"), "1.0.0", "Top", "TopX\nabcAfter"),
+    ((value: "Top\n\n\u{2060}\u{00A0}Chip\nAfter", raw: "Top\n\u{2060}\u{00A0}ChipAfter",
+      spec: "0/G/0/3 0.0/T/0/3 1/G/3/10 1.0/T/3/4 1.1/A/4/10 1.1.0/K/4/10 1.1.0.0/T/4/10 2/G/10/15 2.0/T/10/15"), "1.0", "Top",
+     "TopX\n\u{2060}\u{00A0}ChipAfter"),
+] {
+    for typedValue in [field.value.replacing(before + "\n\n", with: before + "X\n\n"),
+                       field.value.replacing(before + "\n\n", with: before + "\nX\n")] {
+        let walks = carriedEdit(field, (typedValue, raw, typed(field.spec, 1, into: path)), carets: (3, 4))
+        precondition(walks?.contains(.boundary) == true, "\(typedValue.debugDescription): \(walks.map { "\($0)" } ?? "differs")")
+    }
+}
 
 // Chromium's own list: the page makes a paragraph an item with one run of marker text and no new block.
 let native = (value: "Top\n\u{2022} First\nMiddle\nPlain", raw: "Top\u{2022} FirstMiddlePlain",
