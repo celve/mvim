@@ -764,7 +764,8 @@ repeat a key, it repeats it at most 1,000 times: above that the native keys here
 where only keys can make the move the command beeps: in a field uvim cannot read, from block to block
 of a page like Notion's, for `{` `}` `gj` `gk` ⌃F ⌃B, and for a Visual-mode move where uvim cannot
 write the selection. `r` and a put beep above 1,000 in every field, since each repeats text by the
-count alone.
+count alone. A half-typed command, a `/` search included, holds up to 256 characters: a key past
+that is dropped unless it completes or cancels the command.
 
 In Linear, → or ↓ from the last line of a list, a code block or a quote stops once before another of
 the three that follows it directly, and so does ↑ coming back; next to a paragraph or a heading there is
