@@ -63,7 +63,7 @@ struct FieldTree {
     }
 
     /// A slot that read, or whose attribute the element lacks; any other failure is a failed read.
-    private static func absentOrRead(_ reads: AX.AttributeBatch, _ index: Int) -> Bool {
+    static func absentOrRead(_ reads: AX.AttributeBatch, _ index: Int) -> Bool {
         guard let error = reads.error(index) else { return true }
         return error == .noValue || error == .attributeUnsupported
     }

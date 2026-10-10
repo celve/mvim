@@ -313,6 +313,11 @@ public struct Expectation: Equatable, Sendable {
         return side.map { ($0 == .end) == (edge == .paragraphEnd) } ?? false
     }
 
+    /// Met by a field showing only its page's generated text, which holds none wherever its caret reads (LIN-1930).
+    public var metByEmptyField: Bool {
+        length == 0 && converged(selection: 0..<0, length: 0, selectedText: "", side: nil)
+    }
+
     /// Chromium's `AXSelectedText` has a U+FFFC per text-less element, which `AXValue` leaves out.
     static func sameText(_ expected: String, _ observed: String?) -> Bool {
         guard let observed else { return false }

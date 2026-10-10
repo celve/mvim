@@ -391,7 +391,8 @@ public final class Controller {
                 evidence: evidence,
                 insertPayload: completed.insertPayload,
                 emptyLines: snapshot.valueGap,
-                foldedLength: snapshot.foldedLength
+                foldedLength: snapshot.foldedLength,
+                generated: reading.generated
             )
         }
         guard executed else {
@@ -530,7 +531,7 @@ public final class Controller {
         if let marked = read.marked {
             side = Snapshotter.paragraphSide(of: marked, upper: false)
             // An edit, or a caret Linear drew or took away, leaves the run's snapshot describing other text.
-            snapshot = AX.value(of: binding.element) == reading.reads.text ? reading.snapshot : Snapshotter.snapshot(
+            snapshot = AX.value(of: binding.element) == reading.value ? reading.snapshot : Snapshotter.snapshot(
                 of: binding.element, capabilities: binding.capabilities, anchor: nil, cursor: state.field.cursor,
                 chromium: binding.isChromium, model: binding.beliefs?.readModel ?? ReadModel(answer: .value),
                 sampling: sampling, known: emptyParagraphs, knownUnreachable: unreachable

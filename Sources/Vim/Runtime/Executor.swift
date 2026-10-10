@@ -344,6 +344,8 @@ public final class Executor {
         // Keys go back to back, so a run lands inside this wait, and Chromium takes a long shifted one more slowly still.
         let deadline = start.addingTimeInterval(0.25 + Double(presses) * (paragraphs ? 0.005 : 0.0025))
         var polls = 0
+        // The reads the field was last checked for generated text on, which only a change makes worth checking again.
+        var checked: (Range<Int>?, Int?)?
         while true {
             polls += 1
             let reads = AX.attributes(names, of: element)
@@ -356,7 +358,7 @@ public final class Executor {
                 length = reads.int(slot) ?? AX.value(of: element).map { $0.utf16.count }
             }
             // Chromium adds a U+FFFC here for each text-less leaf, which `Expectation.matches` looks past.
-            let text = textSlot.flatMap { reads.string($0) }
+            var text = textSlot.flatMap { reads.string($0) }
             // Not convergence: an absent attribute is a silent app, a wrong one a liar.
             let answered = (selectionSlot == nil || selection != nil)
                 && (lengthSlot == nil || length != nil)
@@ -383,6 +385,14 @@ public final class Executor {
                 if let expected = expectation.length, let observed = length, (1...2).contains(observed - expected),
                    expectation.converged(selection: selection, length: observed - Snapshotter.drawnLength(at: marked),
                                          selectedText: text, side: side) {
+                    return outcome(true)
+                }
+            }
+            // An editor left empty shows its placeholder, text its page generates, wherever it reads the caret (LIN-1930).
+            if answered, expectation.metByEmptyField, checked.map({ $0 != (selection, length) }) ?? true {
+                checked = (selection, length)
+                if Snapshotter.showsOnlyGeneratedText(element) {
+                    (selection, length, text) = (selection.map { _ in 0..<0 }, length.map { _ in 0 }, text.map { _ in "" })
                     return outcome(true)
                 }
             }
