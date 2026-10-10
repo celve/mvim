@@ -5,7 +5,9 @@ import Core
 extension Snapshotter {
     /// The field shows nothing but its page's generated text, such as an empty editor's placeholder; a failed read says no.
     static func showsOnlyGeneratedText(_ element: AXUIElement, roots: [AXUIElement]? = nil, value: String? = nil) -> Bool {
-        guard let roots = roots ?? AX.children(of: element), !roots.isEmpty else { return false }
+        guard value.map(GeneratedText.mayFill) ?? true, let roots = roots ?? AX.children(of: element), !roots.isEmpty else {
+            return false
+        }
         var scan = GeneratedTextScan<AXUIElement>(budget: GeneratedText.readBudget) { node in
             let reads = AX.attributes(
                 [kAXRoleAttribute, AX.chromiumNodeIDAttribute, kAXValueAttribute, kAXChildrenAttribute], of: node

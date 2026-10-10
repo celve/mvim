@@ -6440,6 +6440,8 @@ precondition(GeneratedText.fills("Ask anything", with: ["Ask anything"]))
 let pseudoGroup = [ShownNode("AXGroup", 33, nil, [ShownNode("AXGroup", 1, nil, [ShownNode("AXStaticText", -2, "Ask anything")])])]
 precondition(shownScan(pseudoGroup).texts == ["Ask anything"], "the ::before element itself has a node")
 precondition(GeneratedText.fills("Ask anything\n", with: ["Ask anything"]), "an empty paragraph's <br> adds a \\n")
+precondition(!GeneratedText.fills("\nAsk anything\n", with: ["Ask anything"]) && !GeneratedText.fills("Ask anything\n\n", with: ["Ask anything"]),
+             "two empty paragraphs read as before")
 let quillEmpty = [ShownNode("AXGroup", 5, nil, [ShownNode("AXStaticText", -12, "Message #general")]), ShownNode("AXGroup", 37)]
 precondition(shownScan(quillEmpty) == (["Message #general"], 3))
 precondition(shownScan([ShownNode("AXStaticText", -14, "Type '/' for commands")]) == (["Type '/' for commands"], 1))
@@ -6507,6 +6509,21 @@ emptiedBox.feed("<C-[>")
 emptiedBox.type("dd")
 precondition(emptiedBox.text.isEmpty && emptiedBox.showsPlaceholder && emptiedBox.settleFailures == 0)
 precondition(emptiedBox.softMisses == 0, "the dd that empties the box misses no check")
+// A line as long as the placeholder, put into the empty box: a write Chromium ignores leaves the length a put would.
+var yanked = Sim(text: "abcdefghijk", caret: 0, profile: chatProfile)
+yanked.type("yy")
+for swallows in [true, false] {
+    var put = Sim(text: "", caret: 0, state: yanked.state, profile: chatProfile)
+    put.reads = omitsBreaks
+    put.writesInReadOffsets = true
+    put.markers = true
+    put.emulatesKeys = true
+    put.learn(with: Sim.Learner(chromium: true, probed: chatProfile))
+    put.placeholder = "Ask anything"
+    put.swallowsReplace = swallows
+    put.type("P")
+    precondition(put.settleFailures == (swallows ? 1 : 0) && put.text == (swallows ? "" : "abcdefghijk\n"), "swallowed \(swallows)")
+}
 var stuck = chatBox("x", profile: removing([.insertText], from: chatProfile))
 stuck.ignoredChords = [.deleteBack]
 stuck.feed("<C-[>")

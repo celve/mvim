@@ -369,7 +369,9 @@ public final class Controller {
         let physical = planned.plan
         let epoch = tracker.epoch
         let before = state.field.mode
-        let executed = executor.execute(physical, on: binding.element, state: &state, paragraphs: paragraphs)
+        let executed = executor.execute(
+            physical, on: binding.element, state: &state, paragraphs: paragraphs, generated: reading.generated > 0
+        )
         // Harvested before anything else can touch the executor: the abort path
         // below runs `repairStrandedSelection`, which executes its own plan and
         // resets `lastRun` — and that is precisely the path a failed write takes.

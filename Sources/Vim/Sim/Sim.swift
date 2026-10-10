@@ -312,7 +312,7 @@ private extension Sim {
         let before = state.field.mode
 
         captures = [:]
-        let abortedAt = execute(physical.steps)
+        let abortedAt = execute(physical.steps, generated: showsPlaceholder)
         abortedStep = abortedAt.map { physical.steps[$0] }
         // After the hygiene below, as the Controller's is.
         defer { learn(from: observed) }
@@ -435,9 +435,10 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    /// The index of the step that ended the run, nil when every step ran.
-    mutating func execute(_ steps: [PhysicalStep]) -> Int? {
+    /// The index of the step that ended the run, nil when every step ran; `generated` as the executor's.
+    mutating func execute(_ steps: [PhysicalStep], generated: Bool = false) -> Int? {
         var kept: [Int: Int] = [:]
+        var generated = generated
         attribution = RunAttribution()
         for (index, step) in steps.enumerated() {
             if case .settle = step {} else { attribution.record(step) }
@@ -488,7 +489,8 @@ private extension Sim {
 
             case .settle(let planned):
                 let expectation = planned.resolving(kept)
-                let (passed, observed, length) = settles(expectation)
+                let (passed, observed, length) = settles(expectation, generated: generated)
+                generated = !passed || expectation.metByEmptyField
                 attribution.record(.settle(expectation), passed: passed, selection: observed, length: length,
                                    selectedText: readSelectedText)
                 if !passed {
@@ -504,7 +506,9 @@ private extension Sim {
                 // there is nothing async to wait for, and the blind step it
                 // follows may be an unsupported no-op, so the field need not match
                 // the prediction — which is exactly why a soft settle must proceed.
-                if !settles(expectation).passed { softMisses += 1 }
+                let passed = settles(expectation, generated: generated).passed
+                if !passed { softMisses += 1 }
+                generated = !passed || expectation.metByEmptyField
 
             case .commit(let effect):
                 state = VimReducer.reduce(state, effect, captures: captures)
@@ -523,17 +527,16 @@ private extension Sim {
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
     }
 
-    /// A settle's verdict and what it read; a field showing only its placeholder holds no text (LIN-1930).
-    func settles(_ expectation: Expectation) -> (passed: Bool, selection: Range<Int>?, length: Int) {
+    /// A settle's verdict and what it read: where the executor looks for generated text, a placeholder holds none (LIN-1930).
+    func settles(_ expectation: Expectation, generated: Bool) -> (passed: Bool, selection: Range<Int>?, length: Int) {
         // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
         let observed = unreadableSelection ? nil : readSelection
-        let passed = expectation.converged(
+        let met = expectation.converged(
             selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
         )
-        if !passed, showsPlaceholder, observed != nil || expectation.landing == nil, expectation.metByEmptyField {
-            return (true, observed.map { _ in 0..<0 }, 0)
-        }
-        return (passed, observed, fieldLength)
+        let checks = met ? generated && !expectation.metByEmptyField
+            : (observed != nil || expectation.landing == nil) && expectation.metByEmptyField
+        return (checks && showsPlaceholder ? expectation.metByEmptyField : met, observed, fieldLength)
     }
 
     /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
