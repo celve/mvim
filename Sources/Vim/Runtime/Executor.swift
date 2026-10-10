@@ -81,6 +81,9 @@ public final class Executor {
     /// Keys pressed since the last settle.
     private var pressed = 0
 
+    /// The field may show only generated text: the snapshot read it so, or a settle expected it empty (LIN-1930).
+    private var generated = false
+
     /// An `AXError` worth reporting: `.success` is not one.
     private static func rejection(_ error: AXError) -> Int32? {
         error == .success ? nil : error.rawValue
@@ -135,7 +138,7 @@ public final class Executor {
     /// Runs the plan in order, sparing residency when a step fails; returns whether every step ran.
     @discardableResult
     public func execute(
-        _ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState, paragraphs: Bool = false
+        _ plan: PhysicalPlan, on element: AXUIElement, state: inout VimState, paragraphs: Bool = false, generated: Bool = false
     ) -> Bool {
         captures = [:]
         pastedAt = nil
@@ -146,6 +149,7 @@ public final class Executor {
         lastObserved = nil
         lastLength = nil
         self.paragraphs = paragraphs
+        self.generated = generated
         pressed = 0
         kept = [:]
         let outside: [PhysicalStep] = [.press(.selectLeft, count: 1), .press(.right, count: 1)]
@@ -255,13 +259,14 @@ public final class Executor {
 
         case .settle(let expectation):
             awaitPaste(expectation, at: index, on: element)
-            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            var outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed, generated: generated)
             pressed = 0
             if outcome.converged, afterNormalizing.contains(index) {
                 // Read again once the ⇧← → are in, so the next command never reads the selection between them.
                 Thread.sleep(forTimeInterval: 0.015)
-                outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
+                outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, generated: generated)
             }
+            generated = !outcome.converged || expectation.metByEmptyField
             lastObserved = outcome.observedSelection
             lastLength = outcome.observedLength
             confirmPaste(outcome, expectation, at: index)
@@ -275,8 +280,9 @@ public final class Executor {
             // Same poll — a following AX read still sees the blind action land
             // — but a timeout is not a failure: proceed, no bell, never abort.
             awaitPaste(expectation, at: index, on: element)
-            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
+            let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed, generated: generated)
             pressed = 0
+            generated = !outcome.converged || expectation.metByEmptyField
             lastObserved = outcome.observedSelection
             lastLength = outcome.observedLength
             confirmPaste(outcome, expectation, at: index)
@@ -313,7 +319,7 @@ public final class Executor {
     /// answered nil, and fetching it every poll would marshal the entire
     /// document dozens of times per settle.
     nonisolated static func settle(
-        _ expectation: Expectation, on element: AXUIElement, paragraphs: Bool, presses: Int = 0
+        _ expectation: Expectation, on element: AXUIElement, paragraphs: Bool, presses: Int = 0, generated: Bool = false
     ) -> SettleOutcome {
         var names: [String] = []
         var selectionSlot: Int?
@@ -369,23 +375,23 @@ public final class Executor {
                     milliseconds: Int(Date().timeIntervalSince(start) * 1000)
                 )
             }
-            if expectation.converged(selection: selection, length: length, selectedText: text, side: nil) {
-                return outcome(true)
-            }
+            var met = expectation.converged(selection: selection, length: length, selectedText: text, side: nil)
             // Only the markers place a caret between elements or tell a boundary's sides apart.
-            if paragraphs, selectionSlot != nil, let marked = Snapshotter.markedSelection(of: element) {
+            if !met, paragraphs, selectionSlot != nil, let marked = Snapshotter.markedSelection(of: element) {
                 selection = marked.range
                 let side = expectation.edge == nil ? nil : Snapshotter.paragraphSide(of: marked, upper: true)
-                if expectation.converged(selection: selection, length: length, selectedText: text, side: side) {
-                    return outcome(true)
-                }
+                met = expectation.converged(selection: selection, length: length, selectedText: text, side: side)
                 // The caret Linear draws at a code span's edge is lines of its own, which no expected length counts.
-                if let expected = expectation.length, let observed = length, (1...2).contains(observed - expected),
-                   expectation.converged(selection: selection, length: observed - Snapshotter.drawnLength(at: marked),
-                                         selectedText: text, side: side) {
-                    return outcome(true)
+                if !met, let expected = expectation.length, let observed = length, (1...2).contains(observed - expected) {
+                    met = expectation.converged(selection: selection, length: observed - Snapshotter.drawnLength(at: marked),
+                                                selectedText: text, side: side)
                 }
             }
+            // A field showing only text its page generates, as an empty editor shows its placeholder, holds none (LIN-1930).
+            met = GeneratedText.judged(met, expectation, answered: answered, generated: generated) {
+                Snapshotter.showsOnlyGeneratedText(element)
+            }
+            if met { return outcome(true) }
             guard Date() < deadline else { return outcome(false) }
             // In the rich-text fields measured, a missed poll cost the host ~0.5 ms of CPU on average (LIN-1727).
             Thread.sleep(forTimeInterval: 0.003)

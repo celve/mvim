@@ -74,7 +74,16 @@ public struct Sim {
     public var drawsLate = false
     private var snapshotting = false
 
+    /// Text the page generates while the field is empty, as ChatGPT's box shows "Ask anything" (LIN-1930).
+    public var placeholder: String?
+
+    /// Where in the placeholder the caret reads: its start in some editors, its end or near it in others.
+    public var placeholderCaret = 0
+
+    var showsPlaceholder: Bool { placeholder != nil && text.isEmpty }
+
     public var readSelection: Range<Int> {
+        if showsPlaceholder { return placeholderCaret..<placeholderCaret }
         if emptyParagraphs { return chromium.field(selection) }
         guard let reads else { return selection }
         let start = reads(selection.lowerBound, text)
@@ -82,6 +91,7 @@ public struct Sim {
     }
 
     public var readSelectedText: String {
+        if showsPlaceholder { return "" }
         if emptyParagraphs {
             let markers = Array(chromium.plainMarkers.utf16)
             let range = readSelection
@@ -128,6 +138,8 @@ public struct Sim {
 
     public private(set) var bells = 0
     public private(set) var settleFailures = 0
+    /// Soft settles that missed, which ring nothing and abort nothing, as the executor logs them.
+    public private(set) var softMisses = 0
     public private(set) var unsupportedSteps = 0
 
     /// The last command's evidence from its settles.
@@ -279,7 +291,7 @@ private extension Sim {
                     unreachable: unreachable
                 )
             }
-            return (built, observed, reads.field.text)
+            return (built, observed, shownValue)
         }
         snapshotting = true
         var (built, observed, value) = snapshot()
@@ -300,7 +312,7 @@ private extension Sim {
         let before = state.field.mode
 
         captures = [:]
-        let abortedAt = execute(physical.steps)
+        let abortedAt = execute(physical.steps, generated: showsPlaceholder)
         abortedStep = abortedAt.map { physical.steps[$0] }
         // After the hygiene below, as the Controller's is.
         defer { learn(from: observed) }
@@ -423,9 +435,10 @@ private extension Sim {
 // MARK: - Physical step interpreter
 
 private extension Sim {
-    /// The index of the step that ended the run, nil when every step ran.
-    mutating func execute(_ steps: [PhysicalStep]) -> Int? {
+    /// The index of the step that ended the run, nil when every step ran; `generated` as the executor's.
+    mutating func execute(_ steps: [PhysicalStep], generated: Bool = false) -> Int? {
         var kept: [Int: Int] = [:]
+        var generated = generated
         attribution = RunAttribution()
         for (index, step) in steps.enumerated() {
             if case .settle = step {} else { attribution.record(step) }
@@ -476,12 +489,9 @@ private extension Sim {
 
             case .settle(let planned):
                 let expectation = planned.resolving(kept)
-                // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
-                let observed = unreadableSelection ? nil : readSelection
-                let passed = expectation.converged(
-                    selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
-                )
-                attribution.record(.settle(expectation), passed: passed, selection: observed, length: fieldLength,
+                let (passed, observed, length) = settles(expectation, generated: generated)
+                generated = !passed || expectation.metByEmptyField
+                attribution.record(.settle(expectation), passed: passed, selection: observed, length: length,
                                    selectedText: readSelectedText)
                 if !passed {
                     settleFailures += 1
@@ -491,12 +501,14 @@ private extension Sim {
                 }
                 if let slot = expectation.keeps, let caret = observed?.lowerBound { kept[slot] = caret }
 
-            case .softSettle:
+            case .softSettle(let expectation):
                 // Best-effort barrier: never aborts. In this synchronous host
                 // there is nothing async to wait for, and the blind step it
                 // follows may be an unsupported no-op, so the field need not match
                 // the prediction — which is exactly why a soft settle must proceed.
-                break
+                let passed = settles(expectation, generated: generated).passed
+                if !passed { softMisses += 1 }
+                generated = !passed || expectation.metByEmptyField
 
             case .commit(let effect):
                 state = VimReducer.reduce(state, effect, captures: captures)
@@ -513,6 +525,18 @@ private extension Sim {
         if emptyParagraphs { return chromium.landing(offset, from: selection.lowerBound) }
         guard writesInReadOffsets, let reads else { return offset }
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
+    }
+
+    /// A settle's verdict and what it read, judged as the executor judges it beside generated text (LIN-1930).
+    func settles(_ expectation: Expectation, generated: Bool) -> (passed: Bool, selection: Range<Int>?, length: Int) {
+        // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
+        let observed = unreadableSelection ? nil : readSelection
+        let met = expectation.converged(
+            selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
+        )
+        let answered = observed != nil || expectation.landing == nil
+        let passed = GeneratedText.judged(met, expectation, answered: answered, generated: generated) { showsPlaceholder }
+        return (passed, observed, fieldLength)
     }
 
     /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.
@@ -718,12 +742,18 @@ extension Sim {
         let plain = readSelection
         var sampled = false
         var reads = FieldSnapshot.Reads(
-            field: FieldReads(text: text, plain: plain, selectedText: readSelectedText), length: fieldLength,
+            field: FieldReads(text: shownValue, plain: plain, selectedText: readSelectedText), length: fieldLength,
             webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
         reads.roots = roots
         reads.proseMirror = listLines != nil
-        if emptyParagraphs {
+        if showsPlaceholder {
+            // What the Snapshotter makes of a field its scan finds shows only generated text (LIN-1930).
+            reads = FieldSnapshot.Reads(
+                generatedOnly: FieldReads(text: shownValue, plain: plain, selectedText: readSelectedText), length: fieldLength,
+                webContent: reads.webContent, blocks: blocks, markers: (markers || emptyParagraphs) && current != .value
+            )
+        } else if emptyParagraphs {
             let value = chromium.shown.value
             let text = chromium.shown.markers + (endsInTextlessLeaf ? "\u{FFFC}" : "")
             var memo: EmptyParagraphs.Memo?
@@ -782,7 +812,10 @@ extension Sim {
     }
 
     /// `AXValue`.
-    var shownValue: String { emptyParagraphs ? chromium.shown.value : text }
+    var shownValue: String {
+        if showsPlaceholder, let placeholder { return placeholder }
+        return emptyParagraphs ? chromium.shown.value : text
+    }
 
     /// `kAXNumberOfCharacters`: `AXValue`'s length.
     var fieldLength: Int { shownValue.utf16.count }
@@ -820,7 +853,8 @@ extension Sim {
     }
 
     var markerReads: MarkerReads {
-        MarkerReads(
+        guard !showsPlaceholder else { return MarkerReads(breaks: ParagraphBreaks(), value: readSelection) }
+        return MarkerReads(
             breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection,
             textlessLeaves: endsInTextlessLeaf
         )

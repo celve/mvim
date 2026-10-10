@@ -77,7 +77,8 @@ enum Diag {
         evidence: Executor.RunEvidence,
         insertPayload: String?,
         emptyLines: Int = 0,
-        foldedLength: Int = 0
+        foldedLength: Int = 0,
+        generated: Int = 0
     ) {
         let anomalous = !executed
             || rejection != nil
@@ -107,6 +108,9 @@ enum Diag {
         }
         if foldedLength != 0 {
             line += " folded=\(foldedLength)"
+        }
+        if generated != 0 {
+            line += " generated=\(generated)"
         }
         if let insertPayload {
             line += recordsText ? " insert=\(insertPayload)" : " insert=(\(insertPayload.utf16.count))"

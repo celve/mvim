@@ -106,6 +106,10 @@ public enum Snapshotter {
         public let emptyParagraphs: EmptyParagraphs.Memo?
         /// This text's list-marker and chip discovery, the same way.
         public let unreachable: UnreachableLines.Memo?
+        /// `AXValue` as read, which a later read compares with to tell the field changed.
+        public let value: String?
+        /// The `AXValue` units left out as text the page generates (LIN-1930).
+        public let generated: Int
     }
 
     public static func snapshot(
@@ -124,7 +128,7 @@ public enum Snapshotter {
                                model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
             for _ in 0..<2 {
                 // Linear draws and removes carets beside code spans while a read runs, which leaves its parts disagreeing.
-                guard reading.snapshot.breaks != nil, AX.value(of: element) != reading.reads.text else { break }
+                guard reading.snapshot.breaks != nil, AX.value(of: element) != reading.value else { break }
                 reading = read(of: element, capabilities: capabilities, anchor: anchor, cursor: cursor, chromium: chromium,
                                model: model, sampling: sampling, known: known, knownUnreachable: knownUnreachable)
             }
@@ -166,19 +170,28 @@ public enum Snapshotter {
         let classes = names.count
         if chromium { names.append("AXDOMClassList") }
         let reads = AX.attributes(names, of: element)
+        let value = reads.string(0)
         let plain = reads.range(1).map { $0.location..<($0.location + $0.length) }
-        let sampled = caret && current == .value && source.observes && sampling.samples(text: reads.string(0), plain: plain)
-        var marked = readsMarkers || sampled ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
+        // A placeholder, or any text the page generates, is none of the field's while it is all the field shows (LIN-1930).
+        let generated = chromium && value?.isEmpty == false
+            && roots.map { showsOnlyGeneratedText(element, roots: $0, value: value) } == true
+        let sampled = !generated && caret && current == .value && source.observes && sampling.samples(text: value, plain: plain)
+        var marked = !generated && (readsMarkers || sampled)
+            ? markedSelection(of: element, selected: reads.textMarkerRange(5)) : nil
         // A marker past the field's end, where reading the drawn caret's place failed, is no read.
         if let range = marked?.range, range.upperBound > (reads.int(2) ?? .max),
            range.upperBound > (AX.markerText(of: element).map { FieldReads.withoutAttachments($0).utf16.count } ?? .max) {
             marked = nil
         }
         let side = marked.map { sides(of: $0) }
-        var snapshotReads = FieldSnapshot.Reads(
-            field: FieldReads(text: reads.string(0), plain: plain, selectedText: reads.string(4)),
-            length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
-        )
+        let raw = FieldReads(text: value, plain: plain, selectedText: reads.string(4))
+        var snapshotReads = generated
+            ? FieldSnapshot.Reads(
+                generatedOnly: raw, length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, markers: readsMarkers
+            )
+            : FieldSnapshot.Reads(
+                field: raw, length: reads.int(2), webContent: reads.string(3) != nil, blocks: blocks, marked: marked?.range
+            )
         snapshotReads.proseMirror = chromium && reads.strings(classes)?.contains(UnreachableLines.editorClass) == true
         // Only where stops are read do the blocks' kinds decide discovery; elsewhere the memo holds as it did.
         if snapshotReads.proseMirror {
@@ -209,9 +222,9 @@ public enum Snapshotter {
             }
         }
         if let marked {
-            let text = MarkerReads.takesText(reads.string(0)) ? AX.markerText(of: element) : nil
+            let text = MarkerReads.takesText(value) ? AX.markerText(of: element) : nil
             let aligned = FieldSnapshot.Step.run(taking: take) {
-                MarkerReads.aligning(value: reads.string(0), range: marked.range, text: text, sides: snapshotReads.sides)
+                MarkerReads.aligning(value: value, range: marked.range, text: text, sides: snapshotReads.sides)
             }
             snapshotReads.field.markers = aligned.reads
             snapshotReads.markerText = aligned.text
@@ -225,7 +238,8 @@ public enum Snapshotter {
         }
         return Reading(
             snapshot: built.snapshot, observed: observed, sampled: sampled, markers: marked != nil, reads: snapshotReads.field,
-            emptyParagraphs: built.memo, unreachable: built.unreachable
+            emptyParagraphs: built.memo, unreachable: built.unreachable, value: value,
+            generated: generated ? value?.utf16.count ?? 0 : 0
         )
     }
 
