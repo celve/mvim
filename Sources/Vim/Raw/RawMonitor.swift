@@ -19,6 +19,9 @@ public struct RawMonitor: Equatable, Sendable {
     /// The Normal/Visual command buffer, exposed for a showcmd-style HUD.
     public private(set) var pendingKeys: String = ""
 
+    /// The count of button events the last counted key came with.
+    private var clicksSeen: UInt32 = 0
+
     /// Keys passed through during the current Insert session; becomes the
     /// `insertPayload` handed over at Esc.
     private var insertLog: String = ""
@@ -67,7 +70,12 @@ public struct RawMonitor: Equatable, Sendable {
         }
     }
 
-    public mutating func feed(_ token: String, mode: Mode) -> Verdict {
+    /// `clicks` is the runtime's count of button events: one since the last key may have moved the caret, so the buffer is dropped.
+    public mutating func feed(_ token: String, mode: Mode, clicks: UInt32? = nil) -> Verdict {
+        if let clicks {
+            if clicks != clicksSeen { cancelPending() }
+            clicksSeen = clicks
+        }
         switch mode {
         case .insert:
             return feedInsert(token)
@@ -85,10 +93,7 @@ public struct RawMonitor: Equatable, Sendable {
         insertLogIsLossless = true
     }
 
-    /// A key or a click went to the app instead of vim: whatever command was half-typed
-    /// is stale, because the app may have moved the caret out from under it.
-    /// Only the command buffer is dropped — the Insert-mode typed log belongs
-    /// to the session, not to any one command, and must survive.
+    /// A key or a click went to the app, which may have moved the caret: drops the half-typed command, never the Insert typed log.
     public mutating func cancelPending() {
         pendingKeys = ""
     }

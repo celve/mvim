@@ -136,6 +136,9 @@ public struct Sim {
     private var monitor = RawMonitor()
     private var captures: [CaptureSlot: String] = [:]
 
+    /// The field's button events so far, which the Controller reads from the window server.
+    private var buttonEvents: UInt32 = 0
+
     /// The focus is the selection's lower bound.
     private var backward = false
 
@@ -189,7 +192,7 @@ public struct Sim {
         case .visual: mode = .visual
         case .insert, .replace: mode = .insert
         }
-        switch monitor.feed(token, mode: mode) {
+        switch monitor.feed(token, mode: mode, clicks: mode == .insert ? nil : buttonEvents) {
         case .pending, .cancelled:
             break
         case .passthrough:
@@ -241,7 +244,7 @@ public struct Sim {
         }
     }
 
-    /// `Controller.pointerActed`'s pure twin for a click in the bound field, which puts the caret at `offset` with no key.
+    /// A click in the bound field: the caret goes to `offset`, two button events are counted, and `Controller.pointerActed` runs.
     public mutating func click(at offset: Int) {
         let caret = TextModel(text).clamp(offset)
         selection = caret..<caret
@@ -250,7 +253,7 @@ public struct Sim {
         atWrittenCodeEnd = false
         inListGap = false
         backward = false
-        monitor.cancelPending()
+        buttonEvents &+= 2
         if state.field.mode.isInserting { monitor.markInsertLogLossy() }
     }
 }

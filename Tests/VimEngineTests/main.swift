@@ -1770,6 +1770,15 @@ monitor.cancelPending()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
 
+// So does a click since the last key, which the runtime tells by its count of button events (LIN-1104).
+precondition(monitor.feed("d", mode: .normal, clicks: 6) == .pending)
+precondition(monitor.feed("w", mode: .normal, clicks: 7) == .command(RawMonitor.Completed(command: RawCommand("w"))))
+precondition(monitor.feed("d", mode: .normal, clicks: 7) == .pending)
+precondition(monitor.feed("w", mode: .normal, clicks: 7) == .command(RawMonitor.Completed(command: RawCommand("dw"))))
+precondition(monitor.feed("h", mode: .insert, clicks: 7) == .passthrough)
+precondition(monitor.feed("<Esc>", mode: .insert, clicks: 9) ==
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
+
 // Esc cancels a pending command; idle, it is the app's in Normal and leaves Visual.
 precondition(monitor.feed("d", mode: .normal) == .pending)
 precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)

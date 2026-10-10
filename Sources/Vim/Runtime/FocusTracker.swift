@@ -65,7 +65,8 @@ public final class FocusTracker {
     /// is a property of the *edge*, not of either binding — it tells the
     /// controller how much of the session survives.
     public var onRebind: ((Binding?, FocusTransition) -> Void)?
-    /// Fired on every global mouse press and release, either of which can move the caret.
+    /// Fired on every global mouse-up — forced bindings reset to Insert on
+    /// clicks (the caret moved invisibly).
     public var onPointerAction: (() -> Void)?
     public private(set) var binding: Binding?
 
@@ -107,13 +108,11 @@ public final class FocusTracker {
             MainActor.assumeIsolated { [weak self] in self?.appActivated(note) }
         }
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp, .rightMouseUp, .otherMouseUp]
-        ) { event in
-            // The app moves the caret on the press, but focus may land only by the release.
-            let released = [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type)
+            matching: [.leftMouseUp, .rightMouseUp, .otherMouseUp]
+        ) { _ in
             MainActor.assumeIsolated { [weak self] in
                 self?.onPointerAction?()
-                if released { self?.scheduleReverify() }
+                self?.scheduleReverify()
             }
         }
         resolveAndPublish(revalidateGate: false)
