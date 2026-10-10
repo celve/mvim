@@ -437,7 +437,7 @@ private extension RawCommand {
                     let nameIndex = keys.index(after: keys.startIndex)
                     register = Register(keys[nameIndex])
                     keys = String(keys[keys.index(after: nameIndex)...])
-                case "1"..."9":
+                case _ where startsCount(first):
                     let countResult = consumeCount(from: keys)
                     count = multiply(count, countResult.count)
                     keys = countResult.remainder
@@ -864,23 +864,27 @@ private extension RawCommand {
         static func multiply(_ existing: Int?, _ next: Int?) -> Int? {
             guard let next else { return existing }
             guard let existing else { return next }
-            let (product, overflow) = existing.multipliedReportingOverflow(by: next)
-            return overflow ? Int.max : product
+            return Count.product(existing, next)
+        }
+
+        /// ASCII only: a digit carrying a combining mark sorts inside `"1"..."9"` and has no value to consume.
+        static func digit(_ character: Character) -> Int? {
+            character.isASCII ? character.wholeNumberValue : nil
+        }
+
+        static func startsCount(_ character: Character) -> Bool {
+            digit(character).map { $0 > 0 } ?? false
         }
 
         static func consumeCount(from keys: String) -> (count: Int?, remainder: String) {
-            guard let first = keys.first, first >= "1", first <= "9" else {
+            guard let first = keys.first, startsCount(first) else {
                 return (nil, keys)
             }
 
             var index = keys.startIndex
             var value = 0
-            while index < keys.endIndex {
-                let character = keys[index]
-                guard let digit = character.wholeNumberValue, digit < 10 else { break }
-                let (timesTen, multiplyOverflow) = value.multipliedReportingOverflow(by: 10)
-                let (next, addOverflow) = timesTen.addingReportingOverflow(digit)
-                value = multiplyOverflow || addOverflow ? Int.max : next
+            while index < keys.endIndex, let next = digit(keys[index]) {
+                value = min(value * 10 + next, Count.max)
                 index = keys.index(after: index)
             }
             return (value, String(keys[index...]))

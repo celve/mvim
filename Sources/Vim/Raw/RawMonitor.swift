@@ -19,6 +19,9 @@ public struct RawMonitor: Equatable, Sendable {
     /// The Normal/Visual command buffer, exposed for a showcmd-style HUD.
     public private(set) var pendingKeys: String = ""
 
+    /// The most UTF-16 units `pendingKeys` holds.
+    public static let pendingLimit = 256
+
     /// The count of button events the last counted key came with.
     private var clicksSeen: UInt32 = 0
 
@@ -41,7 +44,7 @@ public struct RawMonitor: Equatable, Sendable {
     }
 
     public enum Verdict: Equatable, Sendable {
-        /// Consumed and buffered; more keys are needed.
+        /// Consumed, and buffered where the buffer takes it; more keys are needed.
         case pending
 
         /// Consumed; a complete command to send through the planners.
@@ -171,8 +174,25 @@ private extension RawMonitor {
             pendingKeys = ""
             return .command(Completed(command: parsed))
         }
+        // A key that completes nothing and cannot be held is taken and dropped, so a held key stops growing the buffer.
+        if extendsFullCount(token, prompt: isPrompt(parsed.intent)) || candidate.utf16.count > Self.pendingLimit {
+            return .pending
+        }
         pendingKeys = candidate
         return .pending
+    }
+
+    /// A run of this many digits holds a count at its ceiling, even where the first of them names a register.
+    static let fullCountDigits = String(Count.max).count + 2
+
+    /// Whether `token` is a digit after a count already at Vim's ceiling, which it cannot change; a prompt's digits are text.
+    func extendsFullCount(_ token: String, prompt: Bool) -> Bool {
+        guard !prompt, token.count == 1, token.first.map(isDigit) ?? false else { return false }
+        return pendingKeys.reversed().prefix(while: isDigit).count >= Self.fullCountDigits
+    }
+
+    func isDigit(_ character: Character) -> Bool {
+        character.isASCII && character.isNumber
     }
 
     /// The completeness rules. `RawCommand.isComplete` alone is wrong in
@@ -201,8 +221,10 @@ private extension RawMonitor {
         }
     }
 
-    var isPromptBuffer: Bool {
-        switch RawCommand(pendingKeys).intent {
+    var isPromptBuffer: Bool { isPrompt(RawCommand(pendingKeys).intent) }
+
+    func isPrompt(_ intent: RawCommand.Intent) -> Bool {
+        switch intent {
         case .search(let search):
             return !search.isSubmitted
         case .commandLine(let line):

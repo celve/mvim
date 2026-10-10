@@ -22,7 +22,9 @@
 /// 4. **C** (blind): Cocoa-approximate chords plus clipboard captures for
 ///    anything needing content.
 ///
-/// A lane that does not apply leaves the step to the next one. A lane that
+/// A lane that does not apply leaves the step to the next one, and none
+/// applies to a count that would repeat its keys more than
+/// `Count.repeatLimit` times with no text to stop them. A lane that
 /// applies but cannot realize the step rejects it, as running out of lanes
 /// does, and a rejected step rejects the whole plan: `[.bell]`,
 /// all-or-nothing, mirroring vim's execute-or-bell. The planner is pure —
@@ -636,6 +638,11 @@ private extension PhysicalPlanner {
             return steps
         }
     }
+
+    /// Whether a lane may repeat a key, a paste or a copy `count` times on the count alone: past the limit it does not apply.
+    static func repeats(_ count: Int) -> Bool {
+        count <= Count.repeatLimit
+    }
 }
 
 // MARK: - Step dispatch
@@ -928,7 +935,7 @@ private extension PhysicalPlanner {
 
     static func blindMove(_ destination: LogicalStep.Destination, context: inout Context) -> Lane {
         guard case .motion(let motion, let count) = destination,
-              let blind = blindMoveChord(motion) else { return .next }
+              let blind = blindMoveChord(motion), !blind.counted || repeats(count) else { return .next }
         context.selection = nil
         context.selectionOpaque = false
         return .steps([.press(blind.chord, count: blind.counted ? count : 1)])
@@ -965,7 +972,7 @@ private extension PhysicalPlanner {
             guard profile.has(.lineStartKey) else { return .next }
             way = [([.paragraphStart], .lineStartKey)]
         case .motion(.lineEnd, let count)?:
-            guard profile.has(.lineEndKey) else { return .next }
+            guard profile.has(.lineEndKey), repeats(count) else { return .next }
             way = [([.paragraphEnd], .lineEndKey), (hops(count - 1).flatMap { $0 + [.paragraphEnd] }, nil)]
         case .motion(.fileStart, _)?:
             guard profile.has(.documentStartKey) else { return .next }
@@ -1069,7 +1076,7 @@ private extension PhysicalPlanner {
     }
 
     /// Line-shaped selections by native keys, as many as the command counts, since keys past the end do nothing;
-    /// `next` where lane B counts them.
+    /// `next` where lane B counts them, as it does past the repeat limit.
     static func nativeSelect(
         _ target: LogicalStep.SelectionTarget, range: Range<Int>,
         context: inout Context, profile: CapabilityProfile
@@ -1077,11 +1084,11 @@ private extension PhysicalPlanner {
         guard !profile.has(.writeSelection) else { return .next }
         let groups: [KeyGroup]
         switch target {
-        case .lines(let count, let interior):
+        case .lines(let count, let interior) where repeats(count):
             groups = linesDown(count, newline: !interior)
-        case .lineSpan(to: .motion(.line(.down, _), let count), let interior):
+        case .lineSpan(to: .motion(.line(.down, _), let count), let interior) where repeats(count):
             groups = linesDown(count + 1, newline: !interior)
-        case .lineSpan(to: .motion(.line(.up, _), let count), let interior):
+        case .lineSpan(to: .motion(.line(.up, _), let count), let interior) where repeats(count):
             groups = [([.paragraphEnd], .lineEndKey), (interior ? [] : [.right, .selectLeft], nil),
                       ([Chord.paragraphStart.shifted], .lineStartKey),
                       (repeated([.selectLeft, Chord.paragraphStart.shifted], count), nil)]
@@ -1092,7 +1099,7 @@ private extension PhysicalPlanner {
                       ([Chord.documentStart.shifted], .documentStartKey)]
         case .toLineEnd:
             groups = [([Chord.paragraphEnd.shifted], .lineEndKey)]
-        case .span(to: .motion(.lineEnd, let count), false):
+        case .span(to: .motion(.lineEnd, let count), false) where repeats(count):
             groups = [([Chord.paragraphEnd.shifted], .lineEndKey),
                       (repeated([.selectRight, Chord.paragraphEnd.shifted], count - 1), nil)]
         case .span(to: .motion(.lineStart(firstNonBlank: false), _), false):
@@ -1420,7 +1427,7 @@ private extension PhysicalPlanner {
         _ destination: LogicalStep.Destination, context: inout Context, profile: CapabilityProfile
     ) -> Lane {
         guard profile.has(.nativeMotions), case .motion(let motion, let count) = destination,
-              let key = appKey(motion) else { return .next }
+              let key = appKey(motion), repeats(count) else { return .next }
         guard let model = context.model(for: destination, profile), let selection = context.selection,
               profile.has(.readCaret) else {
             // Lane C already maps words and lines.
@@ -1462,8 +1469,8 @@ private extension PhysicalPlanner {
         switch target {
         case .textObject(TextObject(scope: .inner, kind: .word(bigWord: false)), 1):
             span = nil
-        case .span(.motion(let motion, _), _):
-            guard let key = appKey(motion), key.atom == .wordKeys else { return .next }
+        case .span(.motion(let motion, let count), _):
+            guard let key = appKey(motion), key.atom == .wordKeys, repeats(count) else { return .next }
             span = key
         default:
             return .next
@@ -1533,6 +1540,8 @@ private extension PhysicalPlanner {
             var range = model.wordObject(at: position, around: object.scope == .around, big: big)
             for _ in 1..<max(1, count) {
                 let next = model.wordObject(at: range.upperBound, around: object.scope == .around, big: big)
+                // At the text's end the next object adds nothing, and no later one does.
+                guard next.upperBound > range.upperBound else { break }
                 range = range.lowerBound..<next.upperBound
             }
             return range
@@ -1550,9 +1559,10 @@ private extension PhysicalPlanner {
         switch target {
         case .span(let destination, _):
             guard case .motion(let motion, let count) = destination,
-                  let blind = blindMoveChord(motion) else { return nil }
+                  let blind = blindMoveChord(motion), !blind.counted || repeats(count) else { return nil }
             return [.press(blind.chord.shifted, count: blind.counted ? count : 1)]
         case .lines(let count, let interior):
+            guard repeats(count) else { return nil }
             if interior {
                 var steps: [PhysicalStep] = [.press(.lineStart, count: 1)]
                 if count > 1 { steps.append(.press(.selectDown, count: count - 1)) }
@@ -1573,6 +1583,7 @@ private extension PhysicalPlanner {
             var steps: [PhysicalStep] = [.press(.lineStart, count: 1)]
             switch motion {
             case .line(.down, _):
+                guard repeats(count) else { return nil }
                 // count lines below, plus the caret's own.
                 steps.append(.press(.selectDown, count: interior ? count : count + 1))
             case .fileEnd:
@@ -1689,7 +1700,7 @@ private extension PhysicalPlanner {
         // selection becomes opaque, so a following operator takes the
         // clipboard path (`lowerDelete`/`lowerYank` already branch on it).
         guard case .motion(let motion, let count) = destination,
-              let blind = blindMoveChord(motion) else { return nil }
+              let blind = blindMoveChord(motion), !blind.counted || repeats(count) else { return nil }
         context.selection = nil
         context.selectionOpaque = true
         return [.press(blind.chord.shifted, count: blind.counted ? count : 1)]
@@ -1960,6 +1971,7 @@ private extension PhysicalPlanner {
         context: inout Context,
         profile: CapabilityProfile
     ) -> [PhysicalStep]? {
+        guard repeats(count) else { return nil }
         switch source {
         case .pasteboard(let wise):
             // Content lives in macOS and is consumed ONLY via a synthesized
