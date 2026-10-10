@@ -6481,6 +6481,20 @@ precondition(!Expectation(selection: 0..<12, length: 12).metByEmptyField && !Exp
 precondition(!Expectation(selection: 0..<0, length: 0, edge: .paragraphStart).metByEmptyField)
 precondition(!Expectation(landing: .caretAfter(0, strict: true), length: 0).metByEmptyField)
 
+// Polls whose reads stay put while the field turns: a put landing as long as the placeholder, a box emptying under its caret.
+let putCheck = Expectation(landing: nil, length: 12)
+let emptyingCheck = Expectation(selection: 0..<0, length: 0)
+for (check, met, generated, scans) in [(putCheck, true, true, [true, false, false]), (emptyingCheck, false, false, [false, true, true])] {
+    var scanned = scans.makeIterator()
+    let verdicts = scans.map { _ in GeneratedText.judged(met, check, answered: true, generated: generated) { scanned.next()! } }
+    precondition(verdicts == [false, true, true], "\(check.traceFields)")
+}
+var scanned = false
+precondition(GeneratedText.judged(true, putCheck, answered: true, generated: false) { scanned = true; return true } && !scanned)
+precondition(!GeneratedText.judged(false, putCheck, answered: true, generated: true) { scanned = true; return true } && !scanned)
+precondition(!GeneratedText.judged(false, emptyingCheck, answered: false, generated: true) { scanned = true; return true } && !scanned)
+precondition(GeneratedText.judged(true, emptyingCheck, answered: true, generated: true) { scanned = true; return false } && !scanned)
+
 // ChatGPT's box on Dia 1.51.1 as probed: every capability but the seeded-off native motions.
 let chatProfile = CapabilityProfile(available: Set(Capability.allCases).subtracting([.nativeMotions]))
 func chatBox(_ text: String = "", caret: Int = 0, reads placeholderCaret: Int = 0,

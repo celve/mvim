@@ -13,6 +13,14 @@ public enum GeneratedText {
         let shown = value.utf16.filter { $0 != 10 }
         return mayFill(value) && !shown.isEmpty && shown == texts.joined().utf16.filter { $0 != 10 }
     }
+
+    /// A check's verdict where the field may show only generated text, which holds none; `scan` is asked each time it matters.
+    public static func judged(
+        _ met: Bool, _ expectation: Expectation, answered: Bool, generated: Bool, scan: () -> Bool
+    ) -> Bool {
+        let looks = met ? generated && !expectation.metByEmptyField : answered && expectation.metByEmptyField
+        return looks && scan() ? expectation.metByEmptyField : met
+    }
 }
 
 public extension FieldSnapshot.Reads {
@@ -20,7 +28,8 @@ public extension FieldSnapshot.Reads {
     init(generatedOnly raw: FieldReads, length: Int?, webContent: Bool, blocks: Int?, markers: Bool) {
         self.init(
             field: FieldReads(
-                text: raw.text.map { _ in "" }, plain: raw.plain.map { _ in 0..<0 }, selectedText: raw.selectedText.map { _ in "" },
+                text: raw.text.map { _ in "" }, plain: raw.plain.map { _ in 0..<0 },
+                selectedText: raw.selectedText.map { _ in "" },
                 markers: markers ? MarkerReads(breaks: ParagraphBreaks(), value: 0..<0) : nil
             ),
             length: length.map { _ in 0 }, webContent: webContent, blocks: blocks, marked: markers ? 0..<0 : nil,

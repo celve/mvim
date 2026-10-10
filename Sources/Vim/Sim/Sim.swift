@@ -527,16 +527,16 @@ private extension Sim {
         return (0...text.utf16.count).last { reads($0, text) <= offset } ?? 0
     }
 
-    /// A settle's verdict and what it read: where the executor looks for generated text, a placeholder holds none (LIN-1930).
+    /// A settle's verdict and what it read, judged as the executor judges it beside generated text (LIN-1930).
     func settles(_ expectation: Expectation, generated: Bool) -> (passed: Bool, selection: Range<Int>?, length: Int) {
         // A non-answer satisfies nothing, exactly as `Expectation.matches` has it.
         let observed = unreadableSelection ? nil : readSelection
         let met = expectation.converged(
             selection: observed, length: fieldLength - drawnLength, selectedText: readSelectedText, side: upperSide
         )
-        let checks = met ? generated && !expectation.metByEmptyField
-            : (observed != nil || expectation.landing == nil) && expectation.metByEmptyField
-        return (checks && showsPlaceholder ? expectation.metByEmptyField : met, observed, fieldLength)
+        let answered = observed != nil || expectation.landing == nil
+        let passed = GeneratedText.judged(met, expectation, answered: answered, generated: generated) { showsPlaceholder }
+        return (passed, observed, fieldLength)
     }
 
     /// The keys lane B counts with, which run whether or not `emulatesKeys` is on.

@@ -1,5 +1,4 @@
-/// Collects the text a page generates in a field, while no other text is there: Chromium gives such text, a CSS placeholder
-/// for one, no DOM node and so a negative node id (LIN-1930). Pure over its reads, so `make test` drives it with a fake tree.
+/// The text a page generates in a field, which Chromium gives a negative node id as no DOM node backs it (LIN-1930).
 public struct GeneratedTextScan<Node> {
     /// One node's role, `ChromeAXNodeId`, value and children, read together.
     public struct Read {
@@ -16,7 +15,7 @@ public struct GeneratedTextScan<Node> {
         }
     }
 
-    /// Nil on a failed read. One read.
+    /// Nil on a failed read.
     private let read: (Node) -> Read?
     private let budget: Int
     public private(set) var reads = 0

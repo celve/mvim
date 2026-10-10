@@ -350,8 +350,6 @@ public final class Executor {
         // Keys go back to back, so a run lands inside this wait, and Chromium takes a long shifted one more slowly still.
         let deadline = start.addingTimeInterval(0.25 + Double(presses) * (paragraphs ? 0.005 : 0.0025))
         var polls = 0
-        // Whether the field showed only generated text, kept for the reads it was checked on.
-        var shown: (seen: (Range<Int>?, Int?), only: Bool)?
         while true {
             polls += 1
             let reads = AX.attributes(names, of: element)
@@ -390,11 +388,8 @@ public final class Executor {
                 }
             }
             // A field showing only text its page generates, as an empty editor shows its placeholder, holds none (LIN-1930).
-            if met ? generated && !expectation.metByEmptyField : answered && expectation.metByEmptyField {
-                if shown.map({ $0.seen != (selection, length) }) ?? true {
-                    shown = ((selection, length), Snapshotter.showsOnlyGeneratedText(element))
-                }
-                if shown?.only == true { met = expectation.metByEmptyField }
+            met = GeneratedText.judged(met, expectation, answered: answered, generated: generated) {
+                Snapshotter.showsOnlyGeneratedText(element)
             }
             if met { return outcome(true) }
             guard Date() < deadline else { return outcome(false) }
