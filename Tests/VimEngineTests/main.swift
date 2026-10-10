@@ -6524,6 +6524,13 @@ for swallows in [true, false] {
     put.type("P")
     precondition(put.settleFailures == (swallows ? 1 : 0) && put.text == (swallows ? "" : "abcdefghijk\n"), "swallowed \(swallows)")
 }
+// Once a check finds the box empty, the next one looks for its placeholder too: a `.` of `cc` plans this.
+var emptiedThenPut = Sim(text: "", caret: 0, profile: chatProfile)
+emptiedThenPut.placeholder = "Ask anything"
+emptiedThenPut.swallowsReplace = true
+precondition(!emptiedThenPut.perform([
+    .settle(Expectation(selection: 0..<0, length: 0)), .replaceSelection("abcdefghijkl"), .settle(Expectation(landing: nil, length: 12)),
+]))
 var stuck = chatBox("x", profile: removing([.insertText], from: chatProfile))
 stuck.ignoredChords = [.deleteBack]
 stuck.feed("<C-[>")
