@@ -240,6 +240,19 @@ public struct Sim {
             openChange = nil
         }
     }
+
+    /// `Controller.pointerActed`'s pure twin for a click in the bound field, which puts the caret at `offset` with no key.
+    public mutating func click(at offset: Int) {
+        let caret = TextModel(text).clamp(offset)
+        selection = caret..<caret
+        atChipStart = false
+        codeInside = false
+        atWrittenCodeEnd = false
+        inListGap = false
+        backward = false
+        monitor.cancelPending()
+        if state.field.mode.isInserting { monitor.markInsertLogLossy() }
+    }
 }
 
 // MARK: - The runtime loop

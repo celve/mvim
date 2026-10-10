@@ -160,7 +160,7 @@ The menu-bar icon shows the mode as a letter in a square:
 | **!** | Accessibility is not granted, or the input tap is not running |
 
 Where uvim can set the selection, Normal mode also draws a block cursor. Nothing shows a half-typed command,
-or a `/` search as you type it.
+or a `/` search as you type it. A click cancels either, and so does a key the app keeps.
 
 In Insert mode uvim takes only ⌃[, and Esc if you chose it. In Normal and Visual mode apps still keep every ⌘
 and ⌥ combination, Esc unless you chose it, Home, End, Page Up and Page Down, the function keys, and every ⌃

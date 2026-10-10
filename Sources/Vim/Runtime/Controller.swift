@@ -87,9 +87,9 @@ public final class Controller {
         tracker.start()
     }
 
-    /// A click in a forced app moved the caret invisibly — Normal-mode
-    /// offsets are fiction now. Back to the entry policy.
+    /// A click may move the caret, which ends a half-typed command; in a forced app the move is invisible, so Normal mode ends too.
     private func pointerActed() {
+        monitor.cancelPending()
         if state.field.mode.isInserting { monitor.markInsertLogLossy() }
         guard let binding, binding.isForced, state.field.mode != .insert else { return }
         monitor.reset()
