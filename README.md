@@ -201,7 +201,7 @@ A subset of Vim. In a field uvim can read and write, as in most native Mac apps:
 | **Edit** | `x` `X` `s` `S` `r` `C` `D` `Y` `J` `gJ` `~` `p` `P` `.`, and `u` and ⌃R, which press the app's own ⌘Z and ⇧⌘Z |
 | **Insert** | `i` `a` `I` `A` `o` `O` `gi` |
 | **Visual** | `v`, motions or `iw` `aw`, then `d` `c` `y` `~` `u` `U` `>` `<`. A selection can end one character short of Vim's, and `V` and ⌃V select characters, not lines or blocks |
-| **Counts** | Most commands take one. `gg` `G` `C` `D`, the Insert commands, `u` and ⌃R ignore it |
+| **Counts** | Most commands take one, up to 999,999,999 as in Vim. `gg` `G` `C` `D`, the Insert commands, `u` and ⌃R ignore it, and `r` `p` `P` beep above 1,000 |
 | **Registers** | `"a`–`"z` (`"A`–`"Z` append), `"0`–`"9`, `"-`, `"_`, `".`, `"/`, kept until uvim quits. `"+p` and `"*p` paste the Mac clipboard, but a yank does not copy to it |
 
 These beep instead: `:` and `q`, after which the keys you type run as Normal-mode commands; `@`; `z`
@@ -232,7 +232,8 @@ What else differs there:
 - `j` and `k` count the lines Linear shows: a list's markers, to-do boxes and a code block's language label
   are not lines, and a mention chip is one character on its paragraph's line.
 - In a field uvim cannot read at all, and under **Force**, moves are approximate, deletes and yanks go
-  through ⌘X and ⌘C so the clipboard is the register, and search, marks and Visual mode beep.
+  through ⌘X and ⌘C so the clipboard is the register, and search, marks, Visual mode and a count above
+  1,000 on a key uvim would repeat beep.
 - Where each block of a page is a field of its own inside the page's, as in **Notion**, uvim reads that from
   the page: `j` and `k` press ↓ and ↑, so they move by the rows you see and from one block to the next, and
   the mode stays as you go.
@@ -260,7 +261,8 @@ not, and a mention chip is one character on its paragraph's line, so `j` and `k`
 shows, and columns start after a list item's `• ` or `1. `. In a field uvim cannot read at all, and
 under **Force**, moves are
 approximate, deletes and yanks go through ⌘X and ⌘C so the clipboard is the register, and
-search, marks and Visual mode beep.
+search, marks and Visual mode beep. So does a count above 1,000 on a key uvim would repeat there:
+no text stops it sooner.
 
 Some editors make each block of a page a field of its own inside one editable page, as **Notion**
 does. uvim reads that from the page, in a browser or an Electron app, with no list of sites: such a
@@ -754,6 +756,16 @@ that one and counts again, until uvim is relaunched or the app updates. The fail
 route in its `want` (`route=line-start`, `route=line-end` or `route=select-back`), and the key itself
 is not blamed. Arrows, ⌃A and ⌃E are posted with no pause between key down and key up; every other key
 keeps 2 ms.
+
+A count is at most 999,999,999, as in Vim, and digits typed past that change nothing. Where uvim reads
+the text, a count costs no more than the text: `5000w` stops at the last word. Where a count would only
+repeat a key, it repeats it at most 1,000 times: above that the native keys here and
+[the app's own](#native-word-paragraph-and-page-keys) give way to arrows counted over the text, and
+where only keys can make the move the command beeps: in a field uvim cannot read, from block to block
+of a page like Notion's, for `{` `}` `gj` `gk` ⌃F ⌃B, and for a Visual-mode move where uvim cannot
+write the selection. `r` and a put beep above 1,000 in every field, since each repeats text by the
+count alone. A half-typed command, a `/` search included, holds up to 256 characters: a key past
+that is dropped unless it completes or cancels the command.
 
 In Linear, → or ↓ from the last line of a list, a code block or a quote stops once before another of
 the three that follows it directly, and so does ↑ coming back; next to a paragraph or a heading there is
