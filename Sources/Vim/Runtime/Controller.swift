@@ -200,7 +200,7 @@ public final class Controller {
 
         // Insert-mode non-Esc tokens must keep flowing through the monitor:
         // they build the insert log the dot body replays.
-        switch monitor.feed(token, mode: mode) {
+        switch monitor.feed(token, mode: mode, clicks: mode == .insert ? nil : Self.buttonEvents()) {
         case .passthrough:
             return false
         case .pending, .cancelled:
@@ -263,6 +263,12 @@ public final class Controller {
 
     private func gate(_ event: KeyEvent, profile: CapabilityProfile) -> String? {
         KeyNotation.token(for: event, profile: profile, escapeEngages: escapeEngages)
+    }
+
+    /// The session's button presses and releases, which the window server counts in step with the tap's keys, as no monitor does.
+    private static func buttonEvents() -> UInt32 {
+        [CGEventType.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
+            .reduce(0) { $0 &+ CGEventSource.counterForEventType(.combinedSessionState, eventType: $1) }
     }
 
     /// A completed command verify-before-run threw away, then handed to its reverify.

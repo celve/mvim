@@ -1770,6 +1770,15 @@ monitor.cancelPending()
 precondition(monitor.feed("<Esc>", mode: .insert) ==
     .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
 
+// So does a click since the last key, which the runtime tells by its count of button events (LIN-1104).
+precondition(monitor.feed("d", mode: .normal, clicks: 6) == .pending)
+precondition(monitor.feed("w", mode: .normal, clicks: 7) == .command(RawMonitor.Completed(command: RawCommand("w"))))
+precondition(monitor.feed("d", mode: .normal, clicks: 7) == .pending)
+precondition(monitor.feed("w", mode: .normal, clicks: 7) == .command(RawMonitor.Completed(command: RawCommand("dw"))))
+precondition(monitor.feed("h", mode: .insert, clicks: 7) == .passthrough)
+precondition(monitor.feed("<Esc>", mode: .insert, clicks: 9) ==
+    .command(RawMonitor.Completed(command: RawCommand("<Esc>"), insertPayload: "h")))
+
 // Esc cancels a pending command; idle, it is the app's in Normal and leaves Visual.
 precondition(monitor.feed("d", mode: .normal) == .pending)
 precondition(monitor.feed("<Esc>", mode: .normal) == .cancelled)
@@ -2506,6 +2515,33 @@ carriedChange.refocus(.sameDocument, text: "bar")
 carriedChange.feed("<Esc>")
 precondition(carriedChange.state.session.lastChange == VimState.ChangeMemory(body: "ciw", insert: "foo"),
              "sameDocument must not half-clear the dot body")
+
+// A click in the same field ends a half-typed command, which its last key would run at the clicked caret (LIN-1104).
+func clicked(_ before: String, at offset: Int, _ after: String, in text: String = "one two three four") -> Sim {
+    var sim = Sim(text: text, caret: 0, profile: axProfile)
+    sim.type(before)
+    sim.click(at: offset)
+    if after.hasPrefix("<") { sim.feed(after) } else { sim.type(after) }
+    return sim
+}
+let clickedOperator = clicked("d", at: 8, "w")
+precondition(clickedOperator.text == "one two three four" && clickedOperator.selection == 14..<15, "`w` only moves, from the click")
+precondition(clicked("", at: 8, "dw").text == "one two four", "typed whole after the click, it runs there")
+precondition(clicked("3", at: 4, "x", in: "abcdefgh").text == "abcdfgh")
+let clickedRegister = clicked("\"a", at: 8, "yw").state.session
+precondition(clickedRegister.register("a") == nil
+    && clickedRegister.register("0") == .content(RegisterContent(text: "three ", wise: .character)))
+let clickedArgument = clicked("r", at: 8, "l")
+precondition(clickedArgument.text == "one two three four" && clickedArgument.selection == 9..<10)
+precondition(clicked("/t", at: 8, "w").selection == 14..<15, "an open prompt ends too")
+precondition(clicked("vi", at: 8, "<Esc>").state.field.mode == .normal, "Esc leaves Visual, with no object pending to cancel")
+var clickedInsert = Sim(text: "one two three four", caret: 0, profile: axProfile)
+clickedInsert.type("ciwONE")
+clickedInsert.click(at: 10)
+clickedInsert.type("X")
+clickedInsert.feed("<Esc>")
+precondition(clickedInsert.text == "ONE two thXree four" && clickedInsert.state.session.lastInsert == "ONEX")
+precondition(clickedInsert.state.session.lastChange == .unreplayable, "the typed log cannot say where the click put X")
 
 // An opaque selection is press-built and lives in the queued channel, so the
 // yank must ride the same queue (⌘C). `blockProfile` HAS readSelectedText —
