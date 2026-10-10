@@ -4,28 +4,53 @@ public struct RunAttribution: Equatable, Sendable {
     /// The optional route whose settle failed, which is no evidence on any key.
     public private(set) var missedRoute: Route?
     private var pending: Question?
+    /// The field as the previous step read it, when that step was a settle that passed.
+    private var settled: Read?
+    /// `settled` as it stood at the text write just recorded.
+    private var beforeWrite: Read?
     /// The next step's plan index: the Executor and the Sim record every step, in order.
     private var index = 0
 
+    /// The selection and length a settle read, where its expectation asked for both: the Sim answers either way.
+    private struct Read: Equatable, Sendable {
+        let selection: Range<Int>
+        let length: Int
+
+        init?(_ expectation: Expectation, selection: Range<Int>?, length: Int?) {
+            guard expectation.landing != nil, expectation.length != nil, let selection, let length else { return nil }
+            self.selection = selection
+            self.length = length
+        }
+    }
+
     public init() {}
 
+    /// `writeError` is what the write before a failed settle returned, as `Executor.SettleFailure` keeps it.
     public mutating func record(
         _ step: PhysicalStep, passed: Bool = true,
-        selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil
+        selection: Range<Int>? = nil, length: Int? = nil, selectedText: String? = nil, writeError: Int32? = nil
     ) {
         defer { index += 1 }
+        let previous = settled
+        let written = beforeWrite
+        settled = nil
+        beforeWrite = nil
         switch step {
         case .setSelection:
             pending = .write(.writeSelection)
         case .replaceSelection:
             pending = .write(.insertText)
+            beforeWrite = previous
         case .settle(let expectation):
+            let read = Read(expectation, selection: selection, length: length)
+            let unchanged = written != nil && read == written && writeError == nil
             let item = passed
                 ? passing(expectation)
-                : failing(expectation, selection: selection, length: length, selectedText: selectedText)
+                : failing(expectation, selection: selection, length: length, selectedText: selectedText, unchanged: unchanged)
             if let item { evidence.append(item) }
             // A read that went dark fails any plan alike.
             if !passed, selection != nil, let route = expectation.route { missedRoute = route }
+            if passed { settled = read }
             pending = nil
         default:
             pending = nil
@@ -38,7 +63,7 @@ public struct RunAttribution: Equatable, Sendable {
     }
 
     private func failing(
-        _ expectation: Expectation, selection: Range<Int>?, length: Int?, selectedText: String?
+        _ expectation: Expectation, selection: Range<Int>?, length: Int?, selectedText: String?, unchanged: Bool
     ) -> Evidence? {
         if let expected = expectation.selectedText, expectation.rangeHeld(selection: selection, length: length) {
             // An unanswered text read contradicts nothing.
@@ -46,7 +71,7 @@ public struct RunAttribution: Equatable, Sendable {
             return .offsets(.refutes, .textCheck, seen: .settle(index))
         }
         guard let blame = expectation.blame else {
-            let why = expectation.miss(selection: selection, length: length)
+            let why = unchanged ? .unchanged : expectation.miss(selection: selection, length: length)
             return pending.map { Evidence($0, .refutes, why: why, seen: .settle(index)) }
         }
         guard let selection else { return nil }

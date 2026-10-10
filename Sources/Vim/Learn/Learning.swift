@@ -94,7 +94,7 @@ public enum Learning {
                 return lesson
             }
             lesson.strikes = strikes.strike(capability, judgedUnder: snapshot.after, app: versions.app)
-            guard lesson.strikes >= Strikes.limit(for: capability) else {
+            guard lesson.strikes >= Strikes.limit(for: capability, why: refuted.why) else {
                 lesson.skip = .strike
                 return lesson
             }
@@ -123,7 +123,7 @@ extension Learning.Lesson {
             let fields = "q=\(refuted.question.rawValue) why=\(refuted.why.rawValue)"
             switch skip {
             case .strike?:
-                let limit = refuted.question.capability.map { Strikes.limit(for: $0) } ?? Strikes.limit
+                let limit = refuted.question.capability.map { Strikes.limit(for: $0, why: refuted.why) } ?? Strikes.limit
                 lines.append("strike \(strikes)/\(limit) \(fields) rung=\(rung)")
             case let skip?: lines.append("skip=\(skip.rawValue) \(fields)")
             case nil: lines.append("commit \(fields) rung=\(rung) ver=\(versions.app ?? "nil")")

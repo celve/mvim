@@ -2978,8 +2978,65 @@ precondition(updated.0.runs(.writeSelection) == 1 && updated.1.beliefs.isEmpty, 
 var appKeyStore = BeliefStore()
 var appKeyStrikes = Strikes()
 let appKeyMiss = Evidence(.key(.wordKeys), .refutes, why: .unmoved, seen: .settle(1))
-precondition(learned(&appKeyStore, &appKeyStrikes, [appKeyMiss]).committed == .wordKeys && Strikes.limit(for: .lineEndKey) == 3,
+precondition(learned(&appKeyStore, &appKeyStrikes, [appKeyMiss]).committed == .wordKeys
+             && Strikes.limit(for: .paragraphKeys, why: .unmoved) == 1 && Strikes.limit(for: .lineEndKey, why: .unmoved) == 3,
              "the opt-in app keys keep the one-miss rule")
+
+// LIN-1929: a text write that returned no error and left the field as the passing settle before it read it is off at once.
+let beforeDelete = Expectation(selection: 4..<9, length: 15, selectedText: "hello")
+let afterDelete = Expectation(selection: 4..<4, length: 10)
+func deleted(_ selection: Range<Int>?, _ length: Int?, before: Expectation? = beforeDelete, after: Expectation = afterDelete,
+             writeError: Int32? = nil) -> [Evidence] {
+    var run = RunAttribution()
+    run.record(.setSelection(4..<9))
+    if let before { run.record(.settle(before), passed: true, selection: 4..<9, length: 15, selectedText: "hello") }
+    run.record(.replaceSelection(""))
+    run.record(.settle(after), passed: false, selection: selection, length: length, writeError: writeError)
+    return run.evidence
+}
+func offAfter(_ run: [Evidence]) -> Int? {
+    var store = BeliefStore()
+    var strikes = Strikes()
+    return (1...Strikes.limit).first { _ in learned(&store, &strikes, run).committed != nil }
+}
+let ignoredDelete = deleted(4..<9, 15)
+precondition(ignoredDelete.last == Evidence(.write(.insertText), .refutes, why: .unchanged, seen: .settle(3)))
+var ignoredStore = BeliefStore()
+var ignoredStrikes = Strikes()
+let ignoredOnce = learned(&ignoredStore, &ignoredStrikes, ignoredDelete)
+precondition(ignoredOnce.committed == .insertText && ignoredOnce.strikes == 1 && ignoredOnce.republish)
+precondition(broken(ignoredStore) == [.insertText] && ignoredStrikes.isEmpty)
+let keptThree: [(run: [Evidence], why: Evidence.Why)] = [
+    (deleted(4..<9, 15, writeError: -25204), .length),
+    (deleted(nil, 15), .unanswered),
+    (deleted(4..<9, nil), .unanswered),
+    (deleted(4..<9, 14), .length),
+    (deleted(5..<9, 15), .length),
+    (deleted(4..<9, 15, before: nil), .length),
+    (deleted(4..<9, 15, before: Expectation(selection: 4..<9, selectedText: "hello")), .length),
+    (deleted(4..<9, 15, after: Expectation(selection: 4..<4)), .moved),
+    (deleted(4..<9, 15, after: Expectation(length: 10)), .length),
+]
+for (index, item) in keptThree.enumerated() {
+    precondition(item.run.last?.question == .write(.insertText) && item.run.last?.why == item.why, "case \(index)")
+    precondition(offAfter(item.run) == Strikes.limit, "case \(index): any other failed text write keeps three")
+}
+var pressedBetween = RunAttribution()
+pressedBetween.record(.settle(beforeDelete), passed: true, selection: 4..<9, length: 15, selectedText: "hello")
+pressedBetween.record(.press(.left, count: 1))
+pressedBetween.record(.replaceSelection(""))
+pressedBetween.record(.settle(afterDelete), passed: false, selection: 4..<9, length: 15)
+precondition(pressedBetween.evidence.last?.why == .length && offAfter(pressedBetween.evidence) == Strikes.limit,
+             "only the settle straight before the write counts")
+var selectionStayed = RunAttribution()
+selectionStayed.record(.settle(Expectation(selection: 0..<0, length: 15)), passed: true, selection: 0..<0, length: 15)
+selectionStayed.record(.setSelection(4..<9))
+selectionStayed.record(.settle(Expectation(selection: 4..<9, length: 15)), passed: false, selection: 0..<0, length: 15)
+precondition(selectionStayed.evidence == [Evidence(.write(.writeSelection), .refutes, why: .moved, seen: .settle(2))])
+precondition(offAfter(selectionStayed.evidence) == Strikes.limit, "a selection write that changed nothing keeps three")
+precondition(offAfter([Evidence(.key(.lineEndKey), .refutes, why: .unmoved, seen: .settle(1))]) == Strikes.limit,
+             "so does a key")
+precondition(Strikes.limit(for: .writeSelection, why: .unchanged) == Strikes.limit)
 
 
 // MARK: - The recorder's renderers
@@ -3809,6 +3866,9 @@ precondition(Learning.Lesson(refuted: lengthStrike, skip: .alreadyCommitted).tra
     == ["skip=already-committed q=insertText why=length"])
 precondition(Learning.Lesson(refuted: lengthStrike, skip: .strike, strikes: 2).traceLines(rung: learnRung, versions: learnVersions)
     == ["strike 2/3 q=insertText why=length rung=\(learnRung)"])
+precondition(ignoredDelete[1].traceFields == "q=insertText refutes why=unchanged seen=settle@3")
+precondition(ignoredOnce.traceLines(rung: learnRung, versions: learnVersions)
+    == ["commit q=insertText why=unchanged rung=\(learnRung) ver=1.49.1 → republish"])
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields(text: true)
     == "sel=10..15 len=21 text=\"hello\"")
 precondition(Expectation(selection: 10..<15, length: 21, selectedText: "hello").traceFields == "sel=10..15 len=21 text=(5)")
@@ -3977,16 +4037,25 @@ textarea.feed("<Esc>")
 precondition(textarea.text == "say bye world" && textarea.settleFailures == 0)
 precondition(textarea.learner!.store == untrustedRung && textarea.learner!.evidence.isEmpty)
 
-var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
-ignored.swallowsReplace = true
-ignored.learn(with: Sim.Learner(probed: axProfile))
-for count in 1...Strikes.limit {
-    ignored.type("ciw")
-    precondition(ignored.learner!.lessons.last?.strikes == count)
-    precondition(ignored.profile.has(.insertText) == (count < Strikes.limit), "one swallowed replace leaves the write on")
-    ignored.feed("<Esc>")
+for (keys, after) in [("dd", ""), ("x", "say helo world"), ("ciw", "say  world")] {
+    var ignored = Sim(text: "say hello world", caret: 6, profile: axProfile)
+    ignored.swallowsReplace = true
+    ignored.learn(with: Sim.Learner(probed: axProfile))
+    ignored.type(keys)
+    let lesson = ignored.learner!.lessons.last
+    precondition(ignored.text == "say hello world" && ignored.settleFailures == 1)
+    precondition(lesson?.committed == .insertText && lesson?.refuted?.why == .unchanged && !ignored.profile.has(.insertText),
+                 "\(keys): one swallowed replace switches it off")
+    precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
+    if ignored.state.field.mode.isInserting {
+        ignored.feed("<Esc>")
+        ignored.type("l")
+    }
+    precondition(physical(keys, text: ignored.text, caret: ignored.caret, profile: ignored.profile).steps
+        .contains(.press(.deleteBack, count: 1)))
+    ignored.type(keys)
+    precondition(ignored.text == after && ignored.settleFailures == 1, "\(keys): then Backspace deletes")
 }
-precondition(ignored.learner!.lessons.contains { $0.committed == .insertText })
 var swallowedWrites = Sim(text: "say hello world", caret: 6, profile: axProfile)
 swallowedWrites.swallowsSelect = true
 swallowedWrites.learn(with: Sim.Learner(probed: axProfile))
@@ -3997,7 +4066,6 @@ for count in 1...Strikes.limit {
 }
 swallowedWrites.type("l")
 precondition(swallowedWrites.caret == 7, "then keys move the caret")
-precondition(ignored.learner!.store.beliefs.map(\.judgedUnder) == [.value])
 var chipKey = chromiumSim("ab\ncd", caret: 4, profile: keyProfile, markers: true, chromium: true)
 chipKey.reboundChords = [.paragraphStart: .paragraphEnd]
 chipKey.type("0")
