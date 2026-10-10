@@ -255,7 +255,7 @@ private extension LogicalPlanner {
         }
 
         let isChange = operation.kind == .change
-        let total = count * (operation.targetCount ?? 1)   // 2d3w deletes six words
+        let total = Count.product(count, operation.targetCount ?? 1)   // 2d3w deletes six words
 
         let target: LogicalStep.SelectionTarget
         var remember: LogicalStep?
@@ -345,6 +345,8 @@ private extension LogicalPlanner {
 
         case .replaceCharacter(let replacement):
             guard replacement != "\u{1B}" else { return .empty }   // r<Esc> cancels
+            // The replacement is as long as the count, whatever the line holds.
+            guard count <= Count.repeatLimit else { return .bell(.unsupported(source)) }
             return LogicalPlan(
                 .select(.span(to: .motion(.character(.right), count: count), inclusive: false)),
                 .replaceSelection(String(repeating: String(replacement), count: count))

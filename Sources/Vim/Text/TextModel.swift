@@ -299,15 +299,15 @@ public struct TextModel: Equatable, Sendable {
         guard !pattern.isEmpty else { return nil }
         let starts = matchStarts(of: pattern)
         guard !starts.isEmpty else { return nil }
-        var current = o
-        for _ in 0..<count {
-            if forward {
-                current = starts.first(where: { $0 > current }) ?? starts[0]
-            } else {
-                current = starts.last(where: { $0 < current }) ?? starts[starts.count - 1]
-            }
+        guard count > 0 else { return o }
+        // The first step lands on a match and each later one on its neighbour, around the ring.
+        let further = (count - 1) % starts.count
+        if forward {
+            let first = starts.firstIndex(where: { $0 > o }) ?? 0
+            return starts[(first + further) % starts.count]
         }
-        return current
+        let first = starts.lastIndex(where: { $0 < o }) ?? starts.count - 1
+        return starts[(first - further + starts.count) % starts.count]
     }
 
     private func matchStarts(of pattern: String) -> [Int] {
@@ -362,12 +362,16 @@ public struct TextModel: Equatable, Sendable {
         case .word(let direction, let end, let big):
             var position = o
             for _ in 0..<count {
+                let next: Int
                 switch (direction, end) {
-                case (.forward, false): position = wordForward(from: position, big: big)
-                case (.forward, true): position = wordEnd(from: position, big: big)
-                case (.backward, false): position = wordBackward(from: position, big: big)
+                case (.forward, false): next = wordForward(from: position, big: big)
+                case (.forward, true): next = wordEnd(from: position, big: big)
+                case (.backward, false): next = wordBackward(from: position, big: big)
                 default: return nil
                 }
+                // A step that stays put is at the text's edge, where every later one stays too.
+                guard next != position else { break }
+                position = next
             }
             return position
         case .lineStart(let fnb):
