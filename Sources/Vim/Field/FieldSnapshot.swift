@@ -125,10 +125,10 @@ public extension FieldSnapshot {
     enum Need: Equatable, Sendable {
         case side(ParagraphBreaks.End)
         case emptyParagraph
-        /// Discovery over `markers`, answered by passing its memo for `value`.
-        case emptyParagraphs(value: String, markers: String)
+        /// Discovery over `markers`, answered by passing its memo for `value`; `why` the last one was not carried.
+        case emptyParagraphs(value: String, markers: String, why: Discovery.Rewalk)
         /// Which `candidates` are list markers or chips, answered by passing its memo for `value`.
-        case unreachable(value: String, markers: String, candidates: UnreachableLines.Candidates)
+        case unreachable(value: String, markers: String, candidates: UnreachableLines.Candidates, why: Discovery.Rewalk)
     }
 
     /// A step's result, or the read it needs first.
@@ -146,7 +146,7 @@ public extension FieldSnapshot {
         }
     }
 
-    /// Everything after the learner; `memo` and `unreachable` are the last discoveries, returned current.
+    /// Everything after the learner; `memo` and `unreachable` are the last discoveries, returned held, carried or walked again.
     static func build(
         _ reads: Reads, capabilities: CapabilityProfile, answer: OffsetsAnswer, anchor: Int?, cursor: Range<Int>?,
         memo known: EmptyParagraphs.Memo?, unreachable knownUnreachable: UnreachableLines.Memo? = nil
@@ -169,11 +169,11 @@ public extension FieldSnapshot {
         var memo: EmptyParagraphs.Memo?
         if answer == .textContent, let value = text, let aligned = breaks, let marked = reads.marked, let raw = reads.markerText,
            case let plainMarkers = FieldReads.withoutAttachments(raw), plainMarkers.utf16.contains(10) {
-            guard let known, known.holds(value: value, markers: raw, blocks: reads.blocks) else {
-                return .needs(.emptyParagraphs(value: value, markers: raw))
+            switch known?.carried(value: value, markers: raw, blocks: reads.blocks) ?? .failure(.first) {
+            case .failure(let why): return .needs(.emptyParagraphs(value: value, markers: raw, why: why))
+            case .success(let kept): memo = kept
             }
-            memo = known
-            if let found = known.found,
+            if let found = memo?.found,
                let restored = EmptyParagraphs.restore(value: value, fieldText: plainMarkers, aligned: aligned, found: found) {
                 switch valueRange(marked, in: restored.breaks, sides: reads.sides) {
                 case .needs(let need):
@@ -203,11 +203,14 @@ public extension FieldSnapshot {
                 text: model, breaks: current, raw: raw, caret: marked.isEmpty ? marked.lowerBound : nil, proseMirror: reads.proseMirror
             )
             if !candidates.isEmpty {
-                guard let knownUnreachable,
-                      knownUnreachable.holds(value: value, markers: raw, blocks: reads.blocks, roots: reads.roots) else {
-                    return .needs(.unreachable(value: value, markers: raw, candidates: candidates))
+                let carried = knownUnreachable?.carried(
+                    value: value, markers: raw, blocks: reads.blocks, roots: reads.roots, proseMirror: reads.proseMirror,
+                    candidates: candidates
+                )
+                switch carried ?? .failure(.first) {
+                case .failure(let why): return .needs(.unreachable(value: value, markers: raw, candidates: candidates, why: why))
+                case .success(let kept): unreachable = kept
                 }
-                unreachable = knownUnreachable
             }
             let found = unreachable?.found ?? UnreachableLines.Found(markers: [], chips: [])
             let folded = UnreachableLines.fold(text: model, breaks: current, raw: raw, found: found)

@@ -192,15 +192,19 @@ public enum Snapshotter {
                 snapshotReads.sides.updateValue(side?(end), forKey: end)
             case .emptyParagraph:
                 snapshotReads.inEmptyParagraph = marked?.inEmptyParagraph ?? false
-            case .emptyParagraphs(let value, let markers):
-                let found = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)?.found
-                memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
-            case .unreachable(let value, let markers, let candidates):
-                let found = UnreachableDiscovery.found(
+            case .emptyParagraphs(let value, let markers, let why):
+                let walked = EmptyParagraphDiscovery.found(in: element, markers: markers, budget: EmptyParagraphs.readBudget)
+                memo = EmptyParagraphs.Memo(
+                    value: value, markers: markers, blocks: blocks, found: walked.found, exhausted: walked.exhausted,
+                    reads: walked.reads, origin: .walked(why)
+                )
+            case .unreachable(let value, let markers, let candidates, let why):
+                let walked = UnreachableDiscovery.found(
                     in: element, markers: markers, candidates: candidates, budget: UnreachableLines.readBudget
-                )?.found
+                )
                 unreachable = UnreachableLines.Memo(
-                    value: value, markers: markers, blocks: blocks, roots: snapshotReads.roots, found: found
+                    value: value, markers: markers, blocks: blocks, roots: snapshotReads.roots, found: walked.found,
+                    exhausted: walked.exhausted, candidates: candidates, reads: walked.reads, origin: .walked(why)
                 )
             }
         }

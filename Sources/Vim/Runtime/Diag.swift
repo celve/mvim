@@ -192,15 +192,22 @@ enum Diag {
         }
     }
 
-    /// A text's empty-paragraph discovery; `failed` leaves the field on `AXValue`'s lines.
+    /// A text's empty-paragraph discovery; `failed` leaves the field on `AXValue`'s lines, and the origin says if it walked.
     static func emptyParagraphs(_ epoch: UInt64, _ seq: UInt64, _ memo: EmptyParagraphs.Memo) {
-        let found = memo.found.map { "found=\($0.count)" } ?? "failed"
-        gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) empty-paragraphs \(found, privacy: .public)")
+        let found = memo.found.map { "found=\($0.count)" } ?? (memo.exhausted ? "failed=budget" : "failed=read")
+        gate.debug("""
+            e\(epoch, privacy: .public).c\(seq, privacy: .public) empty-paragraphs \(found, privacy: .public) \
+            \(memo.origin.traceField, privacy: .public)
+            """)
     }
 
     static func unreachable(_ epoch: UInt64, _ seq: UInt64, _ memo: UnreachableLines.Memo) {
-        let found = memo.found.map { "markers=\($0.markers.count) chips=\($0.chips.count)" } ?? "failed"
-        gate.debug("e\(epoch, privacy: .public).c\(seq, privacy: .public) unreachable \(found, privacy: .public)")
+        let found = memo.found.map { "markers=\($0.markers.count) chips=\($0.chips.count)" }
+            ?? (memo.exhausted ? "failed=budget" : "failed=read")
+        gate.debug("""
+            e\(epoch, privacy: .public).c\(seq, privacy: .public) unreachable \(found, privacy: .public) \
+            \(memo.origin.traceField, privacy: .public)
+            """)
     }
 
     /// A completed command verify-before-run threw away; one form eats its final key.

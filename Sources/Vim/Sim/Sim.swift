@@ -746,10 +746,10 @@ extension Sim {
             reads.sides.updateValue(chromium.side(end == .upper ? selection.upperBound : selection.lowerBound), forKey: end)
         case .emptyParagraph:
             reads.inEmptyParagraph = chromium.inEmptyParagraph(selection)
-        case .emptyParagraphs(let value, let markers):
+        case .emptyParagraphs(let value, let markers, let why):
             let found = findsEmptyParagraphs ? chromium.shown.found : nil
-            memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found)
-        case .unreachable(let value, let markers, let candidates):
+            memo = EmptyParagraphs.Memo(value: value, markers: markers, blocks: blocks, found: found, origin: .walked(why))
+        case .unreachable(let value, let markers, let candidates, let why):
             let shown = chromium
             let found = findsUnreachable ? UnreachableLines.Found(
                 markers: candidates.markers.map(\.lowerBound).filter(Set(shown.listMarkers).contains),
@@ -759,7 +759,9 @@ extension Sim {
                 carets: shown.drawnCaret.map { candidates.carets.contains($0.offset) ? [$0] : [] } ?? [],
                 joins: shown.joins, controls: shown.controls
             ) : nil
-            unreachable = UnreachableLines.Memo(value: value, markers: markers, blocks: blocks, roots: roots, found: found)
+            unreachable = UnreachableLines.Memo(
+                value: value, markers: markers, blocks: blocks, roots: roots, found: found, origin: .walked(why)
+            )
         }
     }
 

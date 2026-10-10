@@ -4,12 +4,15 @@ import Core
 /// `EmptyBlockScan` over a Chromium field's accessibility tree, for `EmptyParagraphs.restore` (LIN-1612).
 enum EmptyParagraphDiscovery {
     /// Plain offsets in `markers` of the `<br>`s of line-starting empty blocks; nil on a failed read or past `budget` reads.
-    static func found(in element: AXUIElement, markers: String, budget: Int) -> (found: [Int], reads: Int)? {
+    static func found(
+        in element: AXUIElement, markers: String, budget: Int
+    ) -> (found: [Int]?, exhausted: Bool, reads: Discovery.Reads) {
         let plain = Array(markers.utf16).filter { $0 != 0xFFFC }
-        guard plain.contains(10) else { return ([], 0) }
-        guard let tree = FieldTree(element, markers: markers) else { return nil }
-        var scan = EmptyBlockScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, plain: plain).map { ($0, scan.reads + 2) }
+        guard plain.contains(10) else { return ([], false, Discovery.Reads(budget: budget - 2)) }
+        guard let tree = FieldTree(element, markers: markers) else { return (nil, false, Discovery.Reads(budget: budget - 2)) }
+        let recorder = Discovery.Recorder(budget: budget - 2, block: tree.block, offset: tree.offset)
+        var scan = EmptyBlockScan(budget: budget - 2, block: recorder.block, offset: recorder.offset)
+        return (scan.run(blocks: recorder.roots(tree.blocks), plain: plain), scan.exhausted, recorder.reads)
     }
 }
 
@@ -18,11 +21,13 @@ enum UnreachableDiscovery {
     /// Nil on a failed read or past `budget` reads.
     static func found(
         in element: AXUIElement, markers: String, candidates: UnreachableLines.Candidates, budget: Int
-    ) -> (found: UnreachableLines.Found, reads: Int)? {
-        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), 0) }
-        guard let tree = FieldTree(element, markers: markers) else { return nil }
-        var scan = UnreachableScan<AXUIElement>(budget: budget - 2, block: tree.block, offset: tree.offset)
-        return scan.run(blocks: tree.blocks, candidates: candidates).map { ($0, scan.reads + 2) }
+    ) -> (found: UnreachableLines.Found?, exhausted: Bool, reads: Discovery.Reads) {
+        let reads = Discovery.Reads(budget: budget - 2)
+        guard !candidates.isEmpty else { return (UnreachableLines.Found(markers: [], chips: []), false, reads) }
+        guard let tree = FieldTree(element, markers: markers) else { return (nil, false, reads) }
+        let recorder = Discovery.Recorder(budget: budget - 2, block: tree.block, offset: tree.offset)
+        var scan = UnreachableScan(budget: budget - 2, block: recorder.block, offset: recorder.offset)
+        return (scan.run(blocks: recorder.roots(tree.blocks), candidates: candidates), scan.exhausted, recorder.reads)
     }
 }
 
