@@ -37,6 +37,8 @@ public struct Evidence: Equatable, Sendable {
         case moved
         /// Offsets held, but not the paragraph side the markers had to confirm.
         case edge
+        /// A text write that returned no error left the field as the passing settle before it read it.
+        case unchanged
         case unmoved
         case leftSelection = "left-selection"
         case tooLong = "too-long"

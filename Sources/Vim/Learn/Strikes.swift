@@ -2,9 +2,10 @@
 public struct Strikes: Equatable, Sendable {
     public static let limit = 3
 
-    /// The opt-in app keys (`nativeMotions`) keep the one-miss rule.
-    public static func limit(for capability: Capability) -> Int {
-        capability == .wordKeys || capability == .paragraphKeys ? 1 : limit
+    /// The opt-in app keys (`nativeMotions`) keep the one-miss rule, and so does a text write that changed nothing.
+    public static func limit(for capability: Capability, why: Evidence.Why) -> Int {
+        if capability == .wordKeys || capability == .paragraphKeys { return 1 }
+        return capability == .insertText && why == .unchanged ? 1 : limit
     }
 
     private struct Count: Equatable, Sendable {

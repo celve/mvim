@@ -58,6 +58,8 @@ public final class Executor {
 
     /// The selection the last settle read, which says whether a native key did anything.
     private var lastObserved: Range<Int>?
+    /// The length the last settle read, which says whether a text write did anything.
+    private var lastLength: Int?
     /// Carets this run's settles kept, for `.between` landings.
     private var kept: [Int: Int] = [:]
 
@@ -142,6 +144,7 @@ public final class Executor {
         lastRun = RunEvidence()
         lastWriteError = nil
         lastObserved = nil
+        lastLength = nil
         self.paragraphs = paragraphs
         pressed = 0
         kept = [:]
@@ -156,8 +159,8 @@ public final class Executor {
             }
             let failure = passed ? nil : lastRun.settleFailures.last
             lastRun.attribution.record(
-                step, passed: passed, selection: lastObserved, length: failure?.observedLength,
-                selectedText: failure?.observedSelectedText
+                step, passed: passed, selection: lastObserved, length: lastLength,
+                selectedText: failure?.observedSelectedText, writeError: failure?.writeError
             )
             switch step {
             case .setSelection, .replaceSelection:
@@ -260,6 +263,7 @@ public final class Executor {
                 outcome = Self.settle(expectation, on: element, paragraphs: paragraphs)
             }
             lastObserved = outcome.observedSelection
+            lastLength = outcome.observedLength
             confirmPaste(outcome, expectation, at: index)
             if record(outcome, expectation, at: index, hard: true) {
                 return true
@@ -274,6 +278,7 @@ public final class Executor {
             let outcome = Self.settle(expectation, on: element, paragraphs: paragraphs, presses: pressed)
             pressed = 0
             lastObserved = outcome.observedSelection
+            lastLength = outcome.observedLength
             confirmPaste(outcome, expectation, at: index)
             _ = record(outcome, expectation, at: index, hard: false)
             return true
