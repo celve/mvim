@@ -742,7 +742,7 @@ extension Sim {
         let plain = readSelection
         var sampled = false
         var reads = FieldSnapshot.Reads(
-            field: FieldReads(text: text, plain: plain, selectedText: readSelectedText), length: fieldLength,
+            field: FieldReads(text: shownValue, plain: plain, selectedText: readSelectedText), length: fieldLength,
             webContent: webContent || self.reads != nil || emptyParagraphs, blocks: blocks
         )
         reads.roots = roots
@@ -853,7 +853,8 @@ extension Sim {
     }
 
     var markerReads: MarkerReads {
-        MarkerReads(
+        guard !showsPlaceholder else { return MarkerReads(breaks: ParagraphBreaks(), value: readSelection) }
+        return MarkerReads(
             breaks: ParagraphBreaks(value: text, fieldText: text.filter { $0 != "\n" }), value: selection,
             textlessLeaves: endsInTextlessLeaf
         )
